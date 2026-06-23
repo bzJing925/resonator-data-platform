@@ -1,0 +1,73 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+build/
+dist/
+wheels/
+*.egg-info/
+.venv/
+.python-version
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 环境变量
+.env
+.env.local
+
+# 客户原始材料（保留在仓库本地，不提交）
+客户提供的材料/
+
+# 前端
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# 数据导出/临时
+backend/exports/
+backend/uploads/
+*.log
+
+# 项目内数据目录（Windows / 跨平台部署时 DATA_ROOT 落在仓库内 ./data）
+/data/
+
+# ML / 构建产物 / 训练输出
+backend/build/
+backend/pinn_*/
+backend/sparse_*/
+backend/*.pt
+backend/*.pth
+backend/*.onnx
+frontend/build/
+
+# 其他本地临时目录 / 根目录临时脚本
+.venv3.11/
+backend/.venv3.11/
+.AU.cFUeA.nosync
+\#frame/
+dump.rdb
+/main.py
+/de.py
+/de_ELB003_Basic.py
+/de_ELB003_VZ.py
+/de_GSG100_ELB003.py
+/-p
+
+# Claude Code 本地配置
+.claude/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Playwright/MCP 临时产物
+.playwright-cli/
+.playwright-mcp/
+**/.playwright-cli/
+**/.playwright-mcp/

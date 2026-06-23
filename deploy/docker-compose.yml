@@ -1,0 +1,123 @@
+# 谐振器数据平台 - podman compose 编排
+# 启动：podman compose -f deploy/docker-compose.yml --env-file .env up -d
+# 停止：podman compose -f deploy/docker-compose.yml down
+# 数据全部挂在 ${DATA_ROOT}/，由 .env 控制；代码外部 build context 在 ../
+
+version: "3.9"
+
+services:
+  postgres:
+    image: docker.io/library/postgres:15-alpine
+    container_name: aln-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-aln}
+      POSTGRES_USER: ${POSTGRES_USER:-aln}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?need POSTGRES_PASSWORD in .env}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - ${DATA_ROOT:?need DATA_ROOT in .env}/pgdata:/var/lib/postgresql/data
+    ports:
+      - "15432:5432"  # 全接口绑定，便于容器走 host-gateway 回连
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aln}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: docker.io/library/redis:7-alpine
+    container_name: aln-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--dir", "/data"]
+    volumes:
+      - ${DATA_ROOT:?need DATA_ROOT in .env}/redis:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: aln-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-aln}:${POSTGRES_PASSWORD}@host.containers.internal:15432/${POSTGRES_DB:-aln}
+      REDIS_URL: redis://host.containers.internal:6379/0
+      DATA_ROOT: /data
+      UPLOAD_MAX_GB: ${UPLOAD_MAX_GB:-20}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - ${DATA_ROOT:?need DATA_ROOT in .env}:/data
+    extra_hosts:
+      - "host.containers.internal:host-gateway"
+    ports:
+      - "8001:8000"  # host 8000 被占用，改 8001；全接口绑定让 nginx 容器走 host-gateway 回连
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+    # 用 python 内置 urllib 跑探活 — slim 镜像没装 wget/curl，加 apt 又胖一圈。
+    # /api/health 在 system.py 里实现，DB/Redis 任一异常返回 degraded 但仍 200 OK。
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys,urllib.request as u; sys.exit(0 if u.urlopen('http://127.0.0.1:8000/api/health', timeout=3).status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  worker:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: aln-worker
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-aln}:${POSTGRES_PASSWORD}@host.containers.internal:15432/${POSTGRES_DB:-aln}
+      REDIS_URL: redis://host.containers.internal:6379/0
+      DATA_ROOT: /data
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      C_FORCE_ROOT: "true"  # 容器内运行 celery
+    volumes:
+      - ${DATA_ROOT:?need DATA_ROOT in .env}:/data
+    extra_hosts:
+      - "host.containers.internal:host-gateway"
+    command: ["celery", "-A", "app.workers", "worker", "--loglevel=info", "--concurrency=${WORKER_CONCURRENCY:-4}"]
+
+  nginx:
+    image: docker.io/library/nginx:alpine
+    container_name: aln-nginx
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy   # 等 api 真就绪，避免 boot 期间 nginx 502
+    ports:
+      - "${NGINX_PORT:-8080}:80"
+    extra_hosts:
+      - "host.containers.internal:host-gateway"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ../frontend/dist:/usr/share/nginx/html:ro
+      - ${DATA_ROOT:?need DATA_ROOT in .env}/exports:/exports:ro
+    healthcheck:
+      # rootless podman 下容器内 localhost(::1) 不通；nginx 监听 0.0.0.0:80，要走 127.0.0.1
+      # 走 nginx 自己的 /healthz（不依赖上游 api 即可探活 nginx 本身）
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1/healthz | grep -q ok || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+# 注意：podman 的网络默认 bridge，容器之间通过服务名互相寻址（postgres / redis / api）。
+# 如果遇到 podman compose 不识别 healthcheck 依赖，可改用 depends_on 简单形式 + 应用层重试。

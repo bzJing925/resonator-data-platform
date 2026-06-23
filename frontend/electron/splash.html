@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ALN Resonator Data Platform</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: #0F1115;
+      color: #E7E9ED;
+      font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
+      border-radius: 12px;
+      overflow: hidden;
+      user-select: none;
+      -webkit-app-region: drag;
+    }
+    .ring {
+      width: 160px;
+      height: 160px;
+      border-radius: 50%;
+      border: 2px solid rgba(95, 168, 211, 0.15);
+      position: relative;
+      margin-bottom: 28px;
+    }
+    .ring::before, .ring::after {
+      content: '';
+      position: absolute;
+      border-radius: 50%;
+      border: 2px solid transparent;
+      border-top-color: #5FA8D3;
+    }
+    .ring::before {
+      inset: 10px;
+      animation: spin 2.4s linear infinite;
+    }
+    .ring::after {
+      inset: 24px;
+      border-top-color: #E8C547;
+      animation: spin 1.6s linear infinite reverse;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    .title {
+      font-size: 18px;
+      font-weight: 600;
+      letter-spacing: 0.4px;
+      margin-bottom: 8px;
+    }
+    .subtitle {
+      font-size: 12px;
+      color: #8A919D;
+      letter-spacing: 0.2px;
+    }
+  </style>
+</head>
+<body>
+  <div class="ring"></div>
+  <div class="title">ALN Resonator Data Platform</div>
+  <div class="subtitle">正在启动本地数据服务…</div>
+</body>
+</html>
