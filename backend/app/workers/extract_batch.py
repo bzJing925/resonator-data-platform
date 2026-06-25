@@ -7,14 +7,14 @@
 from __future__ import annotations
 
 import logging
-import os
 import shutil
 import time
 import zipfile
-import zipfile_deflate64  # noqa: F401  注册 Deflate64 压缩支持
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
+import zipfile_deflate64  # noqa: F401  注册 Deflate64 压缩支持
 from celery import Task
 
 from app.config import get_settings
@@ -23,7 +23,7 @@ from app.core.filename import parse_filename
 from app.core.touchstone import detect_snp_type, split_s2p_to_s1p
 from app.db import SessionLocal
 from app.models import Batch, Mapping
-from app.workers import celery_app
+from app.workers.celery_app import celery_app
 from app.workers.progress import ProgressPublisher
 
 logger = logging.getLogger(__name__)

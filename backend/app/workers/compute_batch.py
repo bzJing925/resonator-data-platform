@@ -13,12 +13,12 @@ from celery import Task
 from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.orm import Session
 
-from app.config import get_algorithm_config, get_settings
+from app.config import get_algorithm_config
 from app.core.extract import ExtractError, extract_resonator_params
 from app.core.mapping import load_mapping
 from app.db import SessionLocal
-from app.models import Batch, Device, Mapping, UploadTask
-from app.workers import celery_app
+from app.models import Batch, Device, Mapping
+from app.workers.celery_app import celery_app
 from app.workers.progress import ProgressPublisher
 
 logger = logging.getLogger(__name__)

@@ -11,7 +11,6 @@ process_batch 保留为兼容入口：在 Celery EAGER 模式下串行调用 ext
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.core.extract import extract_resonator_params
 from app.models import Device
-from app.workers import celery_app
+from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +43,6 @@ _COPY_COLUMNS = [
 
 def _extract_single(args: tuple) -> dict[str, Any]:
     """子进程入口：提取单个 .s1p 文件的谐振参数。"""
-    from pathlib import Path
 
     s1p_path, mapping, wafer, s_param_relpath, deembedded, f_start_ghz, f_end_ghz = args
     try:
@@ -164,8 +162,8 @@ def process_batch_task(
     在 Celery EAGER 模式下两条任务会同步执行，保持旧测试可用；
     生产环境建议直接投递 chain(extract_batch.s(...), compute_batch.s(...))。
     """
-    from app.workers.extract_batch import extract_batch_task as _extract_task
     from app.workers.compute_batch import compute_batch_task as _compute_task
+    from app.workers.extract_batch import extract_batch_task as _extract_task
 
     extract_result = _extract_task.apply(
         kwargs={
