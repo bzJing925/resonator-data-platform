@@ -32,7 +32,7 @@ class TestCalibrationIndexBuild:
         index = CalibrationIndex.build(
             target_dir=target_dir,
             cal_s2p_files=[open_s2p, short_s2p],
-            method=DeembedMethod.DEFAULT,
+            method="default",
         )
 
         assert len(index.s11_paths) == 2
@@ -47,7 +47,7 @@ class TestCalibrationIndexBuild:
             CalibrationIndex.build(
                 target_dir=tmp_path / "target",
                 cal_s2p_files=[],
-                method=DeembedMethod.DEFAULT,
+                method="default",
             )
 
 
@@ -63,13 +63,13 @@ class TestCalibrationIndexMatch:
         index = CalibrationIndex.build(
             target_dir=target_dir,
             cal_s2p_files=[open_s2p, short_s2p],
-            method=DeembedMethod.DEFAULT,
+            method="default",
         )
 
         dut_s1p = tmp_path / "DUT_1_S11.s1p"
         dut_s1p.write_text("# Hz S RI R 50.0\n1.0e9 0.1 0.2\n")
 
-        open_path, short_path = index.match(port=1, dut_s1p_path=dut_s1p)
+        open_path, short_path = index.match(port="S11", dut_s1p_path=dut_s1p)
 
         assert "OPEN" in open_path.name.upper()
         assert "SHORT" in short_path.name.upper()
@@ -87,13 +87,13 @@ class TestCalibrationIndexMatch:
         index = CalibrationIndex.build(
             target_dir=target_dir,
             cal_s2p_files=[open_s2p, short_s2p],
-            method=DeembedMethod.DEFAULT,
+            method="default",
         )
 
         dut_s1p = tmp_path / "DUT_1_S22.s1p"
         dut_s1p.write_text("# Hz S RI R 50.0\n1.0e9 0.1 0.2\n")
 
-        open_path, short_path = index.match(port=2, dut_s1p_path=dut_s1p)
+        open_path, short_path = index.match(port="S22", dut_s1p_path=dut_s1p)
 
         assert "OPEN" in open_path.name.upper()
         assert "SHORT" in short_path.name.upper()
@@ -111,4 +111,4 @@ class TestCalibrationIndexMatch:
         dut_s1p.write_text("# Hz S RI R 50.0\n1.0e9 0.1 0.2\n")
 
         with pytest.raises(DeembedError):
-            index.match(port=1, dut_s1p_path=dut_s1p)
+            index.match(port="S11", dut_s1p_path=dut_s1p)
