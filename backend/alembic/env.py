@@ -10,6 +10,8 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+# 在创建引擎前先加载 psycopg server_version 兼容补丁
+from app import db as _db_patch  # noqa: F401
 from app.config import get_settings
 from app.models import Base  # 导入注册所有 ORM 模型到 metadata
 

@@ -56,20 +56,28 @@ def _normalize_num(num_str: str) -> str:
 
 
 def _parse_original(name: str) -> tuple[str | None, str, str]:
-    """de.py 的 parse_filename：返回 (sxx, suffix_num, position)。"""
+    """de.py 的 parse_filename：返回 (sxx, suffix_num, position)。
+
+    支持拆分后的文件名，如 ``2_A1-1_X0Y0N20_Fail_S11.s1p``。
+    """
     upper = name.upper()
 
-    # 1. 提取 Sxx
+    # 1. 提取 Sxx（拆分后的 _S11.s1p 或旧前缀 S11_...）
     sxx = None
     name_body = name
-    m = re.search(r"_(S\d{2})$", upper)
+    m = re.search(r"_(S\d{2})\.S1P$", upper)
     if m:
-        sxx = f"S{m.group(1)}"
+        sxx = m.group(1)
         name_body = name[: m.start()]
     else:
-        m = re.match(r"^(S\d{2})", upper)
+        m = re.search(r"_(S\d{2})$", upper)
         if m:
-            sxx = m.group(1)
+            sxx = f"S{m.group(1)}"
+            name_body = name[: m.start()]
+        else:
+            m = re.match(r"^(S\d{2})", upper)
+            if m:
+                sxx = m.group(1)
 
     if sxx is None:
         return None, "", "GLOBAL"
@@ -497,7 +505,9 @@ def match_calibration(
             )
         return op, sh
 
-    dut_name = _strip_port_suffix(dut_path.name)
+    # 匹配时应保留端口后缀，否则拆分后的 DUT 名如 2_A1-1_X-1Y-1N27_Fail_S11.s1p
+    # 去掉 _S11 后无法提取 Sxx，导致所有文件都解析为 GLOBAL 且 sxx=None，匹配失败。
+    dut_name = dut_path.name
     cal_names = [p.name for p in cal_paths]
 
     matcher = {

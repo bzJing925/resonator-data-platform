@@ -98,7 +98,10 @@ def compute_batch_task(self: Task, extract_result: dict[str, Any]) -> dict[str, 
 
         target_dir = Path(batch.file_path) if batch.file_path else None
 
-        total = len(all_s1p)
+        total = len(all_files)
+        if total == 0:
+            raise RuntimeError("无可计算的待处理文件")
+
         device_rows: list[dict[str, Any]] = []
         failures: list[str] = []
         last_pct = 0
