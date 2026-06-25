@@ -56,7 +56,7 @@ class DutProcessor:
         target_dir = Path(target_dir)
         item_type = item.get("type", "")
         item_path = Path(item["path"])
-        s_param_relpath = str(item_path.name)
+        s_param_relpath = item.get("s_param_relpath") or str(item_path.name)
 
         rows: list[dict] = []
         failures: list[str] = []
@@ -89,7 +89,7 @@ class DutProcessor:
         else:
             failures.append(f"{item_path.name}: unknown type '{item_type}'")
 
-        ok = len(rows) > 0 and len(failures) == 0
+        ok = len(rows) > 0
         return {"ok": ok, "rows": rows, "failures": failures, "archived": archived}
 
     def _process_s1p(
@@ -158,6 +158,7 @@ class DutProcessor:
         ]
 
         de_temp_files: list[Path] = []
+        s2p_archived = False
 
         for port_name, s1p_path, port_idx in ports:
             try:
@@ -193,13 +194,10 @@ class DutProcessor:
                 failures.append(f"{s2p_path.name} ({port_name}): {exc}")
                 continue
 
-            if self.compress_raw:
-                gz_path = self._gzip_file(s1p_path)
-                if gz_path:
-                    archived.append(str(gz_path))
+            s2p_archived = True
 
-        # Archive original S2P if all ports succeeded
-        if self.compress_raw and len(failures) == 0:
+        # Archive original S2P once if any port succeeded
+        if self.compress_raw and s2p_archived:
             gz_path = self._gzip_file(s2p_path)
             if gz_path:
                 archived.append(str(gz_path))
