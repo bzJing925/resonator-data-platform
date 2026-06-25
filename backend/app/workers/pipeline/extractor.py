@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import logging
+import shutil
+import subprocess
+import time
 import zipfile
 from pathlib import Path
-from typing import Literal
+from typing import Callable, Iterator, Literal
 
 from app.core.filename import parse_filename
 
@@ -44,3 +47,101 @@ def zip_contains_calibration(
     except Exception:
         logger.exception("检查 zip 校准件失败: %s", zip_path)
     return False
+
+
+def _find_7z() -> str | None:
+    for name in ("7z", "7za", "p7zip"):
+        path = shutil.which(name)
+        if path:
+            return path
+    return None
+
+
+class StreamingExtractor:
+    """用 7z 或 unzip 解压 zip，并通过 extract() 迭代器逐文件产出已落地路径。"""
+
+    def __init__(
+        self,
+        zip_path: str | Path,
+        target_dir: str | Path,
+        exe: str | None = None,
+    ):
+        self.zip_path = Path(zip_path)
+        self.target_dir = Path(target_dir)
+        self.exe = exe or _find_7z()
+        self._proc: subprocess.Popen | None = None
+
+    def extract(
+        self,
+        progress_callback: Callable[[int, int], None] | None = None,
+    ) -> Iterator[Path]:
+        """解压并产出每个新落地的文件路径。
+
+        实现：启动解压子进程，主线程轮询 target_dir 发现新文件；
+        子进程结束后做最终扫描确保无遗漏。
+        """
+        self.target_dir.mkdir(parents=True, exist_ok=True)
+        seen: set[str] = set()
+
+        def _scan() -> list[Path]:
+            found: list[Path] = []
+            for p in sorted(self.target_dir.rglob("*")):
+                if p.is_file():
+                    relpath = str(p.relative_to(self.target_dir))
+                    if relpath not in seen:
+                        seen.add(relpath)
+                        found.append(p)
+            return found
+
+        if self.exe:
+            cmd = [
+                self.exe,
+                "x",
+                "-y",
+                "-bb0",
+                "-o" + str(self.target_dir),
+                str(self.zip_path),
+            ]
+        elif shutil.which("unzip"):
+            cmd = [
+                "unzip",
+                "-q",
+                "-o",
+                str(self.zip_path),
+                "-d",
+                str(self.target_dir),
+            ]
+        else:
+            raise RuntimeError("未安装 7z / unzip，无法流式解压")
+
+        self._proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
+        try:
+            while self._proc.poll() is None:
+                for p in _scan():
+                    yield p
+                if progress_callback:
+                    progress_callback(len(seen), 0)  # total 未知时传 0
+                time.sleep(0.5)
+            # 最终扫描
+            for p in _scan():
+                yield p
+            if self._proc.returncode != 0:
+                stderr = (
+                    self._proc.stderr.read().decode(
+                        "utf-8", errors="ignore"
+                    )
+                    if self._proc.stderr
+                    else ""
+                )
+                raise RuntimeError(
+                    f"解压失败 (code {self._proc.returncode}): {stderr}"
+                )
+        finally:
+            if self._proc and self._proc.poll() is None:
+                self._proc.terminate()
+                try:
+                    self._proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self._proc.kill()

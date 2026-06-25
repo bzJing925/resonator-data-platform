@@ -1,9 +1,10 @@
+import shutil
 import zipfile
 from pathlib import Path
 
 import pytest
 
-from app.workers.pipeline.extractor import zip_contains_calibration
+from app.workers.pipeline.extractor import StreamingExtractor, zip_contains_calibration
 
 
 def test_zip_contains_calibration_true(tmp_path: Path) -> None:
@@ -68,3 +69,28 @@ def test_zip_contains_calibration_basic_no_match(tmp_path: Path) -> None:
 def test_zip_contains_calibration_invalid_method() -> None:
     with pytest.raises(ValueError, match="method must be 'default' or 'basic'"):
         zip_contains_calibration("dummy.zip", method="invalid")
+
+
+def test_streaming_extractor_yields_files(tmp_path: Path) -> None:
+    zip_path = tmp_path / "test.zip"
+    target_dir = tmp_path / "out"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("a.s1p", "# dummy\n1 1 1\n")
+        zf.writestr("b.s1p", "# dummy\n2 2 2\n")
+
+    extractor = StreamingExtractor(zip_path, target_dir)
+    found = sorted(p.name for p in extractor.extract())
+    assert found == ["a.s1p", "b.s1p"]
+    assert (target_dir / "a.s1p").exists()
+
+
+@pytest.mark.skipif(
+    not shutil.which("7z") and not shutil.which("7za"), reason="无 7z"
+)
+def test_streaming_extractor_uses_7z(tmp_path: Path) -> None:
+    zip_path = tmp_path / "test.zip"
+    target_dir = tmp_path / "out"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("x.s1p", "# dummy\n1 1 1\n")
+    extractor = StreamingExtractor(zip_path, target_dir)
+    assert extractor.exe and ("7z" in extractor.exe or "7za" in extractor.exe)
