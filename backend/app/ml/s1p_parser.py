@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import math
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -44,7 +43,7 @@ def parse_s1p(
     re_vals: list[float] = []
     im_vals: list[float] = []
 
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:

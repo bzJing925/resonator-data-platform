@@ -270,6 +270,7 @@ class RealSpectrumDataset(Dataset):
         # 延迟导入，避免无 sqlalchemy 时报错
         try:
             from sqlalchemy import create_engine, select
+
             from app.models import Batch, Device
         except ImportError as exc:
             raise ImportError(
@@ -414,9 +415,10 @@ class RealS1PBatchDataset(Dataset):
         self.devices: list[dict] = []
         self.batch_meta: dict[int, dict] = {}
 
-        from app.ml.s1p_parser import parse_s1p
-        from app.ml.filename_parser import parse_filename_params
         import re
+
+        from app.ml.filename_parser import parse_filename_params
+        from app.ml.s1p_parser import parse_s1p
 
         s1p_dir = Path(s1p_dir)
         files = sorted(s1p_dir.glob("*.s1p"))

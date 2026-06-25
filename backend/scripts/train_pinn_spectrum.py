@@ -30,12 +30,11 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.ml.dataset import RealS1PBatchDataset, SyntheticSpectrumDataset
 from app.ml.losses import PINNSpectralLoss
-from app.ml.models import PINNReconstructor, ResidualNet, SmartSampler, SpectralVAE
+from app.ml.models import ResidualNet, SmartSampler, SpectralVAE
 from app.ml.utils import (
     compute_ssim,
     enforce_critical_points_mask,
     numerical_gradients,
-    preprocess_spectrum,
 )
 
 
@@ -624,12 +623,12 @@ def main() -> None:
             json.dump(norm_stats, f, indent=2)
 
     print(f"\n训练完成。产物保存在: {output_dir.absolute()}")
-    print(f"  - vae.pt")
-    print(f"  - residual_net.pt")
-    print(f"  - smart_sampler.pt")
-    print(f"  - base_latents.json")
-    print(f"  - training_curves.json / .txt")
-    print(f"  - params_norm.json")
+    print("  - vae.pt")
+    print("  - residual_net.pt")
+    print("  - smart_sampler.pt")
+    print("  - base_latents.json")
+    print("  - training_curves.json / .txt")
+    print("  - params_norm.json")
 
 
 if __name__ == "__main__":

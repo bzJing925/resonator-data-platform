@@ -16,8 +16,8 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
 from app.models import Batch, Mapping, UploadTask
-from app.workers.extract_batch import extract_batch_task
 from app.workers.compute_batch import compute_batch_task
+from app.workers.extract_batch import extract_batch_task
 
 logger = logging.getLogger(__name__)
 

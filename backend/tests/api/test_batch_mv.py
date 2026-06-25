@@ -29,17 +29,17 @@ class _FakeResult:
     def __getitem__(self, key: str) -> Any:
         return self._data[key]
 
-    def mappings(self) -> "_FakeResult":
+    def mappings(self) -> _FakeResult:
         return self
 
-    def all(self) -> list["_FakeResult"]:
+    def all(self) -> list[_FakeResult]:
         return [self]
 
 
 class _EmptyResult:
     """模拟空结果集。"""
 
-    def mappings(self) -> "_EmptyResult":
+    def mappings(self) -> _EmptyResult:
         return self
 
     def all(self) -> list[Any]:

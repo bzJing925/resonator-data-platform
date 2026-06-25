@@ -32,7 +32,7 @@ _BODEQ_CACHE_SIZE = 128
 
 
 @lru_cache(maxsize=_NETWORK_CACHE_SIZE)
-def _load_network(path_str: str) -> "skrf.Network":
+def _load_network(path_str: str) -> skrf.Network:
     """缓存 skrf.Network 解析结果。
 
     参数用 str 而非 Path，因为 Path 不可 hash 且 lru_cache 要求可 hash 参数。

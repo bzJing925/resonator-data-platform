@@ -180,7 +180,7 @@ class AdaptiveSampler(nn.Module):
         if k is None:
             # 自适应：根据概率分布的熵决定采样点数
             entropy = -(p_norm * torch.log(p_norm.clamp(min=1e-8))).sum(dim=1)  # (B,)
-            k = int((self.k_min + (entropy.mean().item() / math.log(N)) * (self.k_max - self.k_min)))
+            k = int(self.k_min + (entropy.mean().item() / math.log(N)) * (self.k_max - self.k_min))
             k = max(self.k_min, min(self.k_max, k))
 
         _, topk_idx = torch.topk(p_norm, min(k, N), dim=-1)

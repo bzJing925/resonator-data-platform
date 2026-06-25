@@ -8,7 +8,7 @@ from typing import Annotated, Any
 
 import zipstream
 from fastapi import APIRouter, HTTPException, Query, Response, status
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 from sqlalchemy import delete, func, select
 
 from app.api.deps import DEVICE_COLUMNS, DbSession

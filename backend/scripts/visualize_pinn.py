@@ -100,13 +100,13 @@ def main() -> None:
     smart_sampler.eval()
 
     # 加载归一化统计
-    with open(ckpt_dir / "params_norm.json", "r", encoding="utf-8") as f:
+    with open(ckpt_dir / "params_norm.json", encoding="utf-8") as f:
         norm_stats = json.load(f)
     params_mean = torch.tensor(norm_stats["mean"], dtype=torch.float32, device=device)
     params_std = torch.tensor(norm_stats["std"], dtype=torch.float32, device=device)
 
     # 加载基准 latent
-    with open(ckpt_dir / "base_latents.json", "r", encoding="utf-8") as f:
+    with open(ckpt_dir / "base_latents.json", encoding="utf-8") as f:
         base_meta = json.load(f)
     z_base = torch.tensor(base_meta["0"]["z_base"], dtype=torch.float32, device=device)
 

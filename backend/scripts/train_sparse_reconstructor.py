@@ -24,7 +24,6 @@ from pathlib import Path
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 from torch.utils.data import DataLoader, random_split
 
 # 把 backend 目录加入路径，以便 import app.ml
@@ -125,7 +124,7 @@ def train_epoch(
                 k_actual_b = int(k_pred[b].item())
                 k_actual_b = max(sampler.k_min, min(sampler.k_max, k_actual_b))
                 k_actual_list.append(k_actual_b)
-                
+
                 idx = torch.where(y_soft[b] > 1.0 / N)[0]
                 if len(idx) == 0:
                     _, topk_idx = torch.topk(p_norm[b], min(k_actual_b, N))
@@ -220,7 +219,7 @@ def validate(
                 k_actual_b = int(k_pred[b].item())
                 k_actual_b = max(sampler.k_min, min(sampler.k_max, k_actual_b))
                 k_actual_list.append(k_actual_b)
-                
+
                 idx = torch.where(y_soft[b] > 1.0 / N)[0]
                 if len(idx) == 0:
                     _, topk_idx = torch.topk(p_norm[b], min(k_actual_b, N))
@@ -333,7 +332,7 @@ def main() -> None:
         ckpt = torch.load(ckpt_path, map_location=device)
         recon.load_state_dict(ckpt["recon"])
         sampler.load_state_dict(ckpt["sampler"])
-        with open(state_path, "r", encoding="utf-8") as f:
+        with open(state_path, encoding="utf-8") as f:
             saved = json.load(f)
         start_epoch = saved.get("epoch", 1) + 1
         best_val_metric = saved.get("best_val_metric", float("inf"))
@@ -442,9 +441,9 @@ def main() -> None:
         with open(output_dir / "history.json", "w", encoding="utf-8") as f:
             json.dump(history, f, indent=2)
         print(f"\n训练完成。产物保存在: {output_dir.absolute()}")
-        print(f"  - reconstructor.pt")
-        print(f"  - sampler.pt")
-        print(f"  - config.json")
+        print("  - reconstructor.pt")
+        print("  - sampler.pt")
+        print("  - config.json")
     else:
         print(f"\n本轮完成 epoch {end_epoch}/{args.epochs}。请再次启动以继续训练（加 --resume）")
 

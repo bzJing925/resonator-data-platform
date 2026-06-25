@@ -15,9 +15,9 @@ import numpy as np
 
 if TYPE_CHECKING:
     import torch
+
     from app.ml.sparse.reconstructor import SparseReconstructor
     from app.ml.sparse.sampler import AdaptiveSampler
-    from app.models import Device
 
 log = logging.getLogger("aln")
 
@@ -35,7 +35,7 @@ def _get_checkpoint_dir(piezo: str) -> Path:
     return Path(__file__).parent.parent / "checkpoints" / "sparse" / f"{piezo}nm"
 
 
-def _init_device() -> "torch.device":
+def _init_device() -> torch.device:
     import torch
     if torch.backends.mps.is_available():
         return torch.device("mps")
@@ -69,6 +69,7 @@ def load_models(piezo: str = "308", force: bool = False) -> bool:
         return False
 
     import torch
+
     from app.ml.sparse.reconstructor import SparseReconstructor
     from app.ml.sparse.sampler import AdaptiveSampler
 
@@ -78,7 +79,7 @@ def load_models(piezo: str = "308", force: bool = False) -> bool:
     # 读取配置
     config = {"d_model": 64, "n_encoder_layers": 4, "n_heads": 4}
     if config_path.exists():
-        with open(config_path, "r", encoding="utf-8") as f:
+        with open(config_path, encoding="utf-8") as f:
             config.update(json.load(f))
 
     # 加载重建网络
@@ -159,7 +160,6 @@ def predict_z11_sparse(
 
         # 2. 提取/准备条件参数
         if cond is None:
-            from app.core.extract import extract_resonator_params
             from app.ml.sparse.dataset import extract_five_params
             cond = extract_five_params(s1p_path)
 

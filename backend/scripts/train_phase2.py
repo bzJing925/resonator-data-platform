@@ -198,7 +198,7 @@ def main():
     config = {"d_model": 64, "n_encoder_layers": 4, "n_heads": 4, "n_freq": 1001}
     config_path = ckpt_dir / "config.json"
     if config_path.exists():
-        with open(config_path, "r") as f:
+        with open(config_path) as f:
             config.update(json.load(f))
 
     # 数据集
@@ -233,7 +233,7 @@ def main():
 
     if args.resume and sampler_ckpt.exists() and state_path.exists():
         sampler.load_state_dict(torch.load(sampler_ckpt, map_location=device)["sampler"])
-        with open(state_path, "r") as f:
+        with open(state_path) as f:
             saved = json.load(f)
         start_epoch = saved.get("epoch", 1) + 1
         best_val_recon = saved.get("best_val_recon", float("inf"))

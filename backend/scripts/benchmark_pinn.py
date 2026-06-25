@@ -85,12 +85,12 @@ def main() -> None:
     vae.eval()
     residual_net.eval()
 
-    with open(ckpt / "params_norm.json", "r") as f:
+    with open(ckpt / "params_norm.json") as f:
         norm = json.load(f)
     params_mean = torch.tensor(norm["mean"], dtype=torch.float32, device=device)
     params_std = torch.tensor(norm["std"], dtype=torch.float32, device=device)
 
-    with open(ckpt / "base_latents.json", "r") as f:
+    with open(ckpt / "base_latents.json") as f:
         base_meta = json.load(f)
     # 收集所有 batch 的 z_base
     z_bases = {}
@@ -196,7 +196,7 @@ def main() -> None:
     print(f"  MAE 均值: {all_mae.mean():.4f} dB")
 
     # 按 area 统计
-    print(f"\n  按 Area 分组 RMSE:")
+    print("\n  按 Area 分组 RMSE:")
     for area in sorted(area_rmse.keys()):
         vals = np.array(area_rmse[area])
         print(f"    Area {area}: mean={vals.mean():.4f}, max={vals.max():.4f}, n={len(vals)}")

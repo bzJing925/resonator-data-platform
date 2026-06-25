@@ -12,7 +12,7 @@ import shutil
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated
 
 import numpy as np
 import zipstream
@@ -56,7 +56,7 @@ def _safe_resolve(base_dir: Path, relpath: str) -> Path:
     return target
 
 
-def _read_network(target_path: Path, process_type: str = "S1P") -> "skrf.Network":
+def _read_network(target_path: Path, process_type: str = "S1P") -> skrf.Network:
     """读取 s1p/s2p/snp 文件；.snp 按 process_type 临时改名后读取。"""
     import skrf
 
