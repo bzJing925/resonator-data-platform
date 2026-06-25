@@ -54,7 +54,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="谐振器测试数据平台",
     description="多用户在线上传、入库、可视化分析谐振器测试数据",
-    version="0.1.0",
+    version="0.1.1",
     docs_url="/api/docs",
     redoc_url="/api/redoc",
     openapi_url="/api/openapi.json",

@@ -68,6 +68,71 @@ const SECTION_ORDER = ['categorical', 'process', 'geometric', 'numeric'];
 // continuous.
 const CATEGORICAL_SECTIONS = new Set(['categorical', 'process']);
 
+// Core axis field lists. Keep these intentionally short so the chart panel
+// stays usable; append here when a new field should become user-selectable.
+const X_AXIS_FIELD_NAMES = [
+  'eg', 'fl', 'ag', 'batch_no', 'wafer', 'pf', 'x', 'y', 'fs_ghz',
+];
+const Y_AXIS_FIELD_NAMES = [
+  'fs_ghz', 'fp_ghz', 'qs', 'qp', 'k2eff_pct', 'zs_ohm', 'zp_ohm', 'dbqs', 'dbqp',
+];
+const X_AXIS_FIELD_SET = new Set(X_AXIS_FIELD_NAMES);
+const Y_AXIS_FIELD_SET = new Set(Y_AXIS_FIELD_NAMES);
+const AXIS_FIELD_LABELS = {
+  eg: 'EG',
+  fl: 'FL',
+  ag: 'AG',
+  batch_no: '批次',
+  wafer: 'Wafer',
+  pf: 'P/F',
+  x: 'X',
+  y: 'Y',
+  fs_ghz: 'fs',
+  fp_ghz: 'fp',
+  qs: 'Qs',
+  qp: 'Qp',
+  k2eff_pct: 'k²eff',
+  zs_ohm: 'Zs',
+  zp_ohm: 'Zp',
+  dbqs: 'dBQs',
+  dbqp: 'dBQp',
+};
+
+function axisPickerLabel(field) {
+  return AXIS_FIELD_LABELS[field.name] || displayLabel(field);
+}
+
+function axisFieldOptions(fields, names) {
+  if (!fields) return null;
+  return names
+    .map((name) => fields.byName?.[name])
+    .filter(Boolean)
+    .map((f) => ({ ...f, label: AXIS_FIELD_LABELS[f.name] || f.label || f.name }));
+}
+
+function normalizeAxisSelection(value, allowedSet, fallback) {
+  if (!Array.isArray(value)) return fallback;
+  if (value.length === 0) return [];
+  const kept = value.filter((name) => allowedSet.has(name));
+  return kept.length > 0 ? kept : fallback;
+}
+
+function normalizeYSelection(value, allowedSet, fallback) {
+  if (!Array.isArray(value)) return fallback;
+  if (value.length === 0) return [];
+  const kept = value
+    .map((item) => {
+      const name = typeof item === 'string' ? item : item?.name;
+      if (!name || !allowedSet.has(name)) return null;
+      return {
+        name,
+        aggregation: typeof item === 'object' && item?.aggregation ? item.aggregation : 'all',
+      };
+    })
+    .filter(Boolean);
+  return kept.length > 0 ? kept : fallback;
+}
+
 // Chart-type radio choices (5 options — facet removed).
 const CHART_TYPES = [
   { key: 'scatter', label: '散点图', icon: 'scatter' },
@@ -126,13 +191,19 @@ export default function Explore() {
 
   // Load persisted state on mount, fallback to defaults
   const persisted = loadExploreState();
+  const defaultXFields = ['eg'];
+  const defaultYFields = [{ name: 'qs', aggregation: 'all' }];
 
   // Persisted across chart-type switches (don't reset on chartType change).
   const [chartType, setChartType] = useState(persisted?.chartType || 'scatter');
-  const [xFields, setXFields] = useState(persisted?.xFields || ['fs_ghz']);
+  const [xFields, setXFields] = useState(
+    normalizeAxisSelection(persisted?.xFields, X_AXIS_FIELD_SET, defaultXFields),
+  );
   // Y fields: list of { name, aggregation } where aggregation is one of
   // AGG_OPTIONS keys. Default 'all' = no aggregation (plot raw rows).
-  const [yFields, setYFields] = useState(persisted?.yFields || [{ name: 'qs', aggregation: 'all' }]);
+  const [yFields, setYFields] = useState(
+    normalizeYSelection(persisted?.yFields, Y_AXIS_FIELD_SET, defaultYFields),
+  );
   // Z field: { name, aggregation } | null. Same convention as Y.
   const [zField, setZField] = useState(persisted?.zField || null);
 
@@ -745,6 +816,8 @@ function Inspector({
   limit, setLimit, stats,
 }) {
   const isWafer = chartType === 'wafer';
+  const xAxisOptions = useMemo(() => axisFieldOptions(fields, X_AXIS_FIELD_NAMES), [fields]);
+  const yAxisOptions = useMemo(() => axisFieldOptions(fields, Y_AXIS_FIELD_NAMES), [fields]);
 
   // Grid preview text (X cols × Y rows).
   const gridText = `将渲染 ${yMeta.length || '?'} 行 × ${xMeta.length || '?'} 列 = ${(yMeta.length || 0) * (xMeta.length || 0) || '?'} 个子图`;
@@ -792,8 +865,8 @@ function Inspector({
           <>
             <div className="section">
               <div className="section-title">X 字段（可多选）</div>
-              <FieldCheckList
-                fields={fields}
+              <AxisFieldCheckList
+                options={xAxisOptions}
                 value={xFields}
                 onChange={setXFields}
               />
@@ -805,8 +878,8 @@ function Inspector({
                   <span className="hint">请先选择 X 字段</span>
                 )}
               </div>
-              <FieldCheckListWithAgg
-                fields={fields}
+              <AxisFieldCheckListWithAgg
+                options={yAxisOptions}
                 value={yFields}
                 onChange={setYFields}
                 disabled={xFields.length === 0}
@@ -895,82 +968,65 @@ function Inspector({
 }
 
 /* -------------------------------------------------------------------------
- * FieldCheckList — multi-select checkbox grid grouped by section.
- *
- * Lays sections out as collapsible labelled rows of checkboxes (categorical /
- * process / geometric / numeric). Selected items are toggled in `value`
- * (an array of field-names) via onChange.
+ * AxisFieldCheckList — compact multi-select list for the curated X axis fields.
  * ----------------------------------------------------------------------- */
-function FieldCheckList({ fields, value, onChange, discouragedSections = [], discouragedHint }) {
+function AxisFieldCheckList({ options, value, onChange }) {
   const selected = useMemo(() => new Set(value), [value]);
   const toggle = (name) => {
     if (selected.has(name)) onChange(value.filter((v) => v !== name));
     else onChange([...value, name]);
   };
-  if (!fields) return <div className="dim" style={{ fontSize: 11 }}>加载中…</div>;
-  const discouragedSet = new Set(discouragedSections);
+  if (!options) return <div className="dim" style={{ fontSize: 11 }}>加载中…</div>;
+  if (options.length === 0) {
+    return <div className="dim" style={{ fontSize: 11 }}>暂无可用 X 字段</div>;
+  }
   return (
-    <div className="explore-fieldlist">
-      {SECTION_ORDER.map((section) => {
-        const items = fields.raw?.[section] || [];
-        if (items.length === 0) return null;
-        const isDiscouraged = discouragedSet.has(section);
-        return (
-          <div key={section} className="explore-fieldgroup">
-            <div className="explore-fieldgroup-head">
-              <span className="explore-fieldgroup-name">{SECTION_LABELS[section] || section}</span>
-              {isDiscouraged && discouragedHint && (
-                <span className="explore-fieldgroup-warn">{discouragedHint}</span>
-              )}
-            </div>
-            <div className="explore-fieldgroup-body">
-              {items.map((f) => {
-                const checked = selected.has(f.name);
-                return (
-                  <label
-                    key={f.name}
-                    className={`explore-fieldchip${checked ? ' checked' : ''}${isDiscouraged ? ' discouraged' : ''}`}
-                    title={displayLabel(f)}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={() => toggle(f.name)}
-                      style={{ position: 'absolute', opacity: 0, pointerEvents: 'none' }}
-                    />
-                    <span className="explore-fieldchip-cb" aria-hidden>
-                      {checked && <I.check size={9} stroke="#fff" sw={2.5} />}
-                    </span>
-                    <span className="explore-fieldchip-label">{displayLabel(f)}</span>
-                  </label>
-                );
-              })}
-            </div>
-          </div>
-        );
-      })}
+    <div className="explore-fieldlist compact">
+      <div className="explore-fieldgroup">
+        <div className="explore-fieldgroup-body">
+          {options.map((f) => {
+            const checked = selected.has(f.name);
+            return (
+              <label
+                key={f.name}
+                className={`explore-fieldchip${checked ? ' checked' : ''}`}
+                title={displayLabel(f)}
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() => toggle(f.name)}
+                  style={{ position: 'absolute', opacity: 0, pointerEvents: 'none' }}
+                />
+                <span className="explore-fieldchip-cb" aria-hidden>
+                  {checked && <I.check size={9} stroke="#fff" sw={2.5} />}
+                </span>
+                <span className="explore-fieldchip-label">{axisPickerLabel(f)}</span>
+              </label>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }
 
+
 /* -------------------------------------------------------------------------
- * FieldCheckListWithAgg — like FieldCheckList but each numeric field carries
- * an aggregation `<select>` (ALL / max / min / mean / median / p25 / p75).
- *
- * value:    [{ name, aggregation }, ...]
- * onChange: receives a new array.
- *
- * Categorical sections never show the dropdown — aggregation is meaningless
- * for category labels.
+ * AxisFieldCheckListWithAgg — compact multi-select list for curated Y fields.
  * ----------------------------------------------------------------------- */
-function FieldCheckListWithAgg({ fields, value, onChange, disabled = false }) {
+function AxisFieldCheckListWithAgg({ options, value, onChange, disabled = false }) {
   const byName = useMemo(() => {
     const m = new Map();
     for (const v of value) m.set(v.name, v);
     return m;
   }, [value]);
-  if (!fields) return <div className="dim" style={{ fontSize: 11 }}>加载中…</div>;
+  if (!options) return <div className="dim" style={{ fontSize: 11 }}>加载中…</div>;
+  if (options.length === 0) {
+    return <div className="dim" style={{ fontSize: 11 }}>暂无可用 Y 字段</div>;
+  }
   const toggle = (name) => {
+    if (disabled) return;
     if (byName.has(name)) onChange(value.filter((v) => v.name !== name));
     else onChange([...value, { name, aggregation: 'all' }]);
   };
@@ -978,69 +1034,63 @@ function FieldCheckListWithAgg({ fields, value, onChange, disabled = false }) {
     onChange(value.map((v) => (v.name === name ? { ...v, aggregation: agg } : v)));
   };
   return (
-    <div className="explore-fieldlist">
-      {SECTION_ORDER.map((section) => {
-        const items = fields.raw?.[section] || [];
-        if (items.length === 0) return null;
-        const isCategorical = CATEGORICAL_SECTIONS.has(section);
-        return (
-          <div key={section} className="explore-fieldgroup">
-            <div className="explore-fieldgroup-head">
-              <span className="explore-fieldgroup-name">{SECTION_LABELS[section] || section}</span>
-            </div>
-            <div className="explore-fieldgroup-body">
-              {items.map((f) => {
-                const entry = byName.get(f.name);
-                const checked = !!entry;
-                return (
-                  <span
-                    key={f.name}
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}
-                  >
-                    <label
-                      className={`explore-fieldchip${checked ? ' checked' : ''}`}
-                      title={displayLabel(f)}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() => toggle(f.name)}
-                        style={{ position: 'absolute', opacity: 0, pointerEvents: 'none' }}
-                      />
-                      <span className="explore-fieldchip-cb" aria-hidden>
-                        {checked && <I.check size={9} stroke="#fff" sw={2.5} />}
-                      </span>
-                      <span className="explore-fieldchip-label">{displayLabel(f)}</span>
-                    </label>
-                    {checked && !isCategorical && (
-                      <select
-                        className="input mono"
-                        value={entry.aggregation || 'all'}
-                        onChange={(e) => setAgg(f.name, e.target.value)}
-                        style={{
-                          height: 22,
-                          padding: '0 4px',
-                          fontSize: 10.5,
-                          width: 'auto',
-                          minWidth: 64,
-                        }}
-                        title="聚合方式：不聚合=原始值，其他=按 X 分组聚合"
-                      >
-                        {AGG_OPTIONS.map((o) => (
-                          <option key={o.key} value={o.key}>{o.label}</option>
-                        ))}
-                      </select>
-                    )}
+    <div className="explore-fieldlist compact">
+      <div className="explore-fieldgroup">
+        <div className="explore-fieldgroup-body">
+          {options.map((f) => {
+            const entry = byName.get(f.name);
+            const checked = !!entry;
+            const isCategorical = CATEGORICAL_SECTIONS.has(f.section);
+            return (
+              <span
+                key={f.name}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 3, opacity: disabled ? 0.6 : 1 }}
+              >
+                <label
+                  className={`explore-fieldchip${checked ? ' checked' : ''}`}
+                  title={displayLabel(f)}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    disabled={disabled}
+                    onChange={() => toggle(f.name)}
+                    style={{ position: 'absolute', opacity: 0, pointerEvents: 'none' }}
+                  />
+                  <span className="explore-fieldchip-cb" aria-hidden>
+                    {checked && <I.check size={9} stroke="#fff" sw={2.5} />}
                   </span>
-                );
-              })}
-            </div>
-          </div>
-        );
-      })}
+                  <span className="explore-fieldchip-label">{axisPickerLabel(f)}</span>
+                </label>
+                {checked && !isCategorical && (
+                  <select
+                    className="input mono"
+                    value={entry.aggregation || 'all'}
+                    onChange={(e) => setAgg(f.name, e.target.value)}
+                    disabled={disabled}
+                    style={{
+                      height: 22,
+                      padding: '0 4px',
+                      fontSize: 10.5,
+                      width: 'auto',
+                      minWidth: 64,
+                    }}
+                    title="聚合方式：不聚合=原始值，其他=按 X 分组聚合"
+                  >
+                    {AGG_OPTIONS.map((o) => (
+                      <option key={o.key} value={o.key}>{o.label}</option>
+                    ))}
+                  </select>
+                )}
+              </span>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }
+
 
 /* -------------------------------------------------------------------------
  * FieldRadioWithAgg — single-select Z field with aggregation dropdown for

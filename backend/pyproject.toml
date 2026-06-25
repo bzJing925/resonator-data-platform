@@ -1,6 +1,6 @@
 [project]
 name = "aln-backend"
-version = "0.1.0"
+version = "0.1.1"
 description = "谐振器测试数据平台 - FastAPI + Celery 后端"
 requires-python = ">=3.12"
 dependencies = [
