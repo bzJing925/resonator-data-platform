@@ -10,6 +10,7 @@ Orchestrates the per-item pipeline:
 from __future__ import annotations
 
 import gzip
+import logging
 import shutil
 from pathlib import Path
 
@@ -18,6 +19,8 @@ from app.core.deembed import DeembedError, deembed
 from app.core.extract import ExtractError, extract_resonator_params
 from app.core.touchstone import split_s2p_to_s1p
 from app.workers.pipeline.calibration import CalibrationIndex
+
+logger = logging.getLogger(__name__)
 
 
 class DutProcessor:
@@ -55,7 +58,15 @@ class DutProcessor:
         """
         target_dir = Path(target_dir)
         item_type = item.get("type", "")
-        item_path = Path(item["path"])
+        item_path_str = item.get("path")
+        if not item_path_str:
+            return {
+                "ok": False,
+                "rows": [],
+                "failures": [f"missing path for item with type '{item_type}'"],
+                "archived": [],
+            }
+        item_path = Path(item_path_str)
         s_param_relpath = item.get("s_param_relpath") or str(item_path.name)
 
         rows: list[dict] = []
@@ -150,6 +161,11 @@ class DutProcessor:
             split = split_s2p_to_s1p(s2p_path, out_dir_s11=s11_dir, out_dir_s22=s22_dir)
         except Exception as exc:
             failures.append(f"{s2p_path.name}: split failed: {exc}")
+            # Clean up empty directories created by split_s2p_to_s1p
+            if s11_dir.exists() and not any(s11_dir.iterdir()):
+                s11_dir.rmdir()
+            if s22_dir.exists() and not any(s22_dir.iterdir()):
+                s22_dir.rmdir()
             return
 
         ports = [
@@ -216,7 +232,8 @@ class DutProcessor:
                     shutil.copyfileobj(f_in, f_out)
             src.unlink()
             return gz_path
-        except Exception:
+        except Exception as exc:
+            logger.warning("gzip failed for %s: %s", src, exc)
             if gz_path.exists():
                 gz_path.unlink()
             return None
