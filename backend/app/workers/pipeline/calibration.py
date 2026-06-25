@@ -72,7 +72,9 @@ class CalibrationIndex:
             (open_path, short_path) for the specified port.
 
         Raises:
-            DeembedError: If no matching calibration files are found.
+            DeembedError: If no matching calibration files are found or port is invalid.
         """
+        if port not in ("S11", "S22"):
+            raise DeembedError(f"Invalid port: {port}, expected 'S11' or 'S22'")
         cal_paths = self.s11_paths if port == "S11" else self.s22_paths
         return match_calibration(dut_s1p_path, cal_paths, self.method)
