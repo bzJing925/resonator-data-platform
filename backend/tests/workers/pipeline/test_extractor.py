@@ -93,4 +93,4 @@ def test_streaming_extractor_uses_7z(tmp_path: Path) -> None:
     with zipfile.ZipFile(zip_path, "w") as zf:
         zf.writestr("x.s1p", "# dummy\n1 1 1\n")
     extractor = StreamingExtractor(zip_path, target_dir)
-    assert extractor.exe and ("7z" in extractor.exe or "7za" in extractor.exe)
+    assert Path(extractor.exe).name in ("7z", "7za", "p7zip")
