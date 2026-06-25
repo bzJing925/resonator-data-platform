@@ -12,6 +12,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Package managers**: uv (Python) + npm (frontend)
 - **Deployment**: 5-container compose (postgres / redis / api / worker / nginx) via `bootstrap.sh` / `bootstrap.ps1`
 
+## Worktree routing
+
+This repository has domain-specific git worktrees under `/Users/jingbozuo/Projects`. For future code changes, choose the worktree that matches the task before editing. If a task spans multiple domains, use the worktree for the primary area being changed; ask the user only when the primary area is ambiguous.
+
+- `/Users/jingbozuo/Projects/aln-data-master` (`main`) — integration/default workspace. Use for repo-wide coordination, general documentation, cross-cutting changes that do not fit a domain worktree, and final merge/release checks.
+- `/Users/jingbozuo/Projects/aln-data-backend-algo` (`feat/backend-algo`) — algorithm work: `backend/app/core/`, algorithm constants in `backend/app/config.py`, algorithm tests, and `docs/algorithm-port.md`.
+- `/Users/jingbozuo/Projects/aln-data-backend-api` (`feat/backend-api`) — backend API/data work: FastAPI routes in `backend/app/api/`, schemas, SQLAlchemy models, Alembic migrations, workers/tasks, query/export/upload/device endpoints, and backend API tests.
+- `/Users/jingbozuo/Projects/aln-data-backend-ml` (`feat/backend-ml`) — ML/PINN/sparse reconstruction work: `backend/app/ml/`, related training scripts under `backend/scripts/`, sparse/sparam inference integration, and PINN runbook/changelog docs.
+- `/Users/jingbozuo/Projects/aln-data-frontend` (`feat/frontend`) — frontend work: React/Vite app under `frontend/`, frontend API wrappers, routing, components, pages, hooks, styles, and UI behavior.
+- `/Users/jingbozuo/Projects/aln-data-deploy` (`feat/deploy`) — deployment/ops/packaging work: Docker/Compose, nginx, bootstrap scripts, desktop build/installer files, deployment and operations documentation.
+
 ## Python environment rules
 
 - This project uses **uv**. Always use the project-local virtual environment at `.venv`.
