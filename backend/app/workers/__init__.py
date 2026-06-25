@@ -12,4 +12,4 @@ from app.workers import (
     pipeline_batch,  # noqa: E402,F401
     process_batch,  # noqa: E402,F401
 )
-from app.workers.celery_app import celery_app
+from app.workers.celery_app import celery_app as celery_app  # noqa: F401
