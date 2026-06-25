@@ -78,6 +78,12 @@ export const getDeviceSparseSparam = (id, param = 'z_mag_db', piezo = '308', nPo
     .get(`/devices/${id}/sparam-sparse`, { params: { param, piezo, n_points: nPoints } })
     .then((r) => r.data);
 
+export const getMasonMaterial = () =>
+  api.get('/mason-sim/material').then((r) => r.data);
+
+export const postMasonScan = (payload) =>
+  api.post('/mason-sim/scan', payload).then((r) => r.data);
+
 export const downloadBatchZip = (batchNo) =>
   api.get(`/batches/${encodeURIComponent(batchNo)}/download-zip`, {
     responseType: 'blob',
