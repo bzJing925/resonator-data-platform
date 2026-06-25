@@ -6,12 +6,10 @@ from app.workers.pipeline.watcher import FileWatcher
 
 
 def test_watcher_discovers_new_files(tmp_path: Path) -> None:
+    (tmp_path / "old.s1p").write_text("# old\n")
+
     watcher = FileWatcher(tmp_path, patterns=["*.s1p"], interval=0.05)
     stop = threading.Event()
-
-    (tmp_path / "old.s1p").write_text("# old\n")
-    # 预扫描：标记已存在文件，确保只发现新文件
-    watcher._scan()
 
     discovered: list[str] = []
 

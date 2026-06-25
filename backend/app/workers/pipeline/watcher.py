@@ -19,6 +19,8 @@ class FileWatcher:
         self.patterns = patterns
         self.interval = interval
         self._seen: set[str] = set()
+        # 将构造时已存在的文件标记为已见，不产出它们
+        self._scan()
 
     def _scan(self) -> list[Path]:
         found: list[Path] = []
