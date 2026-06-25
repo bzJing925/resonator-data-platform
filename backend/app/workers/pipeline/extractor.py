@@ -10,7 +10,10 @@ from app.core.filename import parse_filename
 logger = logging.getLogger(__name__)
 
 
-def zip_contains_calibration(zip_path: str | Path, method: Literal["default", "basic"] = "default") -> bool:
+def zip_contains_calibration(
+    zip_path: str | Path,
+    method: Literal["default", "basic"] = "default",
+) -> bool:
     """检查 zip 内是否包含 OPEN/SHORT 校准件 .s2p。
 
     使用 filename.parse_filename 统一识别，避免与 extract_batch 的识别方式不一致。
