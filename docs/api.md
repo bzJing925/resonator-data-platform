@@ -51,7 +51,8 @@
 | f_start_ghz | float | 否 | 起始频率，留空全频段 |
 | f_end_ghz | float | 否 | 结束频率，留空全频段 |
 | process_type | str | 否 | `S1P` / `S2P` / `BOTH`，默认 `BOTH` |
-| deembed | bool | 否 | 是否做 ShortOpen 去嵌，默认 `false`（v1 暂不开） |
+| deembed | bool | 否 | 是否做 ShortOpen 去嵌，默认 `false`。`true` 且 zip 含 OPEN/SHORT 校准件时走 `aln.pipeline_batch` 边解压边计算链路 |
+| deembed_method | str | 否 | 去嵌匹配方法：`default` / `original` / `vz` / `gsg100` / `basic`，默认 `default` |
 
 **响应** `202 Accepted`：
 
@@ -295,11 +296,11 @@ data: {"error_msg": "..."}
   "freq_ghz": [3.0, 3.001, ..., 20.0],
   "values": [-0.1, -0.15, ..., -25.3],
   "param": "s11_db",
-  "file_path": "T8901P.01/wafer2/S11/17_E6-1_X0Y0N18_Fail_S11.s1p"
+  "file_path": "T8901P.01/wafer2/S11/17_E6-1_X0Y0N18_Fail_S11.s1p.gz"
 }
 ```
 
-后端用 scikit-rf 现读 `.s1p`。
+后端用 scikit-rf 现读 `.s1p` 或 `.s1p.gz`；pipeline 归档后的 gzip 文件会被透明解压。
 
 #### PINN 快速路径
 
