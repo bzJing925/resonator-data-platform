@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Generator
+from typing import Any
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -61,6 +62,13 @@ def _patch_psycopg_server_version() -> None:
 _patch_psycopg_server_version()
 
 _settings = get_settings()
+
+# 当 PostgreSQL server_encoding 为 SQL_ASCII 时，psycopg 可能把 TEXT 列以 bytes
+# 返回。通过连接参数强制 client_encoding=utf8，确保字符串列正常解码。
+_connect_args: dict[str, Any] = {}
+if _settings.DATABASE_URL.startswith("postgresql+psycopg://"):
+    _connect_args["options"] = "-c client_encoding=utf8"
+
 engine = create_engine(
     _settings.DATABASE_URL,
     pool_pre_ping=True,
@@ -69,6 +77,7 @@ engine = create_engine(
     max_overflow=_settings.DB_MAX_OVERFLOW,
     pool_recycle=_settings.DB_POOL_RECYCLE,
     pool_timeout=_settings.DB_POOL_TIMEOUT,
+    connect_args=_connect_args,
 )
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 
