@@ -36,9 +36,7 @@ class TestShouldUsePipeline:
             zf.writestr("OPEN.s2p", "#\n")
         assert should_use_pipeline(zip_path, deembed=False) is False
 
-    def test_should_use_pipeline_false_when_no_calibration(
-        self, tmp_path: Path
-    ) -> None:
+    def test_should_use_pipeline_false_when_no_calibration(self, tmp_path: Path) -> None:
         zip_path = tmp_path / "no_cal.zip"
         with zipfile.ZipFile(zip_path, "w") as zf:
             zf.writestr("DUT.s2p", "#\n")
@@ -81,8 +79,8 @@ def sample_s2p_content():
 
     z_mag = (
         100.0
-        - 80.0 * np.exp(-((freq - fs) / 0.15e9) ** 2)
-        + 120.0 * np.exp(-((freq - fp) / 0.1e9) ** 2)
+        - 80.0 * np.exp(-(((freq - fs) / 0.15e9) ** 2))
+        + 120.0 * np.exp(-(((freq - fp) / 0.1e9) ** 2))
     )
     z_mag = np.maximum(z_mag, 1.0)
 
@@ -103,8 +101,7 @@ def sample_s2p_content():
     for f_hz, s11r, s11i in zip(freq, s.real, s.imag, strict=False):
         # S21/S12 near-zero transmission; S22 same as S11
         lines.append(
-            f"{f_hz:.6e} {s11r:.12e} {s11i:.12e} "
-            f"0.0 0.0 0.0 0.0 {s11r:.12e} {s11i:.12e}\n"
+            f"{f_hz:.6e} {s11r:.12e} {s11i:.12e} 0.0 0.0 0.0 0.0 {s11r:.12e} {s11i:.12e}\n"
         )
     return "".join(lines)
 
@@ -161,9 +158,7 @@ def mapping_file(tmp_path: Path) -> Path:
 class TestPipelineBatchTask:
     """End-to-end tests for pipeline_batch_task coordination logic."""
 
-    def test_pipeline_batch_full_pipeline(
-        self, clean_db, staged_pipeline_files, mapping_file
-    ):
+    def test_pipeline_batch_full_pipeline(self, clean_db, staged_pipeline_files, mapping_file):
         """完整跑 pipeline：插 mapping → 插 pending batch + upload_task →
         触发 pipeline_batch_task → 校验入库 device_count == 2 (4 ports)。"""
         staged_zip = staged_pipeline_files
@@ -221,8 +216,7 @@ class TestPipelineBatchTask:
 
         # 每个 DUT s2p 拆成 2 个 port → 2 DUT × 2 ports = 4 devices
         assert result["device_count"] == 4, (
-            f"应入库 4 行（2 DUT × 2 ports），"
-            f"实际 {result['device_count']}"
+            f"应入库 4 行（2 DUT × 2 ports），实际 {result['device_count']}"
         )
 
         # 校验 DB 状态
@@ -235,9 +229,7 @@ class TestPipelineBatchTask:
 
             from sqlalchemy import func
 
-            n = db.scalar(
-                select(func.count(Device.id)).where(Device.batch_id == batches[0].id)
-            )
+            n = db.scalar(select(func.count(Device.id)).where(Device.batch_id == batches[0].id))
             assert n == 4
 
             # upload_tasks 最终态

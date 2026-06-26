@@ -84,9 +84,7 @@ def test_streaming_extractor_yields_files(tmp_path: Path) -> None:
     assert (target_dir / "a.s1p").exists()
 
 
-@pytest.mark.skipif(
-    not shutil.which("7z") and not shutil.which("7za"), reason="无 7z"
-)
+@pytest.mark.skipif(not shutil.which("7z") and not shutil.which("7za"), reason="无 7z")
 def test_streaming_extractor_uses_7z(tmp_path: Path) -> None:
     zip_path = tmp_path / "test.zip"
     target_dir = tmp_path / "out"

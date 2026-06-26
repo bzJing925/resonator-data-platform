@@ -12,9 +12,7 @@ logger = logging.getLogger(__name__)
 class FileWatcher:
     """轮询目录，产出匹配模式的新文件。"""
 
-    def __init__(
-        self, root_dir: str | Path, patterns: list[str], interval: float = 1.0
-    ):
+    def __init__(self, root_dir: str | Path, patterns: list[str], interval: float = 1.0):
         self.root_dir = Path(root_dir)
         self.patterns = patterns
         self.interval = interval

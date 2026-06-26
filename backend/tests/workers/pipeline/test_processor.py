@@ -26,8 +26,8 @@ def _write_minimal_s2p_with_resonance(path: Path, n_points: int = 200) -> None:
 
     z_mag = (
         100.0
-        - 80.0 * np.exp(-((freq - fs) / 0.15e9) ** 2)
-        + 120.0 * np.exp(-((freq - fp) / 0.1e9) ** 2)
+        - 80.0 * np.exp(-(((freq - fs) / 0.15e9) ** 2))
+        + 120.0 * np.exp(-(((freq - fp) / 0.1e9) ** 2))
     )
     z_mag = np.maximum(z_mag, 1.0)
 
@@ -85,8 +85,8 @@ def _write_minimal_s1p_with_resonance(path: Path, n_points: int = 200) -> None:
     # Realistic impedance magnitude: high → dip → peak → lower
     z_mag = (
         100.0
-        - 80.0 * np.exp(-((freq - fs) / 0.15e9) ** 2)
-        + 120.0 * np.exp(-((freq - fp) / 0.1e9) ** 2)
+        - 80.0 * np.exp(-(((freq - fs) / 0.15e9) ** 2))
+        + 120.0 * np.exp(-(((freq - fp) / 0.1e9) ** 2))
     )
     z_mag = np.maximum(z_mag, 1.0)
 
