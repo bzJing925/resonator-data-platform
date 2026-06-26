@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import gzip
 import logging
 import re
 import shutil
@@ -15,6 +16,7 @@ from pathlib import Path
 from typing import Annotated
 
 import numpy as np
+import skrf
 import zipstream
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
@@ -56,20 +58,57 @@ def _safe_resolve(base_dir: Path, relpath: str) -> Path:
     return target
 
 
-def _read_network(target_path: Path, process_type: str = "S1P") -> skrf.Network:
-    """读取 s1p/s2p/snp 文件；.snp 按 process_type 临时改名后读取。"""
-    import skrf
+def _find_actual_path(base_dir: Path, relpath: str) -> Path:
+    """解析相对路径；若原文件不存在但存在 .gz 版本，则返回 .gz 路径。"""
+    target = _safe_resolve(base_dir, relpath)
+    if target.exists():
+        return target
+    gz_target = target.with_suffix(target.suffix + ".gz")
+    if gz_target.exists():
+        return gz_target
+    raise HTTPException(status_code=404, detail=f"文件不存在: {relpath}")
 
+
+def _copy_maybe_gz(src: Path, dst: Path) -> None:
+    """复制文件；若源为 .gz 则先解压。"""
+    if src.suffix.lower() == ".gz":
+        with gzip.open(src, "rb") as f_in, open(dst, "wb") as f_out:
+            shutil.copyfileobj(f_in, f_out)
+    else:
+        shutil.copy2(src, dst)
+
+
+def _read_network(target_path: Path, process_type: str = "S1P") -> skrf.Network:
+    """读取 s1p/s2p/snp 文件；.snp 按 process_type 临时改名后读取。
+
+    支持透明读取 .s1p.gz / .s2p.gz：先解压到临时文件再交给 skrf。
+    """
     suffix = target_path.suffix.lower()
-    if suffix == ".snp":
+    is_gz = False
+    real_suffix = suffix
+    if suffix == ".gz":
+        is_gz = True
+        real_suffix = Path(target_path.stem).suffix.lower()
+
+    if real_suffix == ".snp":
         new_ext = ".s1p" if process_type == "S1P" else ".s2p"
         tmp_dir = Path(tempfile.mkdtemp(prefix="aln_snp_"))
         tmp_path = tmp_dir / (target_path.stem + new_ext)
-        shutil.copy2(target_path, tmp_path)
+        _copy_maybe_gz(target_path, tmp_path)
         try:
             return skrf.Network(str(tmp_path))
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    if is_gz:
+        tmp_dir = Path(tempfile.mkdtemp(prefix="aln_gz_"))
+        tmp_path = tmp_dir / target_path.stem
+        _copy_maybe_gz(target_path, tmp_path)
+        try:
+            return skrf.Network(str(tmp_path))
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
     return skrf.Network(str(target_path))
 
 
@@ -94,9 +133,9 @@ def list_batch_files(
         for d in db.scalars(select(Device).where(Device.batch_id == batch.id)).all()
     }
 
-    patterns = ["*.s1p"]
+    patterns = ["*.s1p", "*.s1p.gz"]
     if include_snp:
-        patterns.extend(["*.s2p", "*.snp"])
+        patterns.extend(["*.s2p", "*.s2p.gz", "*.snp"])
 
     files: list[BatchFileItem] = []
     seen: set[str] = set()
@@ -200,20 +239,29 @@ def download_files_zip(db: DbSession, body: DownloadZipRequest) -> Response:
     if not base_dir.exists():
         raise HTTPException(status_code=404, detail="批次解压目录不存在")
 
-    allowed_suffixes = {".s1p", ".s2p", ".snp"}
     selected: list[tuple[Path, str]] = []
 
     if body.relpaths:
         for relpath in body.relpaths:
-            target = _safe_resolve(base_dir, relpath)
-            if not target.is_file() or target.suffix.lower() not in allowed_suffixes:
+            target = _find_actual_path(base_dir, relpath)
+            if target.suffix.lower() == ".gz":
+                actual_suffix = Path(target.stem).suffix.lower()
+            else:
+                actual_suffix = target.suffix.lower()
+            if actual_suffix not in {".s1p", ".s2p", ".snp"}:
                 raise HTTPException(
-                    status_code=400, detail=f"非法或不存在文件: {relpath}"
+                    status_code=400, detail=f"非法文件类型: {relpath}"
                 )
             selected.append((target, relpath))
     else:
         for p in sorted(base_dir.rglob("*")):
-            if p.is_file() and p.suffix.lower() in allowed_suffixes:
+            if not p.is_file():
+                continue
+            if p.suffix.lower() == ".gz":
+                actual_suffix = Path(p.stem).suffix.lower()
+            else:
+                actual_suffix = p.suffix.lower()
+            if actual_suffix in {".s1p", ".s2p", ".snp"}:
                 selected.append((p, str(p.relative_to(base_dir))))
 
     if not selected:
@@ -249,9 +297,7 @@ def get_file_curve(
         raise HTTPException(status_code=404, detail=f"批次 {batch_no} 不存在")
 
     base_dir = _batch_files_dir(batch_no)
-    target_path = _safe_resolve(base_dir, relpath)
-    if not target_path.exists():
-        raise HTTPException(status_code=404, detail=f"文件不存在: {relpath}")
+    target_path = _find_actual_path(base_dir, relpath)
 
     try:
         net = _read_network(target_path, batch.process_type or "S1P")
@@ -303,9 +349,7 @@ def compute_single_file(db: DbSession, body: ComputeFileRequest) -> ComputeFileR
         raise HTTPException(status_code=404, detail=f"批次 {body.batch_no} 不存在")
 
     base_dir = _batch_files_dir(body.batch_no)
-    target_path = _safe_resolve(base_dir, body.relpath)
-    if not target_path.exists():
-        raise HTTPException(status_code=404, detail=f"文件不存在: {body.relpath}")
+    target_path = _find_actual_path(base_dir, body.relpath)
 
     mapping_row = db.get(Mapping, batch.mapping_id) if batch.mapping_id else None
     mapping_dict = load_mapping(mapping_row.file_path) if mapping_row else {}
