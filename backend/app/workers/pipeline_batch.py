@@ -9,7 +9,6 @@ import logging
 import os
 import re
 import shutil
-import threading
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
@@ -27,7 +26,6 @@ from app.workers.celery_app import celery_app
 from app.workers.pipeline.calibration import CalibrationIndex
 from app.workers.pipeline.extractor import StreamingExtractor
 from app.workers.pipeline.processor import DutProcessor
-from app.workers.pipeline.watcher import FileWatcher
 from app.workers.progress import ProgressPublisher
 
 logger = logging.getLogger(__name__)
@@ -167,10 +165,8 @@ def pipeline_batch_task(
         db.execute(delete(Device).where(Device.batch_id == batch.id))
         db.commit()
 
-        # ── 1. 解压生产者线程 ───────────────────────────────────────
+        # ── 1. 解压（流式产出文件路径）────────────────────────────────
         extracted_paths: list[Path] = []
-        stop_event = threading.Event()
-        extract_exception: Exception | None = None
 
         def _extract_progress(count: int) -> None:
             # 0-30% 映射给 extract 阶段
@@ -183,31 +179,19 @@ def pipeline_batch_task(
                 progress_msg=f"解压中… 已发现 {count} 个文件",
             )
 
-        def _extract_worker() -> None:
-            nonlocal extract_exception
-            extractor = StreamingExtractor(
-                zip_path,
-                target_dir,
-                scan_interval=settings.PIPELINE_SCAN_INTERVAL,
-            )
-            try:
-                for p in extractor.extract(progress_callback=_extract_progress):
-                    extracted_paths.append(p)
-            except Exception as exc:
-                extract_exception = exc
-                stop_event.set()
-                logger.exception("解压线程异常")
-
-        extract_thread = threading.Thread(target=_extract_worker, daemon=True)
-        extract_thread.start()
-
-        # ── 2. 文件发现与校准件优先 ───────────────────────────────────
-        watcher = FileWatcher(
+        extractor = StreamingExtractor(
+            zip_path,
             target_dir,
-            patterns=["*.s1p", "*.s2p"],
-            interval=settings.PIPELINE_SCAN_INTERVAL,
+            scan_interval=settings.PIPELINE_SCAN_INTERVAL,
         )
+        try:
+            for p in extractor.extract(progress_callback=_extract_progress):
+                extracted_paths.append(p)
+        except Exception:
+            logger.exception("解压失败")
+            raise
 
+        # ── 2. 文件分类与校准件优先 ───────────────────────────────────
         cal_s2p_files: list[Path] = []
         pending_duts: list[dict[str, Any]] = []
         cal_index: CalibrationIndex | None = None
@@ -215,16 +199,7 @@ def pipeline_batch_task(
         failures: list[str] = []
         total_processed = 0
 
-        # 等待解压线程结束（或异常）
-        extract_thread.join(timeout=300)
-        if extract_exception:
-            raise extract_exception
-
-        # 最终扫描所有文件（确保 extracted_paths 已完整）
-        for _ in watcher.watch(stop_event):
-            pass
-
-        # 手动扫描所有已提取文件进行分类
+        # 扫描所有已提取文件进行分类
         for p in extracted_paths:
             if not p.is_file():
                 continue
@@ -239,12 +214,7 @@ def pipeline_batch_task(
                 continue
 
             item = _path_to_item(p, target_dir)
-            if cal_index is not None:
-                # 索引已建立，直接提交
-                pending_duts.append(item)
-            else:
-                # 缓存到 pending
-                pending_duts.append(item)
+            pending_duts.append(item)
 
         # 建立校准索引
         if cal_s2p_files:

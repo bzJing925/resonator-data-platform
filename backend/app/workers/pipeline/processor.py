@@ -180,9 +180,7 @@ class DutProcessor:
             try:
                 if cal_index is not None:
                     open_path, short_path = cal_index.match(port_name, s1p_path)
-                    de_path = s1p_path.with_suffix("").with_suffix(
-                        s1p_path.suffix.replace(".s1p", "_de.s1p")
-                    )
+                    de_path = s1p_path.with_name(f"{s1p_path.stem}_de.s1p")
                     deembed(s1p_path, open_path, short_path, de_path)
                     s1p_path = de_path
                     de_temp_files.append(de_path)
