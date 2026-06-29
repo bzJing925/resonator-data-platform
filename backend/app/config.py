@@ -19,9 +19,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """运行时配置（来自环境变量 / .env）。"""
 
-    # 桌面版通过 DOTENV_PATH 指向打包进来的 .env；开发环境默认使用当前目录 .env
+    # 桌面版通过 DOTENV_PATH 指向打包进来的 .env；
+    # 开发环境默认加载项目根目录（backend/..）下的 .env，避免从 backend/ 启动时找不到。
+    _repo_root = Path(__file__).resolve().parent.parent.parent
     model_config = SettingsConfigDict(
-        env_file=os.environ.get("DOTENV_PATH", ".env"),
+        env_file=os.environ.get("DOTENV_PATH", str(_repo_root / ".env")),
         extra="ignore",
     )
 
