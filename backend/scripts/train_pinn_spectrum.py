@@ -21,21 +21,20 @@ from typing import Any
 
 import numpy as np
 import torch
-import torch.nn.functional as F
+import torch.nn.functional as functional
 from torch.utils.data import DataLoader
 
 # 把 backend 目录加入路径，以便 import app.ml
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from app.ml.dataset import RealS1PBatchDataset, SyntheticSpectrumDataset
-from app.ml.losses import PINNSpectralLoss
-from app.ml.models import PINNReconstructor, ResidualNet, SmartSampler, SpectralVAE
-from app.ml.utils import (
+from app.ml.dataset import RealS1PBatchDataset, SyntheticSpectrumDataset  # noqa: E402
+from app.ml.losses import PINNSpectralLoss  # noqa: E402
+from app.ml.models import ResidualNet, SmartSampler, SpectralVAE  # noqa: E402
+from app.ml.utils import (  # noqa: E402
     compute_ssim,
     enforce_critical_points_mask,
     numerical_gradients,
-    preprocess_spectrum,
 )
 
 
@@ -161,7 +160,12 @@ def precompute_base_latents(
     base_latents: dict[int, dict[str, torch.Tensor]] = {}
     with torch.no_grad():
         for batch_id, meta in dataset.batch_meta.items():
-            base_spectrum = torch.from_numpy(meta["base_spectrum"]).float().unsqueeze(0).unsqueeze(0)
+            base_spectrum = (
+                torch.from_numpy(meta["base_spectrum"])
+                .float()
+                .unsqueeze(0)
+                .unsqueeze(0)
+            )
             base_spectrum = base_spectrum.to(device)
             z_base = vae.encode_deterministic(base_spectrum)
             base_latents[batch_id] = {
@@ -208,13 +212,13 @@ def train_epoch(
 
         # 收集该 batch 的基准 latent 和基准频谱
         z_base_list = []
-        S_base_list = []
+        s_base_list = []
         for bid in batch_ids:
             z_base_list.append(base_latents[int(bid)]["z_base"])
-            S_base_list.append(base_latents[int(bid)]["base_spectrum"])
+            s_base_list.append(base_latents[int(bid)]["base_spectrum"])
         z_base = torch.stack(z_base_list, dim=0).to(device)      # (B, D)
-        S_base = torch.stack(S_base_list, dim=0).to(device)      # (B, N)
-        S_base = S_base.unsqueeze(1)  # (B, 1, N)
+        s_base = torch.stack(s_base_list, dim=0).to(device)      # (B, N)
+        s_base = s_base.unsqueeze(1)  # (B, 1, N)
 
         optimizer.zero_grad()
 
@@ -241,11 +245,11 @@ def train_epoch(
             # 降采样后的重建损失（只对保留点计算 MSE）
             sampled_pred = recon_vae * mask.unsqueeze(1).float()
             sampled_true = spectrum * mask.unsqueeze(1).float()
-            sampler_loss = F.mse_loss(sampled_pred, sampled_true)
+            sampler_loss = functional.mse_loss(sampled_pred, sampled_true)
 
             # 同时优化 SSIM
             # 降采样后插值回全长度，计算与原始的全局 SSIM
-            sampled_flat = sampled_pred.squeeze(1)  # (B, N)
+            _ = sampled_pred.squeeze(1)  # (B, N)
             # 简单的 SSIM 近似：只对保留区域计算
             ssim_val = compute_ssim(sampled_pred, spectrum)
             sampler_loss = sampler_loss - 0.1 * ssim_val  # 最大化 SSIM
@@ -258,7 +262,7 @@ def train_epoch(
             z_base=z_base,
             fs_pred=fs,
             fp_pred=fp,
-            S_base=S_base,
+            S_base=s_base,
             freq=torch.linspace(1.0, 3.0, spectrum.shape[-1], device=device),
             mu=mu,
             logvar=logvar,
@@ -330,7 +334,7 @@ def validate(
         z = z_base + delta_z
         recon = vae.decode(z)
 
-        mse = F.mse_loss(recon, spectrum).item()
+        mse = functional.mse_loss(recon, spectrum).item()
         ssim = compute_ssim(recon, spectrum).item()
 
         total_mse += mse
@@ -341,7 +345,7 @@ def validate(
             p = smart_sampler(grads)
             mask = enforce_critical_points_mask(p, recon, target_k)
             sampled = recon * mask.unsqueeze(1).float()
-            sampler_mse = F.mse_loss(sampled, spectrum).item()
+            sampler_mse = functional.mse_loss(sampled, spectrum).item()
             total_sampler_mse += sampler_mse
 
         n_batches += 1
@@ -367,7 +371,10 @@ def save_training_curves(
     # 文本格式的损失摘要
     summary_path = output_dir / "training_summary.txt"
     with open(summary_path, "w", encoding="utf-8") as f:
-        f.write("Epoch | Loss     | Recon    | Coherence | Smooth   | Order    | Far      | KL       | Val MSE  | Val SSIM\n")
+        f.write(
+            "Epoch | Loss     | Recon    | Coherence | Smooth   | "
+            "Order    | Far      | KL       | Val MSE  | Val SSIM\n"
+        )
         f.write("-" * 110 + "\n")
         for h in history:
             f.write(
@@ -461,7 +468,13 @@ def main() -> None:
         vae.load_state_dict(torch.load(args.pretrained_vae, map_location=device, weights_only=True))
     if args.pretrained_residual:
         print(f"加载预训练 ResidualNet: {args.pretrained_residual}")
-        residual_net.load_state_dict(torch.load(args.pretrained_residual, map_location=device, weights_only=True))
+        residual_net.load_state_dict(
+            torch.load(
+                args.pretrained_residual,
+                map_location=device,
+                weights_only=True,
+            )
+        )
 
     # 根据计划调整 PINN Loss 权重，给 ResidualNet 更大自由度
     pinn_loss = PINNSpectralLoss(
@@ -567,7 +580,15 @@ def main() -> None:
     for p in residual_net.parameters():
         p.requires_grad = False
 
-    base_latents = _train_phase("Phase A: 仅 VAE", phase_a_epochs, list(vae.parameters()), "A", None, lr_mult=1.0, bl=base_latents)
+    base_latents = _train_phase(
+        "Phase A: 仅 VAE",
+        phase_a_epochs,
+        list(vae.parameters()),
+        "A",
+        None,
+        lr_mult=1.0,
+        bl=base_latents,
+    )
 
     # 解冻 ResidualNet（Phase B）
     for p in residual_net.parameters():
@@ -624,12 +645,12 @@ def main() -> None:
             json.dump(norm_stats, f, indent=2)
 
     print(f"\n训练完成。产物保存在: {output_dir.absolute()}")
-    print(f"  - vae.pt")
-    print(f"  - residual_net.pt")
-    print(f"  - smart_sampler.pt")
-    print(f"  - base_latents.json")
-    print(f"  - training_curves.json / .txt")
-    print(f"  - params_norm.json")
+    print("  - vae.pt")
+    print("  - residual_net.pt")
+    print("  - smart_sampler.pt")
+    print("  - base_latents.json")
+    print("  - training_curves.json / .txt")
+    print("  - params_norm.json")
 
 
 if __name__ == "__main__":

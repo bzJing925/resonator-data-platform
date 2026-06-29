@@ -27,9 +27,9 @@ import torch
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from app.ml.dataset import RealS1PBatchDataset
-from app.ml.models import ResidualNet, SmartSampler, SpectralVAE
-from app.ml.utils import enforce_critical_points_mask, numerical_gradients
+from app.ml.dataset import RealS1PBatchDataset  # noqa: E402
+from app.ml.models import ResidualNet, SmartSampler, SpectralVAE  # noqa: E402
+from app.ml.utils import enforce_critical_points_mask, numerical_gradients  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -100,13 +100,13 @@ def main() -> None:
     smart_sampler.eval()
 
     # 加载归一化统计
-    with open(ckpt_dir / "params_norm.json", "r", encoding="utf-8") as f:
+    with open(ckpt_dir / "params_norm.json", encoding="utf-8") as f:
         norm_stats = json.load(f)
     params_mean = torch.tensor(norm_stats["mean"], dtype=torch.float32, device=device)
     params_std = torch.tensor(norm_stats["std"], dtype=torch.float32, device=device)
 
     # 加载基准 latent
-    with open(ckpt_dir / "base_latents.json", "r", encoding="utf-8") as f:
+    with open(ckpt_dir / "base_latents.json", encoding="utf-8") as f:
         base_meta = json.load(f)
     z_base = torch.tensor(base_meta["0"]["z_base"], dtype=torch.float32, device=device)
 

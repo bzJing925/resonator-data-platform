@@ -11,7 +11,6 @@ process_batch 保留为兼容入口：在 Celery EAGER 模式下串行调用 ext
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +19,8 @@ from sqlalchemy.orm import Session
 
 from app.core.extract import extract_resonator_params
 from app.models import Device
-from app.workers import celery_app
+from app.workers.celery_app import celery_app
+from app.workers.progress import ProgressPublisher
 
 logger = logging.getLogger(__name__)
 
@@ -33,18 +33,48 @@ _PARALLEL_MIN_FILES = 50
 # COPY 目标列（排除自增 id，与 devices 表定义顺序一致）。
 # 保留在本模块是为了兼容现有单元测试的导入。
 _COPY_COLUMNS = [
-    "batch_id", "original_filename", "display_name", "mark", "wafer",
-    "folder_name", "coord", "x", "y", "eg", "fl", "ag", "pf",
-    "area_n", "area_um2", "fs_ghz", "fp_ghz", "zs_ohm", "zp_ohm",
-    "qs", "qp", "qs_bodeq", "qp_bodeq", "dbqs", "dbqp",
-    "bodeq_fitted", "bodeq_smooth", "bodeq_raw", "fbode_ghz", "k2eff_pct",
-    "fp2_ghz", "fs2_ghz", "zp2_ohm", "zs2_ohm", "deembedded", "s_param_path",
+    "batch_id",
+    "original_filename",
+    "display_name",
+    "mark",
+    "wafer",
+    "folder_name",
+    "coord",
+    "x",
+    "y",
+    "eg",
+    "fl",
+    "ag",
+    "pf",
+    "area_n",
+    "area_um2",
+    "fs_ghz",
+    "fp_ghz",
+    "zs_ohm",
+    "zp_ohm",
+    "qs",
+    "qp",
+    "qs_bodeq",
+    "qp_bodeq",
+    "dbqs",
+    "dbqp",
+    "bodeq_fitted",
+    "bodeq_smooth",
+    "bodeq_raw",
+    "fbode_ghz",
+    "k2eff_pct",
+    "fp2_ghz",
+    "fs2_ghz",
+    "zp2_ohm",
+    "zs2_ohm",
+    "deembedded",
+    "s_param_path",
+    "s_param_port",
 ]
 
 
 def _extract_single(args: tuple) -> dict[str, Any]:
     """子进程入口：提取单个 .s1p 文件的谐振参数。"""
-    from pathlib import Path
 
     s1p_path, mapping, wafer, s_param_relpath, deembedded, f_start_ghz, f_end_ghz = args
     try:
@@ -72,8 +102,8 @@ def _bulk_insert_devices(db: Session, rows: list[dict[str, Any]]) -> None:
     if not rows:
         return
 
-    COPY_THRESHOLD = 3000
-    if len(rows) >= COPY_THRESHOLD:
+    copy_threshold = 3000
+    if len(rows) >= copy_threshold:
         try:
             _copy_insert_devices(db, rows)
             return
@@ -128,11 +158,16 @@ def _extract_parallel(
                 logger.warning("提参失败 %s", result["error"])
 
             pct = 5 + int(90 * processed / total)
-            if pct != last_pct and (pct - last_pct >= 5 or processed % 200 == 0 or processed == total):
+            if pct != last_pct and (
+                pct - last_pct >= 5 or processed % 200 == 0 or processed == total
+            ):
                 publisher.update(
                     db,
                     progress_pct=pct,
-                    progress_msg=f"已处理 {processed}/{total}，失败 {len(failures)} (并行 {max_workers} workers)",
+                    progress_msg=(
+                        f"已处理 {processed}/{total}，失败 {len(failures)}"
+                        f" (并行 {max_workers} workers)"
+                    ),
                 )
                 last_pct = pct
 
@@ -164,8 +199,8 @@ def process_batch_task(
     在 Celery EAGER 模式下两条任务会同步执行，保持旧测试可用；
     生产环境建议直接投递 chain(extract_batch.s(...), compute_batch.s(...))。
     """
-    from app.workers.extract_batch import extract_batch_task as _extract_task
     from app.workers.compute_batch import compute_batch_task as _compute_task
+    from app.workers.extract_batch import extract_batch_task as _extract_task
 
     extract_result = _extract_task.apply(
         kwargs={

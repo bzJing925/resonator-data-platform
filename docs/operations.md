@@ -89,6 +89,7 @@ podman compose restart nginx    # 改 nginx 配置 / 前端 dist
 
 - 改了 `.env`（API/worker 必须重启才能读到新环境变量）。
 - 改了 `WORKER_CONCURRENCY`（worker 重启）。
+- 改了 `PIPELINE_*` 配置项（worker 重启生效）。
 - worker 死锁、长时间不消费队列。
 - 修改了 `deploy/nginx/default.conf`（nginx 重启）。
 - 前端 `npm run build` 输出新 dist（nginx 重启）。
@@ -450,6 +451,9 @@ LIMIT 10;
 | `disk full` / `No space left on device` | /data3 满 | §5.7 清盘 |
 | `database connection refused` | PG 挂了 | §5.5 |
 | `MemoryError` / OOM | worker 单任务太大 | 改小并发或分批 |
+| `未安装 7z / unzip，无法流式解压` | worker 容器缺少解压工具 | 安装 `p7zip` 或 `unzip` 后重启 worker |
+| `ZIP 解压后未发现可处理的 DUT 文件` | zip 内无有效 .s1p/.s2p | 检查上传包内容 |
+| `无法为 ... 找到匹配的 OPEN/SHORT 校准件` | de-embed 开启但校准件缺失/不匹配 | 确认 zip 含同端口 OPEN/SHORT，或关闭 de-embed |
 
 任务清理（已失败的占位记录想删掉）：
 
@@ -604,6 +608,10 @@ find /data3/aln/backups -name 'aln_*.sql.gz' -mtime +30 -delete
 # 5) podman 镜像层缓存（停机维护时）
 podman system prune -f
 ```
+
+> **注意**：pipeline 链路会把原始 `.s1p` / `.s2p` 归档为 `.s1p.gz` / `.s2p.gz`，
+> 磁盘占用约为原 snp 文件的 10%–30%。若空间仍紧张，可临时关闭归档
+> （`PIPELINE_COMPRESS_RAW=false` 后重启 worker），但不建议长期关闭。
 
 一键清理脚本 `$REPO/scripts/cleanup.sh`：
 
@@ -831,7 +839,7 @@ postgres 容器本身不需要重建——`POSTGRES_PASSWORD` 仅在首次初始
 | `/data3/aln/pgdata/` | PostgreSQL 数据，**不可恢复**重要数据 | 极高，每日 dump |
 | `/data3/aln/redis/` | Redis AOF（任务队列） | 中等，丢了任务要重传 |
 | `/data3/aln/uploads/` | 用户原始 zip（7 天保留） | 低 |
-| `/data3/aln/files/` | 解压后的 .s1p / .s2p | 中等，rsync 到 NAS |
+| `/data3/aln/files/` | 解压后的 `.s1p` / `.s2p`，pipeline 处理后以 `.gz` 归档 | 中等，rsync 到 NAS |
 | `/data3/aln/mappings/` | 上传的 mapping xlsx | 中等 |
 | `/data3/aln/exports/` | 导出临时文件 | 无 |
 | `/data3/aln/logs/` | 应用日志 | 无（保留 14 天） |

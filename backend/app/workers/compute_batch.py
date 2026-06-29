@@ -13,12 +13,12 @@ from celery import Task
 from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.orm import Session
 
-from app.config import get_algorithm_config, get_settings
+from app.config import get_algorithm_config
 from app.core.extract import ExtractError, extract_resonator_params
 from app.core.mapping import load_mapping
 from app.db import SessionLocal
-from app.models import Batch, Device, Mapping, UploadTask
-from app.workers import celery_app
+from app.models import Batch, Device, Mapping
+from app.workers.celery_app import celery_app
 from app.workers.progress import ProgressPublisher
 
 logger = logging.getLogger(__name__)
@@ -98,7 +98,10 @@ def compute_batch_task(self: Task, extract_result: dict[str, Any]) -> dict[str, 
 
         target_dir = Path(batch.file_path) if batch.file_path else None
 
-        total = len(all_s1p)
+        total = len(all_files)
+        if total == 0:
+            raise RuntimeError("无可计算的待处理文件")
+
         device_rows: list[dict[str, Any]] = []
         failures: list[str] = []
         last_pct = 0
@@ -171,7 +174,9 @@ def compute_batch_task(self: Task, extract_result: dict[str, Any]) -> dict[str, 
                     logger.warning("提参失败 %s: %s", Path(s1p_path).name, exc)
 
                 stage_pct = int(100 * i / total)
-                if stage_pct != last_pct and (stage_pct - last_pct >= 5 or i % 100 == 0 or i == total):
+                if stage_pct != last_pct and (
+                    stage_pct - last_pct >= 5 or i % 100 == 0 or i == total
+                ):
                     overall = 30 + int(65 * i / total)
                     publisher.stage_update(
                         db,
@@ -264,14 +269,19 @@ def _extract_parallel(
                 logger.warning("提参失败 %s", result["error"])
 
             stage_pct = int(100 * processed / total)
-            if stage_pct != last_pct and (stage_pct - last_pct >= 5 or processed % 200 == 0 or processed == total):
+            if stage_pct != last_pct and (
+                stage_pct - last_pct >= 5 or processed % 200 == 0 or processed == total
+            ):
                 overall = 30 + int(65 * stage_pct / 100)
                 publisher.stage_update(
                     db,
                     stage="metrics",
                     stage_progress_pct=stage_pct,
                     progress_pct=overall,
-                    progress_msg=f"已处理 {processed}/{total}，失败 {len(failures)} (并行 {max_workers} workers)",
+                    progress_msg=(
+                        f"已处理 {processed}/{total}，"
+                        f"失败 {len(failures)} (并行 {max_workers} workers)"
+                    ),
                 )
                 last_pct = stage_pct
 
@@ -290,8 +300,8 @@ def _bulk_insert_devices(db: Session, rows: list[dict[str, Any]]) -> None:
     if not rows:
         return
 
-    COPY_THRESHOLD = 3000
-    if len(rows) >= COPY_THRESHOLD:
+    copy_threshold = 3000
+    if len(rows) >= copy_threshold:
         try:
             _copy_insert_devices(db, rows)
             return

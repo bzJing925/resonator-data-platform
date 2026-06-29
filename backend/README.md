@@ -32,6 +32,24 @@ uv run pytest tests/core -v          # 仅算法层
 uv run pytest --cov=app --cov-report=html
 ```
 
+## 边压缩边计算流水线
+
+含 de-embedding 的大 zip 会自动走 `aln.pipeline_batch` 链路：解压、去嵌、提参、归档并发执行。
+
+```bash
+uv run celery -A app.workers worker --loglevel=info --concurrency=4
+```
+
+相关配置（环境变量）：
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `PIPELINE_ENABLED` | 是否启用新链路 | `true` |
+| `PIPELINE_WORKERS` | 消费者进程数（`0` = CPU 核心数） | `0` |
+| `PIPELINE_SCAN_INTERVAL` | 文件扫描间隔秒数 | `1.0` |
+| `PIPELINE_COMPRESS_RAW` | 提参后是否 gzip 原始 snp | `true` |
+| `PIPELINE_KEEP_DEEMBED_TEMP` | 是否保留去嵌中间 `*_de.s1p` | `false` |
+
 ## 目录
 
 ```

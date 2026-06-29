@@ -48,7 +48,12 @@ def _get_redis() -> Any | None:
     try:
         from redis import Redis
 
-        return Redis.from_url(get_settings().REDIS_URL, decode_responses=True, socket_connect_timeout=1, socket_timeout=1)
+        return Redis.from_url(
+            get_settings().REDIS_URL,
+            decode_responses=True,
+            socket_connect_timeout=1,
+            socket_timeout=1,
+        )
     except Exception:
         return None
 

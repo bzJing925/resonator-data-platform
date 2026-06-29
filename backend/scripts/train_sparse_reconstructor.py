@@ -24,17 +24,16 @@ from pathlib import Path
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 from torch.utils.data import DataLoader, random_split
 
 # 把 backend 目录加入路径，以便 import app.ml
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from app.ml.sparse.dataset import SparseReconDataset, collate_fn
-from app.ml.sparse.loss import SparseReconLoss
-from app.ml.sparse.reconstructor import SparseReconstructor
-from app.ml.sparse.sampler import AdaptiveSampler
+from app.ml.sparse.dataset import SparseReconDataset, collate_fn  # noqa: E402
+from app.ml.sparse.loss import SparseReconLoss  # noqa: E402
+from app.ml.sparse.reconstructor import SparseReconstructor  # noqa: E402
+from app.ml.sparse.sampler import AdaptiveSampler  # noqa: E402
 
 log = logging.getLogger("aln")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -55,14 +54,16 @@ def get_device(prefer: str = "auto") -> torch.device:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="训练稀疏采样重建网络")
-    parser.add_argument("--s1p-dir", type=str, nargs="+", required=True, help="S1P/S2P 文件目录（可多个）")
+    parser.add_argument("--s1p-dir", type=str, nargs="+", required=True,
+                        help="S1P/S2P 文件目录（可多个）")
     parser.add_argument("--piezo-thickness", type=str, default="308", help="压电层厚度标识")
     parser.add_argument("--target-k", type=int, default=300, help="目标采样点数")
     parser.add_argument("--d-model", type=int, default=64, help="Transformer hidden dim")
     parser.add_argument("--n-encoder-layers", type=int, default=4, help="Transformer encoder 层数")
     parser.add_argument("--n-heads", type=int, default=4, help="注意力头数")
     parser.add_argument("--epochs", type=int, default=200, help="总 epoch 数")
-    parser.add_argument("--phase1-epochs", type=int, default=50, help="Phase 1 epoch 数（固定采样）")
+    parser.add_argument("--phase1-epochs", type=int, default=50,
+                        help="Phase 1 epoch 数（固定采样）")
     parser.add_argument("--batch-size", type=int, default=8, help="batch size")
     parser.add_argument("--lr", type=float, default=1e-3, help="学习率")
     parser.add_argument("--weight-decay", type=float, default=1e-4, help="权重衰减")
@@ -72,7 +73,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--noise-std", type=float, default=0.05, help="数据增强噪声")
     parser.add_argument("--seed", type=int, default=42, help="随机种子")
     parser.add_argument("--resume", action="store_true", help="从输出目录的 checkpoint 续训")
-    parser.add_argument("--steps-per-run", type=int, default=5, help="每轮跑的 epoch 数（用于分轮续跑）")
+    parser.add_argument("--steps-per-run", type=int, default=5,
+                        help="每轮跑的 epoch 数（用于分轮续跑）")
     return parser.parse_args()
 
 
@@ -106,7 +108,6 @@ def train_epoch(
         region_ids = batch["region_ids"].to(device)  # (B, N)
 
         # Phase 2: 使用 AdaptiveSampler 重新采样
-        k_actual = None
         if phase == 2 and sampler is not None:
             z_t = target_z  # (B, N)
             fs_true = cond[:, 0]
@@ -117,31 +118,35 @@ def train_epoch(
                 target_k=target_k, use_gumbel=True,
             )
             # 使用 k_pred 作为实际采样点数（自适应）
-            B, N = target_z.shape
+            b, n = target_z.shape
             sampled_list = []
             k_actual_list = []
-            for b in range(B):
+            for batch_idx in range(b):
                 # 自适应采样点数
-                k_actual_b = int(k_pred[b].item())
+                k_actual_b = int(k_pred[batch_idx].item())
                 k_actual_b = max(sampler.k_min, min(sampler.k_max, k_actual_b))
                 k_actual_list.append(k_actual_b)
-                
-                idx = torch.where(y_soft[b] > 1.0 / N)[0]
+
+                idx = torch.where(y_soft[batch_idx] > 1.0 / n)[0]
                 if len(idx) == 0:
-                    _, topk_idx = torch.topk(p_norm[b], min(k_actual_b, N))
+                    _, topk_idx = torch.topk(p_norm[batch_idx], min(k_actual_b, n))
                     idx = topk_idx
                 if len(idx) > k_actual_b:
                     idx = idx[:k_actual_b]
-                sf = target_freq[b, idx]
-                sz = target_z[b, idx]
+                sf = target_freq[batch_idx, idx]
+                sz = target_z[batch_idx, idx]
                 pad_len = target_k - len(idx)
                 if pad_len > 0:
-                    sf = torch.cat([sf, torch.full((pad_len,), target_freq[b, -1].item(), device=device)])
-                    sz = torch.cat([sz, torch.full((pad_len,), target_z[b, -1].item(), device=device)])
+                    sf = torch.cat([
+                        sf, torch.full((pad_len,), target_freq[batch_idx, -1].item(), device=device)
+                    ])
+                    sz = torch.cat([
+                        sz, torch.full((pad_len,), target_z[batch_idx, -1].item(), device=device)
+                    ])
                 sampled_list.append(torch.stack([sf, sz], dim=1))
             samples = torch.stack(sampled_list, dim=0)
-            sample_mask = torch.zeros(B, target_k, dtype=torch.bool, device=device)
-            k_actual = torch.tensor(k_actual_list, dtype=torch.float32, device=device)
+            sample_mask = torch.zeros(b, target_k, dtype=torch.bool, device=device)
+            _k_actual = torch.tensor(k_actual_list, dtype=torch.float32, device=device)
 
         # 前向（传入基线插值）
         z_pred = recon(cond, samples, target_freq, z_baseline=z_baseline, sample_mask=sample_mask)
@@ -159,7 +164,8 @@ def train_epoch(
         optimizer.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(
-            list(recon.parameters()) + (list(sampler.parameters()) if sampler and phase == 2 else []),
+            list(recon.parameters())
+            + (list(sampler.parameters()) if sampler and phase == 2 else []),
             max_norm=1.0,
         )
         optimizer.step()
@@ -213,32 +219,36 @@ def validate(
                 fs=fs_true, fp=fp_true,
                 target_k=target_k, use_gumbel=False,
             )
-            B, N = target_z.shape
+            b, n = target_z.shape
             sampled_list = []
             k_actual_list = []
-            for b in range(B):
-                k_actual_b = int(k_pred[b].item())
+            for batch_idx in range(b):
+                k_actual_b = int(k_pred[batch_idx].item())
                 k_actual_b = max(sampler.k_min, min(sampler.k_max, k_actual_b))
                 k_actual_list.append(k_actual_b)
-                
-                idx = torch.where(y_soft[b] > 1.0 / N)[0]
+
+                idx = torch.where(y_soft[batch_idx] > 1.0 / n)[0]
                 if len(idx) == 0:
-                    _, topk_idx = torch.topk(p_norm[b], min(k_actual_b, N))
+                    _, topk_idx = torch.topk(p_norm[batch_idx], min(k_actual_b, n))
                     idx = topk_idx
                 if len(idx) > k_actual_b:
                     idx = idx[:k_actual_b]
-                sf = target_freq[b, idx]
-                sz = target_z[b, idx]
+                sf = target_freq[batch_idx, idx]
+                sz = target_z[batch_idx, idx]
                 pad_len = target_k - len(idx)
                 if pad_len > 0:
-                    sf = torch.cat([sf, torch.full((pad_len,), target_freq[b, -1].item(), device=device)])
-                    sz = torch.cat([sz, torch.full((pad_len,), target_z[b, -1].item(), device=device)])
+                    sf = torch.cat([
+                        sf, torch.full((pad_len,), target_freq[batch_idx, -1].item(), device=device)
+                    ])
+                    sz = torch.cat([
+                        sz, torch.full((pad_len,), target_z[batch_idx, -1].item(), device=device)
+                    ])
                 else:
                     sf = sf[:target_k]
                     sz = sz[:target_k]
                 sampled_list.append(torch.stack([sf, sz], dim=1))
             samples = torch.stack(sampled_list, dim=0)
-            sample_mask = torch.zeros(B, target_k, dtype=torch.bool, device=device)
+            sample_mask = torch.zeros(b, target_k, dtype=torch.bool, device=device)
             k_actual = torch.tensor(k_actual_list, dtype=torch.float32, device=device)
 
         z_pred = recon(cond, samples, target_freq, z_baseline=z_baseline, sample_mask=sample_mask)
@@ -301,8 +311,12 @@ def main() -> None:
     n_train = len(dataset) - n_val
     train_set, val_set = random_split(dataset, [n_train, n_val])
 
-    train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn)
-    val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=False, collate_fn=collate_fn)
+    train_loader = DataLoader(
+        train_set, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn
+    )
+    val_loader = DataLoader(
+        val_set, batch_size=args.batch_size, shuffle=False, collate_fn=collate_fn
+    )
 
     print(f"训练集: {len(train_set)}, 验证集: {len(val_set)}")
 
@@ -333,7 +347,7 @@ def main() -> None:
         ckpt = torch.load(ckpt_path, map_location=device)
         recon.load_state_dict(ckpt["recon"])
         sampler.load_state_dict(ckpt["sampler"])
-        with open(state_path, "r", encoding="utf-8") as f:
+        with open(state_path, encoding="utf-8") as f:
             saved = json.load(f)
         start_epoch = saved.get("epoch", 1) + 1
         best_val_metric = saved.get("best_val_metric", float("inf"))
@@ -342,8 +356,15 @@ def main() -> None:
         best_epoch = saved.get("best_epoch", None)
         if best_epoch is not None and best_ckpt_path.exists():
             best_ckpt = torch.load(best_ckpt_path, map_location=device)
-            best_state = {"epoch": best_epoch, "recon": best_ckpt["recon"], "sampler": best_ckpt["sampler"]}
-        print(f"续训 epoch {start_epoch}/{args.epochs}, best_val_recon={best_val_metric:.6f}, patience={patience_counter}")
+            best_state = {
+                "epoch": best_epoch,
+                "recon": best_ckpt["recon"],
+                "sampler": best_ckpt["sampler"],
+            }
+        print(
+            f"续训 epoch {start_epoch}/{args.epochs}, "
+            f"best_val_recon={best_val_metric:.6f}, patience={patience_counter}"
+        )
 
     # --- 训练循环 ---
     end_epoch = min(start_epoch + args.steps_per_run - 1, args.epochs)
@@ -373,8 +394,12 @@ def main() -> None:
             optimizer = torch.optim.AdamW(params, lr=lr, weight_decay=args.weight_decay)
             scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
 
-        train_metrics = train_epoch(train_loader, recon, sampler, criterion, optimizer, device, args.target_k, phase)
-        val_metrics = validate(val_loader, recon, sampler, criterion, device, args.target_k, phase)
+        train_metrics = train_epoch(
+            train_loader, recon, sampler, criterion, optimizer, device, args.target_k, phase
+        )
+        val_metrics = validate(
+            val_loader, recon, sampler, criterion, device, args.target_k, phase
+        )
         scheduler.step()
 
         print(
@@ -400,7 +425,10 @@ def main() -> None:
                 "recon": recon.state_dict(),
                 "sampler": sampler.state_dict(),
             }
-            torch.save({"recon": best_state["recon"], "sampler": best_state["sampler"]}, best_ckpt_path)
+            torch.save(
+                {"recon": best_state["recon"], "sampler": best_state["sampler"]},
+                best_ckpt_path,
+            )
         else:
             patience_counter += 1
             if patience_counter >= args.early_stop_patience:
@@ -442,9 +470,9 @@ def main() -> None:
         with open(output_dir / "history.json", "w", encoding="utf-8") as f:
             json.dump(history, f, indent=2)
         print(f"\n训练完成。产物保存在: {output_dir.absolute()}")
-        print(f"  - reconstructor.pt")
-        print(f"  - sampler.pt")
-        print(f"  - config.json")
+        print("  - reconstructor.pt")
+        print("  - sampler.pt")
+        print("  - config.json")
     else:
         print(f"\n本轮完成 epoch {end_epoch}/{args.epochs}。请再次启动以继续训练（加 --resume）")
 

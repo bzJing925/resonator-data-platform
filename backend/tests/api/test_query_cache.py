@@ -130,7 +130,9 @@ def test_cache_set_success(fake_redis: _FakeRedis) -> None:
     """正常写入 Redis，TTL 正确。"""
     payload = {"total": 5, "rows": []}
     _cache_set("aln:query:devices:abc", payload, ttl=300)
-    assert fake_redis.call_log == [("setex", ("aln:query:devices:abc", 300, json.dumps(payload)), {})]
+    assert fake_redis.call_log == [
+        ("setex", ("aln:query:devices:abc", 300, json.dumps(payload)), {})
+    ]
     raw, ttl = fake_redis._store["aln:query:devices:abc"]
     assert json.loads(raw) == payload
     assert ttl == 300

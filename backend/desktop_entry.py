@@ -44,7 +44,10 @@ def log(msg):
         pass
 
 log(f'[aln-backend] MPLCONFIGDIR={cache_home} home={os.path.expanduser("~")} meipass={meipass}')
-log(f'[aln-backend] DOTENV_PATH={os.environ.get("DOTENV_PATH")} DATA_ROOT={os.environ.get("DATA_ROOT")}')
+log(
+    f"[aln-backend] DOTENV_PATH={os.environ.get('DOTENV_PATH')} "
+    f"DATA_ROOT={os.environ.get('DATA_ROOT')}"
+)
 log(f'[aln-backend] sys.executable={sys.executable}')
 log(f'[aln-backend] sys.path[0]={sys.path[0] if sys.path else "(empty)"}')
 

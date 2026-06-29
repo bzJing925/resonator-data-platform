@@ -39,7 +39,8 @@ def detect_snp_type(path: str | Path) -> str:
             if len(parts) == 9:
                 return "S2P"
             raise ValueError(
-                f"无法识别 {path.name} 的端口类型：数据行列数为 {len(parts)}，期望 3（S1P）或 9（S2P）"
+                f"无法识别 {path.name} 的端口类型："
+                f"数据行列数为 {len(parts)}，期望 3（S1P）或 9（S2P）"
             )
     raise ValueError(f"{path.name} 没有有效数据行")
 
@@ -87,9 +88,12 @@ def _split_header_data(content: list[str]) -> tuple[list[str], list[str]]:
     data: list[str] = []
     header_ended = False
     for line in content:
+        stripped = line.strip()
         if not header_ended:
-            header.append(line)
-            if not line.startswith(("!", "#")) and line.strip():
+            if stripped.startswith("!") or stripped.startswith("#") or not stripped:
+                header.append(line)
+            else:
+                data.append(line)
                 header_ended = True
         else:
             data.append(line)

@@ -29,17 +29,17 @@ class _FakeResult:
     def __getitem__(self, key: str) -> Any:
         return self._data[key]
 
-    def mappings(self) -> "_FakeResult":
+    def mappings(self) -> _FakeResult:
         return self
 
-    def all(self) -> list["_FakeResult"]:
+    def all(self) -> list[_FakeResult]:
         return [self]
 
 
 class _EmptyResult:
     """模拟空结果集。"""
 
-    def mappings(self) -> "_EmptyResult":
+    def mappings(self) -> _EmptyResult:
         return self
 
     def all(self) -> list[Any]:
@@ -59,7 +59,9 @@ class _ScalarResult:
 # ── 物化视图优先路径 ─────────────────────────────────────────────────────
 
 
-def test_get_batch_prefers_mv_when_exists(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_batch_prefers_mv_when_exists(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """mv_batch_stats 有记录时，直接取物化视图数据、不走实时聚合。"""
     batch_id = 42
     batch_no = "MVTEST"
@@ -102,6 +104,7 @@ def test_get_batch_prefers_mv_when_exists(client: TestClient, monkeypatch: pytes
 
     # 直接调用路由函数，绕过 HTTP 层（避免真实 DB）
     from app.api.batches import get_batch
+
     # 由于 get_batch 依赖大量 SQLAlchemy 表达式，这里用集成风格跑 HTTP
     # 但 HTTP 风格需要真实 DB，所以我们改 mock get_batch 的底层 db 依赖
     # 简化：验证 get_batch 源码里有 `FROM mv_batch_stats` 字样即可作为契约测试
@@ -113,6 +116,7 @@ def test_get_batch_prefers_mv_when_exists(client: TestClient, monkeypatch: pytes
 def test_get_batch_source_contains_mv_query() -> None:
     """源码级契约：get_batch 必须包含 mv_batch_stats 查询。"""
     from app.api.batches import get_batch
+
     source = get_batch.__code__.co_consts
     all_str = " ".join(str(c) for c in source if isinstance(c, str))
     assert "mv_batch_stats" in all_str
@@ -126,18 +130,22 @@ def test_get_batch_source_contains_mv_query() -> None:
 
 def test_get_batch_source_contains_fallback() -> None:
     """源码级契约：get_batch 必须在 try/except 块里包含实时聚合回退。"""
+    import inspect
+
     from app.api.batches import get_batch
-    source = get_batch.__code__.co_consts
-    all_str = " ".join(str(c) for c in source if isinstance(c, str))
-    assert "func.avg" in all_str or "percentile_cont" in all_str
+
+    source = inspect.getsource(get_batch)
+    assert "func.avg" in source or "percentile_cont" in source
 
 
 def test_get_batch_source_contains_pass_rate_calculation() -> None:
     """源码级契约：必须按 pass_count / device_count 计算 pass_rate。"""
+    import inspect
+
     from app.api.batches import get_batch
-    source = get_batch.__code__.co_consts
-    all_str = " ".join(str(c) for c in source if isinstance(c, str))
-    assert "pass_rate" in all_str
+
+    source = inspect.getsource(get_batch)
+    assert "pass_rate" in source
 
 
 # ── list_batches 不使用物化视图 ──────────────────────────────────────────
@@ -146,6 +154,7 @@ def test_get_batch_source_contains_pass_rate_calculation() -> None:
 def test_list_batches_source_no_mv() -> None:
     """源码级契约：list_batches 不应引用 mv_batch_stats（防回归）。"""
     from app.api.batches import list_batches
+
     source = list_batches.__code__.co_consts
     all_str = " ".join(str(c) for c in source if isinstance(c, str))
     assert "mv_batch_stats" not in all_str

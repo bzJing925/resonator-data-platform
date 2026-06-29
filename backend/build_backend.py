@@ -21,7 +21,7 @@ FRONTEND_BUILD = ROOT.parent / "frontend" / "build" / "backend"
 
 def run(onedir: bool = False):
     try:
-        import PyInstaller.__main__
+        import PyInstaller.__main__  # noqa: F401
     except ImportError:
         print("PyInstaller 未安装，正在安装...")
         subprocess.check_call([sys.executable, "-m", "pip", "install", "pyinstaller"])
@@ -52,6 +52,12 @@ def run(onedir: bool = False):
         f"--add-data={ROOT / 'alembic'}{os.pathsep}alembic",
         f"--add-data={ROOT / 'alembic.ini'}{os.pathsep}.",
         f"--add-data={ROOT / 'pyproject.toml'}{os.pathsep}.",
+        # 打包根目录 .env（如存在），让后端可执行文件自带默认配置
+        *(
+            [f"--add-data={env_path}{os.pathsep}."]
+            if (env_path := ROOT.parent / ".env").exists()
+            else []
+        ),
     ]
 
     # 收集 hidden imports（SQLAlchemy、Pydantic、Celery 等容易漏的包）
@@ -124,6 +130,10 @@ def run(onedir: bool = False):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="打包后端为桌面可执行文件")
-    parser.add_argument("--onedir", action="store_true", help="使用 onedir 模式（启动更快，文件更多）")
+    parser.add_argument(
+        "--onedir",
+        action="store_true",
+        help="使用 onedir 模式（启动更快，文件更多）",
+    )
     args = parser.parse_args()
     run(onedir=args.onedir)

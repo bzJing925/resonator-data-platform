@@ -91,9 +91,7 @@ def test_bulk_insert_calls_copy_above_threshold(monkeypatch: pytest.MonkeyPatch)
         nonlocal copy_called
         copy_called = True
 
-    monkeypatch.setattr(
-        "app.workers.process_batch._copy_insert_devices", _fake_copy
-    )
+    monkeypatch.setattr("app.workers.process_batch._copy_insert_devices", _fake_copy)
     db = MagicMock(spec=Session)
     rows = _make_rows(3000)
     _bulk_insert_devices(db, rows)
@@ -108,9 +106,7 @@ def test_bulk_insert_calls_orm_below_threshold(monkeypatch: pytest.MonkeyPatch) 
         nonlocal copy_called
         copy_called = True
 
-    monkeypatch.setattr(
-        "app.workers.process_batch._copy_insert_devices", _fake_copy
-    )
+    monkeypatch.setattr("app.workers.process_batch._copy_insert_devices", _fake_copy)
     db = MagicMock(spec=Session)
     rows = _make_rows(2999)
     _bulk_insert_devices(db, rows)
@@ -139,9 +135,7 @@ def test_copy_fallback_on_exception(monkeypatch: pytest.MonkeyPatch) -> None:
     def _exploding_copy(_db: Session, _rows: list[dict[str, Any]]) -> None:
         raise RuntimeError("COPY 协议失败")
 
-    monkeypatch.setattr(
-        "app.workers.process_batch._copy_insert_devices", _exploding_copy
-    )
+    monkeypatch.setattr("app.workers.process_batch._copy_insert_devices", _exploding_copy)
     db = MagicMock(spec=Session)
     rows = _make_rows(3000)
     _bulk_insert_devices(db, rows)
@@ -158,6 +152,15 @@ def test_copy_insert_writes_all_rows(monkeypatch: pytest.MonkeyPatch) -> None:
     written_rows: list[tuple[Any, ...]] = []
 
     class FakeCopy:
+        def __init__(self) -> None:
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args: Any) -> None:
+            pass
+
         def write_row(self, row: tuple[Any, ...]) -> None:
             written_rows.append(row)
 

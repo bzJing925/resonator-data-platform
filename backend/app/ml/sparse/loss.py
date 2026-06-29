@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+import torch.nn.functional as f
 
 
 class SparseReconLoss(nn.Module):
@@ -57,16 +57,16 @@ class SparseReconLoss(nn.Module):
         Returns:
             total_loss, loss_dict
         """
-        B, N = z_pred.shape
+        b, n = z_pred.shape
 
         # 1. 区域加权重建损失
-        W = torch.ones_like(z_pred)
-        W[region_ids == 0] = self.main_weight   # 主模区
-        W[region_ids == 1] = self.spur_weight   # 杂模区
+        w = torch.ones_like(z_pred)
+        w[region_ids == 0] = self.main_weight   # 主模区
+        w[region_ids == 1] = self.spur_weight   # 杂模区
         # 平滑区保持 1.0
 
         diff_sq = (z_pred - z_true) ** 2
-        recon_loss = (W * diff_sq).sum() / W.sum()
+        recon_loss = (w * diff_sq).sum() / w.sum()
 
         # 2. 峰感知损失（主模区内的梯度匹配）
         peak_loss = torch.tensor(0.0, device=z_pred.device)
@@ -80,7 +80,9 @@ class SparseReconLoss(nn.Module):
                 dz_pred[:, 1:-1] = (z_pred[:, 2:] - z_pred[:, :-2]) / 2.0
                 dz_true[:, 1:-1] = (z_true[:, 2:] - z_true[:, :-2]) / 2.0
                 # 只在主模区匹配梯度
-                peak_loss = (main_mask * (dz_pred - dz_true) ** 2).sum() / main_mask.sum().clamp(min=1)
+                peak_loss = (
+                    main_mask * (dz_pred - dz_true) ** 2
+                ).sum() / main_mask.sum().clamp(min=1)
 
         # 3. 频谱平滑性
         smooth_loss = torch.mean((z_pred[:, 2:] - 2 * z_pred[:, 1:-1] + z_pred[:, :-2]) ** 2)
@@ -93,9 +95,9 @@ class SparseReconLoss(nn.Module):
             fs_pred = torch.gather(freq, 1, fs_pred_idx.unsqueeze(1)).squeeze(1)
             fp_pred = torch.gather(freq, 1, fp_pred_idx.unsqueeze(1)).squeeze(1)
 
-            order_loss = F.relu(fs_pred - fp_pred).mean()
-            fs_mse = F.mse_loss(fs_pred, fs_true)
-            fp_mse = F.mse_loss(fp_pred, fp_true)
+            order_loss = f.relu(fs_pred - fp_pred).mean()
+            fs_mse = f.mse_loss(fs_pred, fs_true)
+            fp_mse = f.mse_loss(fp_pred, fp_true)
             phys_loss = order_loss + fs_mse + fp_mse
 
         # 5. 采样点数偏离惩罚（用 k_pred 保证梯度）

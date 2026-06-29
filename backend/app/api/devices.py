@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import numpy as np
+import skrf
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 
@@ -32,7 +33,7 @@ _BODEQ_CACHE_SIZE = 128
 
 
 @lru_cache(maxsize=_NETWORK_CACHE_SIZE)
-def _load_network(path_str: str) -> "skrf.Network":
+def _load_network(path_str: str) -> skrf.Network:
     """缓存 skrf.Network 解析结果。
 
     参数用 str 而非 Path，因为 Path 不可 hash 且 lru_cache 要求可 hash 参数。
@@ -43,7 +44,12 @@ def _load_network(path_str: str) -> "skrf.Network":
 
 
 @lru_cache(maxsize=_BODEQ_CACHE_SIZE)
-def _calc_bodeq_cached(s_hash: bytes, freq_hash: bytes, s_bytes: bytes, freq_bytes: bytes) -> dict[str, Any]:
+def _calc_bodeq_cached(
+    s_hash: bytes,
+    freq_hash: bytes,
+    s_bytes: bytes,
+    freq_bytes: bytes,
+) -> dict[str, Any]:
     """缓存 BodeQ 计算结果。
 
     numpy array 不可 hash，因此序列化为 bytes + 长度元组作为缓存 key。
@@ -215,7 +221,14 @@ def device_sparam_sparse(
 
     # 优先使用数据库中预计算的参数
     cond = None
-    if all(v is not None for v in [device.fs_ghz, device.fp_ghz, device.qs, device.qp, device.k2eff_pct]):
+    precomputed = [
+        device.fs_ghz,
+        device.fp_ghz,
+        device.qs,
+        device.qp,
+        device.k2eff_pct,
+    ]
+    if all(v is not None for v in precomputed):
         cond = {
             "fs": float(device.fs_ghz),
             "fp": float(device.fp_ghz),

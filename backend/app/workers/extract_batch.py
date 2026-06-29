@@ -7,21 +7,23 @@
 from __future__ import annotations
 
 import logging
-import os
 import shutil
+import time
 import zipfile
-import zipfile_deflate64  # noqa: F401  注册 Deflate64 压缩支持
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
+import zipfile_deflate64  # noqa: F401  注册 Deflate64 压缩支持
 from celery import Task
 
 from app.config import get_settings
+from app.core.deembed import DeembedError, DeembedMethod, _run_deembed
 from app.core.filename import parse_filename
-from app.core.touchstone import detect_snp_type
+from app.core.touchstone import detect_snp_type, split_s2p_to_s1p
 from app.db import SessionLocal
 from app.models import Batch, Mapping
-from app.workers import celery_app
+from app.workers.celery_app import celery_app
 from app.workers.progress import ProgressPublisher
 
 logger = logging.getLogger(__name__)
@@ -36,38 +38,52 @@ def _find_7z() -> str | None:
     return None
 
 
-def _extract_with_7z(zip_path: Path, target_dir: Path, exe: str) -> None:
-    """使用 7z/p7zip 解压；支持 Deflate64 与 ZIP64 大文件。"""
+def _extract_with_7z(zip_path: Path, target_dir: Path, exe: str) -> float:
+    """使用 7z/p7zip 解压；支持 Deflate64 与 ZIP64 大文件。
+
+    返回解压耗时（秒）。
+    """
     import subprocess
 
     target_dir.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
+    start = time.perf_counter()
+    result = subprocess.run(
         [exe, "x", "-y", "-o" + str(target_dir), str(zip_path)],
-        check=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
     )
+    elapsed = time.perf_counter() - start
+    if result.returncode != 0:
+        err = result.stderr.decode("utf-8", errors="ignore")[:500]
+        raise RuntimeError(f"7z 解压失败 (exit {result.returncode}): {err}")
+    return elapsed
 
 
-def _extract_with_unzip(zip_path: Path, target_dir: Path) -> None:
-    """使用系统 unzip 解压（无法处理 Deflate64 / >4GB 中央目录）。"""
+def _extract_with_unzip(zip_path: Path, target_dir: Path) -> float:
+    """使用系统 unzip 解压（无法处理 Deflate64 / >4GB 中央目录）。
+
+    返回解压耗时（秒）。
+    """
     import subprocess
 
     target_dir.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
+    start = time.perf_counter()
+    result = subprocess.run(
         ["unzip", "-q", "-o", str(zip_path), "-d", str(target_dir)],
-        check=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
     )
+    elapsed = time.perf_counter() - start
+    if result.returncode != 0:
+        err = result.stderr.decode("utf-8", errors="ignore")[:500]
+        raise RuntimeError(f"unzip 解压失败 (exit {result.returncode}): {err}")
+    return elapsed
 
 
 def _extract_zip(
     zip_path: Path,
     target_dir: Path,
     progress_callback: Callable[[int, int], None] | None = None,
-) -> None:
-    """解压 ZIP；支持进度回调 (current, total)。
+) -> tuple[str, float, int, int]:
+    """解压 ZIP；返回 (extractor_name, elapsed_seconds, files_count, total_bytes).
 
     策略：
     1. 若系统安装了 7z/p7zip，优先使用它（支持 Deflate64 / ZIP64 大文件，速度通常更快）；
@@ -79,20 +95,25 @@ def _extract_zip(
         if progress_callback:
             progress_callback(0, 1)
         logger.info("使用 7z 解压: %s", exe7z)
-        _extract_with_7z(zip_path, target_dir, exe7z)
+        elapsed = _extract_with_7z(zip_path, target_dir, exe7z)
+        extracted = _count_extracted(target_dir)
         if progress_callback:
             progress_callback(1, 1)
-        return
+        return ("7z", elapsed, extracted, _zip_uncompressed_size(zip_path))
 
+    total = 0
     try:
         with zipfile.ZipFile(str(zip_path)) as zf:
             members = [m for m in zf.infolist() if not m.is_dir()]
             total = len(members)
+            start = time.perf_counter()
             for i, member in enumerate(members, start=1):
                 zf.extract(member, target_dir)
                 if progress_callback and total > 0:
                     progress_callback(i, total)
-        return
+            elapsed = time.perf_counter() - start
+        extracted = _count_extracted(target_dir)
+        return ("zipfile", elapsed, extracted, _zip_uncompressed_size(zip_path))
     except (NotImplementedError, RuntimeError) as exc:
         msg = str(exc).lower()
         if "compression method" not in msg and "not supported" not in msg:
@@ -103,11 +124,77 @@ def _extract_zip(
         progress_callback(0, 1)
     if shutil.which("unzip"):
         logger.info("使用 unzip 解压")
-        _extract_with_unzip(zip_path, target_dir)
+        elapsed = _extract_with_unzip(zip_path, target_dir)
+        extracted = _count_extracted(target_dir)
     else:
         raise RuntimeError("ZIP 压缩方法不受支持，且系统未安装 7z / unzip")
     if progress_callback:
         progress_callback(1, 1)
+    return ("unzip", elapsed, extracted, _zip_uncompressed_size(zip_path))
+
+
+def _count_extracted(target_dir: Path) -> int:
+    """统计已解压的文件数（含子目录）。"""
+    return sum(1 for p in target_dir.rglob("*") if p.is_file())
+
+
+def _zip_uncompressed_size(zip_path: Path) -> int:
+    """估算 ZIP 内非目录条目总未压缩字节数。"""
+    try:
+        with zipfile.ZipFile(str(zip_path)) as zf:
+            return sum(m.file_size for m in zf.infolist() if not m.is_dir())
+    except Exception:
+        return 0
+
+
+def _run_deembed_for_batch(
+    dut_s2p: list[Path],
+    cal_open: dict[str, Path],
+    cal_short: dict[str, Path],
+    target_dir: Path,
+    method: str,
+) -> list[dict[str, Any]]:
+    """对 DUT .s2p 批量拆分并做 ShortOpen 去嵌，返回 all_files 条目。"""
+    if not dut_s2p:
+        return []
+
+    if not cal_open or not cal_short:
+        raise DeembedError(
+            "已启用 De-embedding 但 ZIP 内未找到 OPEN/SHORT 校准 .s2p 文件；"
+            "请确认压缩包包含同名 OPEN/SHORT 文件，或在上传时取消 De-embed 选项。"
+        )
+
+    raw_s11_dir = target_dir / "S11_raw"
+    raw_s22_dir = target_dir / "S22_raw"
+    raw_s11_dir.mkdir(parents=True, exist_ok=True)
+    raw_s22_dir.mkdir(parents=True, exist_ok=True)
+    s1p_pairs: list[tuple[Path, Path]] = []
+    for s2p in dut_s2p:
+        split = split_s2p_to_s1p(s2p, out_dir_s11=raw_s11_dir, out_dir_s22=raw_s22_dir)
+        s1p_pairs.append((split.s11_path, split.s22_path))
+
+    de_method = DeembedMethod(method) if method else DeembedMethod.DEFAULT
+    de_pairs = _run_deembed(s1p_pairs, cal_open, cal_short, target_dir, method=de_method)
+
+    all_files: list[dict[str, Any]] = []
+    for s11_de, s22_de in de_pairs:
+        all_files.append(
+            {
+                "path": str(s11_de),
+                "deembedded": True,
+                "port": 0,
+                "s_param_relpath": str(s11_de.relative_to(target_dir)),
+            }
+        )
+        all_files.append(
+            {
+                "path": str(s22_de),
+                "deembedded": True,
+                "port": 1,
+                "s_param_relpath": str(s22_de.relative_to(target_dir)),
+            }
+        )
+    return all_files
 
 
 @celery_app.task(bind=True, name="aln.extract_batch")
@@ -166,12 +253,24 @@ def extract_batch_task(
         if mapping_row is None:
             raise RuntimeError(f"mappings 表无 id={mapping_id}")
 
-        # 1. 解压
+        # 1. 解压并记录耗时
         target_dir = settings.files_dir / batch_no
         if target_dir.exists():
             shutil.rmtree(target_dir)
         target_dir.mkdir(parents=True, exist_ok=True)
-        _extract_zip(Path(zip_path), target_dir, progress_callback=_update_extract_pct)
+        extractor, elapsed, extracted_count, raw_bytes = _extract_zip(
+            Path(zip_path), target_dir, progress_callback=_update_extract_pct
+        )
+        mb = raw_bytes / 1024 / 1024
+        speed = mb / elapsed if elapsed > 0 else 0.0
+        logger.info(
+            "解压完成: extractor=%s files=%d raw=%.1f MB elapsed=%.2fs speed=%.1f MB/s",
+            extractor,
+            extracted_count,
+            mb,
+            elapsed,
+            speed,
+        )
 
         # 2. .snp 通用扩展名自动识别并重命名
         for snp_file in target_dir.rglob("*.snp"):
@@ -182,16 +281,21 @@ def extract_batch_task(
             except Exception as exc:
                 logger.warning("识别 .snp 失败 %s: %s", snp_file.name, exc)
 
-        # 3. 扫描（区分 DUT 与校准件；校准件仅用于手动拆分/去嵌，不再自动拆分）
+        # 3. 扫描（区分 DUT 与校准件）
         s2p_files = sorted(p for p in target_dir.rglob("*.s2p") if p.is_file())
         s1p_files = sorted(p for p in target_dir.rglob("*.s1p") if p.is_file())
 
         dut_s2p: list[Path] = []
+        cal_open: dict[str, Path] = {}
+        cal_short: dict[str, Path] = {}
         for p in s2p_files:
             parsed = parse_filename(p.name)
-            if parsed.is_calibration:
-                continue
-            dut_s2p.append(p)
+            if parsed.is_open:
+                cal_open[p.name] = p
+            elif parsed.is_short:
+                cal_short[p.name] = p
+            else:
+                dut_s2p.append(p)
 
         standalone_s1p: list[Path] = []
         for p in s1p_files:
@@ -200,38 +304,49 @@ def extract_batch_task(
                 continue
             standalone_s1p.append(p)
 
-        if deembed_enabled and dut_s2p:
-            raise RuntimeError(
-                "已启用 De-embedding 的批次暂不支持直接处理 .s2p DUT，"
-                "请先使用手动拆分工具将 .s2p 拆为 .s1p，或关闭 De-embed 选项。"
-            )
-
         publisher.stage_update(
             db,
             stage="extract",
             stage_progress_pct=60,
             progress_pct=15,
-            progress_msg=f"解压完成，发现 {len(dut_s2p)} 个 .s2p DUT、{len(standalone_s1p)} 个 .s1p DUT",
+            progress_msg=(
+                f"解压完成，{extractor} 解压 {extracted_count} 个文件，"
+                f"{mb:.1f} MB / {elapsed:.2f}s ({speed:.1f} MB/s)；"
+                f"发现 {len(dut_s2p)} 个 .s2p DUT、{len(standalone_s1p)} 个 .s1p DUT"
+            ),
         )
 
-        # 4. 生成待计算文件项：s2p 分 S11/S22 两个端口；s1p 一个端口
+        # 4. 生成待计算文件项
         all_files: list[dict[str, Any]] = []
-        for s2p in dut_s2p:
-            relpath = str(s2p.relative_to(target_dir))
-            for port in (0, 1):
-                all_files.append(
-                    {
-                        "path": str(s2p),
-                        "deembedded": False,
-                        "port": port,
-                        "s_param_relpath": relpath,
-                    }
+
+        if deembed_enabled and dut_s2p:
+            all_files.extend(
+                _run_deembed_for_batch(
+                    dut_s2p,
+                    cal_open,
+                    cal_short,
+                    target_dir,
+                    method=deembed_method,
                 )
+            )
+        else:
+            for s2p in dut_s2p:
+                relpath = str(s2p.relative_to(target_dir))
+                for port in (0, 1):
+                    all_files.append(
+                        {
+                            "path": str(s2p),
+                            "deembedded": False,
+                            "port": port,
+                            "s_param_relpath": relpath,
+                        }
+                    )
+
         for s1p in standalone_s1p:
             all_files.append(
                 {
                     "path": str(s1p),
-                    "deembedded": False,
+                    "deembedded": bool(deembed_enabled),
                     "port": 0,
                     "s_param_relpath": str(s1p.relative_to(target_dir)),
                 }
