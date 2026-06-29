@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
-import torch.nn.functional as F
+import torch.nn.functional as f
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -96,8 +96,8 @@ def preprocess_spectrum(
 
 
 def compute_ssim(
-    S1: torch.Tensor,
-    S2: torch.Tensor,
+    s1: torch.Tensor,
+    s2: torch.Tensor,
     window_size: int = 11,
 ) -> torch.Tensor:
     """计算一维频谱的 SSIM（结构相似性指数）。
@@ -105,14 +105,14 @@ def compute_ssim(
     将 1D 频谱视为 1×L 的"图像"，使用高斯滑窗计算局部 SSIM。
 
     Args:
-        S1, S2: 输入频谱，shape (B, 1, L)。
+        s1, s2: 输入频谱，shape (B, 1, L)。
         window_size: 高斯滑窗大小。
 
     Returns:
         平均 SSIM 标量张量。
     """
-    B, C, L = S1.shape
-    if C != 1:
+    b, c, length = s1.shape
+    if c != 1:
         raise ValueError("SSIM 目前只支持单通道")
 
     # 构造 1D 高斯核
@@ -123,7 +123,7 @@ def compute_ssim(
             for x in range(window_size)
         ],
         dtype=torch.float32,
-        device=S1.device,
+        device=s1.device,
     )
     gauss = gauss / gauss.sum()
     window = gauss.view(1, 1, -1)  # (1, 1, window_size)
@@ -131,16 +131,16 @@ def compute_ssim(
     c1 = 0.01**2
     c2 = 0.03**2
 
-    mu1 = F.conv1d(S1, window, padding=window_size // 2, groups=1)
-    mu2 = F.conv1d(S2, window, padding=window_size // 2, groups=1)
+    mu1 = f.conv1d(s1, window, padding=window_size // 2, groups=1)
+    mu2 = f.conv1d(s2, window, padding=window_size // 2, groups=1)
 
     mu1_sq = mu1**2
     mu2_sq = mu2**2
     mu1_mu2 = mu1 * mu2
 
-    sigma1_sq = F.conv1d(S1 * S1, window, padding=window_size // 2, groups=1) - mu1_sq
-    sigma2_sq = F.conv1d(S2 * S2, window, padding=window_size // 2, groups=1) - mu2_sq
-    sigma12 = F.conv1d(S1 * S2, window, padding=window_size // 2, groups=1) - mu1_mu2
+    sigma1_sq = f.conv1d(s1 * s1, window, padding=window_size // 2, groups=1) - mu1_sq
+    sigma2_sq = f.conv1d(s2 * s2, window, padding=window_size // 2, groups=1) - mu2_sq
+    sigma12 = f.conv1d(s1 * s2, window, padding=window_size // 2, groups=1) - mu1_mu2
 
     ssim_map = ((2 * mu1_mu2 + c1) * (2 * sigma12 + c2)) / (
         (mu1_sq + mu2_sq + c1) * (sigma1_sq + sigma2_sq + c2)
@@ -150,7 +150,7 @@ def compute_ssim(
 
 def enforce_critical_points_mask(
     p: torch.Tensor,
-    S: torch.Tensor,
+    s: torch.Tensor,
     target_k: int,
 ) -> torch.Tensor:
     """在降采样概率上强制保留关键频点。
@@ -162,27 +162,27 @@ def enforce_critical_points_mask(
 
     Args:
         p: 保留概率，shape (B, N)。
-        S: 频谱值，shape (B, 1, N)。
+        s: 频谱值，shape (B, 1, N)。
         target_k: 目标保留点数。
 
     Returns:
         布尔掩码，shape (B, N)，True 表示保留。
     """
-    B, N = p.shape
+    b, n = p.shape
     mask = torch.zeros_like(p, dtype=torch.bool)
 
     # 强制保留首尾
     mask[:, 0] = True
     mask[:, -1] = True
 
-    S_flat = S.squeeze(1)  # (B, N)
+    s_flat = s.squeeze(1)  # (B, N)
 
-    for b in range(B):
-        s = S_flat[b].detach().cpu().numpy()
+    for i in range(b):
+        spec = s_flat[i].detach().cpu().numpy()
 
         # 找局部极小（fs）和局部极大（fp）
         # 用一阶差分符号变化检测
-        diff = np.diff(s)
+        diff = np.diff(spec)
         sign_change = np.diff(np.sign(diff))
 
         # 局部极小: diff 从负变正 → sign_change = +2
@@ -193,50 +193,50 @@ def enforce_critical_points_mask(
         # 保留最重要的几个极值点
         if len(local_min) > 0:
             # 按深度排序，保留最深的 2 个
-            depths = s[local_min - 1] - s[local_min]
+            depths = spec[local_min - 1] - spec[local_min]
             top_min = local_min[np.argsort(depths)[-2:]]
-            mask[b, top_min] = True
+            mask[i, top_min] = True
 
         if len(local_max) > 0:
-            heights = s[local_max] - s[local_max - 1]
+            heights = spec[local_max] - spec[local_max - 1]
             top_max = local_max[np.argsort(heights)[-2:]]
-            mask[b, top_max] = True
+            mask[i, top_max] = True
 
     # 剩余配额按概率 Top-K 分配
     remaining = target_k - mask.sum(dim=1)  # (B,)
-    for b in range(B):
-        k = int(remaining[b].item())
+    for i in range(b):
+        k = int(remaining[i].item())
         if k > 0:
             # 在未被强制的位置中选概率最高的
-            exclude = mask[b]
-            p_b = p[b].clone()
+            exclude = mask[i]
+            p_b = p[i].clone()
             p_b[exclude] = -1.0
             _, idx = torch.topk(p_b, k)
-            mask[b, idx] = True
+            mask[i, idx] = True
 
     return mask
 
 
-def numerical_gradients(S: torch.Tensor) -> torch.Tensor:
+def numerical_gradients(s: torch.Tensor) -> torch.Tensor:
     """计算频谱的一阶和二阶数值梯度。
 
     Args:
-        S: 频谱张量，shape (B, 1, N)。
+        s: 频谱张量，shape (B, 1, N)。
 
     Returns:
         三通道张量 [S, dS/df, d²S/df²]，shape (B, 3, N)。
     """
-    B, _, N = S.shape
+    b, _, n = s.shape
     # 一阶梯度（中心差分）
-    dS = torch.zeros_like(S)
-    dS[:, :, 1:-1] = (S[:, :, 2:] - S[:, :, :-2]) / 2.0
-    dS[:, :, 0] = S[:, :, 1] - S[:, :, 0]
-    dS[:, :, -1] = S[:, :, -1] - S[:, :, -2]
+    ds = torch.zeros_like(s)
+    ds[:, :, 1:-1] = (s[:, :, 2:] - s[:, :, :-2]) / 2.0
+    ds[:, :, 0] = s[:, :, 1] - s[:, :, 0]
+    ds[:, :, -1] = s[:, :, -1] - s[:, :, -2]
 
     # 二阶梯度
-    d2S = torch.zeros_like(S)
-    d2S[:, :, 1:-1] = S[:, :, 2:] - 2 * S[:, :, 1:-1] + S[:, :, :-2]
-    d2S[:, :, 0] = d2S[:, :, 1]
-    d2S[:, :, -1] = d2S[:, :, -2]
+    d2s = torch.zeros_like(s)
+    d2s[:, :, 1:-1] = s[:, :, 2:] - 2 * s[:, :, 1:-1] + s[:, :, :-2]
+    d2s[:, :, 0] = d2s[:, :, 1]
+    d2s[:, :, -1] = d2s[:, :, -2]
 
-    return torch.cat([S, dS, d2S], dim=1)  # (B, 3, N)
+    return torch.cat([s, ds, d2s], dim=1)  # (B, 3, N)

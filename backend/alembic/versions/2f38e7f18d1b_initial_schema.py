@@ -1,7 +1,7 @@
 """initial schema
 
 Revision ID: 2f38e7f18d1b
-Revises: 
+Revises:
 Create Date: 2026-05-09 13:11:05.804602
 
 """
@@ -25,7 +25,8 @@ def upgrade() -> None:
     sa.Column('name', sa.Text(), nullable=False),
     sa.Column('file_path', sa.Text(), nullable=False),
     sa.Column('entry_count', sa.Integer(), nullable=False),
-    sa.Column('uploaded_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('uploaded_at', sa.DateTime(timezone=True),
+              server_default=sa.text('now()'), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('name')
     )
@@ -36,14 +37,21 @@ def upgrade() -> None:
     sa.Column('progress_pct', sa.SmallInteger(), nullable=False),
     sa.Column('progress_msg', sa.Text(), nullable=True),
     sa.Column('error_msg', sa.Text(), nullable=True),
-    sa.Column('started_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('started_at', sa.DateTime(timezone=True),
+              server_default=sa.text('now()'), nullable=False),
     sa.Column('finished_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('celery_task_id', sa.Text(), nullable=True),
-    sa.CheckConstraint("status IN ('pending','running','success','failed')", name='ck_uptask_status'),
+    sa.CheckConstraint(
+        "status IN ('pending','running','success','failed')",
+        name='ck_uptask_status',
+    ),
     sa.CheckConstraint('progress_pct BETWEEN 0 AND 100', name='ck_uptask_progress'),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_index('idx_uptask_status_started', 'upload_tasks', ['status', 'started_at'], unique=False)
+    op.create_index(
+        'idx_uptask_status_started', 'upload_tasks',
+        ['status', 'started_at'], unique=False,
+    )
     op.create_table('batches',
     sa.Column('id', sa.BigInteger(), nullable=False),
     sa.Column('batch_no', sa.Text(), nullable=False),
@@ -54,7 +62,8 @@ def upgrade() -> None:
     sa.Column('process_type', sa.Text(), nullable=False),
     sa.Column('file_path', sa.Text(), nullable=False),
     sa.Column('device_count', sa.Integer(), nullable=False),
-    sa.Column('uploaded_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('uploaded_at', sa.DateTime(timezone=True),
+              server_default=sa.text('now()'), nullable=False),
     sa.Column('uploaded_by', sa.Text(), nullable=False),
     sa.Column('task_id', sa.BigInteger(), nullable=True),
     sa.CheckConstraint("process_type IN ('S1P','S2P','BOTH')", name='ck_batch_proc_type'),

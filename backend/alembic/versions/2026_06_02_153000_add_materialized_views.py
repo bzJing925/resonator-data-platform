@@ -28,7 +28,11 @@ def upgrade() -> None:
             COUNT(*) AS total_count,
             COUNT(*) FILTER (WHERE d.pf = 'Y') AS pass_count,
             ROUND(AVG(d.fs_ghz)::numeric, 6) AS avg_fs_ghz,
-            ROUND((PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY d.fs_ghz))::numeric, 6) AS median_fs_ghz,
+            ROUND(
+                (PERCENTILE_CONT(0.5) WITHIN GROUP (
+                    ORDER BY d.fs_ghz
+                ))::numeric, 6
+            ) AS median_fs_ghz,
             ROUND(AVG(d.qs)::numeric, 3) AS avg_qs,
             ROUND(AVG(d.k2eff_pct)::numeric, 4) AS avg_k2eff_pct,
             ROUND(MIN(d.fs_ghz)::numeric, 6) AS min_fs_ghz,

@@ -14,14 +14,14 @@ de_ELB003_VZ.py / de_ELB003_Basic.py）。
 from __future__ import annotations
 
 import re
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 
 import skrf as rf
 from skrf.calibration.deembedding import ShortOpen
 
 
-class DeembedMethod(str, Enum):
+class DeembedMethod(StrEnum):
     """去嵌方法。"""
 
     DEFAULT = "default"  # 平台默认：同目录第一组校准件

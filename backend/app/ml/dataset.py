@@ -115,7 +115,7 @@ def generate_synthetic_batch(
     base_fp = base_fs + rng.uniform(0.25, 0.45)
 
     devices: list[dict] = []
-    for i in range(n_devices):
+    for _i in range(n_devices):
         # 器件级偏移（微结构差异）
         fs_offset = rng.normal(0.0, 0.02)
         fp_offset = rng.normal(0.0, 0.03)
@@ -176,8 +176,6 @@ class SyntheticSpectrumDataset(Dataset):
         self.latent_dim = latent_dim
         self.devices: list[dict] = []
         self.batch_meta: dict[int, dict] = {}
-
-        rng = np.random.default_rng(42)
 
         for b in range(n_batches):
             batch_devices = generate_synthetic_batch(

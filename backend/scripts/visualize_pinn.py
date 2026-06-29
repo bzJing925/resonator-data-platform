@@ -27,9 +27,9 @@ import torch
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from app.ml.dataset import RealS1PBatchDataset
-from app.ml.models import ResidualNet, SmartSampler, SpectralVAE
-from app.ml.utils import enforce_critical_points_mask, numerical_gradients
+from app.ml.dataset import RealS1PBatchDataset  # noqa: E402
+from app.ml.models import ResidualNet, SmartSampler, SpectralVAE  # noqa: E402
+from app.ml.utils import enforce_critical_points_mask, numerical_gradients  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:

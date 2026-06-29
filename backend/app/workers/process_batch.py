@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from app.core.extract import extract_resonator_params
 from app.models import Device
 from app.workers.celery_app import celery_app
+from app.workers.progress import ProgressPublisher
 
 logger = logging.getLogger(__name__)
 
@@ -32,12 +33,43 @@ _PARALLEL_MIN_FILES = 50
 # COPY 目标列（排除自增 id，与 devices 表定义顺序一致）。
 # 保留在本模块是为了兼容现有单元测试的导入。
 _COPY_COLUMNS = [
-    "batch_id", "original_filename", "display_name", "mark", "wafer",
-    "folder_name", "coord", "x", "y", "eg", "fl", "ag", "pf",
-    "area_n", "area_um2", "fs_ghz", "fp_ghz", "zs_ohm", "zp_ohm",
-    "qs", "qp", "qs_bodeq", "qp_bodeq", "dbqs", "dbqp",
-    "bodeq_fitted", "bodeq_smooth", "bodeq_raw", "fbode_ghz", "k2eff_pct",
-    "fp2_ghz", "fs2_ghz", "zp2_ohm", "zs2_ohm", "deembedded", "s_param_path",
+    "batch_id",
+    "original_filename",
+    "display_name",
+    "mark",
+    "wafer",
+    "folder_name",
+    "coord",
+    "x",
+    "y",
+    "eg",
+    "fl",
+    "ag",
+    "pf",
+    "area_n",
+    "area_um2",
+    "fs_ghz",
+    "fp_ghz",
+    "zs_ohm",
+    "zp_ohm",
+    "qs",
+    "qp",
+    "qs_bodeq",
+    "qp_bodeq",
+    "dbqs",
+    "dbqp",
+    "bodeq_fitted",
+    "bodeq_smooth",
+    "bodeq_raw",
+    "fbode_ghz",
+    "k2eff_pct",
+    "fp2_ghz",
+    "fs2_ghz",
+    "zp2_ohm",
+    "zs2_ohm",
+    "deembedded",
+    "s_param_path",
+    "s_param_port",
 ]
 
 
@@ -70,8 +102,8 @@ def _bulk_insert_devices(db: Session, rows: list[dict[str, Any]]) -> None:
     if not rows:
         return
 
-    COPY_THRESHOLD = 3000
-    if len(rows) >= COPY_THRESHOLD:
+    copy_threshold = 3000
+    if len(rows) >= copy_threshold:
         try:
             _copy_insert_devices(db, rows)
             return
@@ -126,11 +158,16 @@ def _extract_parallel(
                 logger.warning("提参失败 %s", result["error"])
 
             pct = 5 + int(90 * processed / total)
-            if pct != last_pct and (pct - last_pct >= 5 or processed % 200 == 0 or processed == total):
+            if pct != last_pct and (
+                pct - last_pct >= 5 or processed % 200 == 0 or processed == total
+            ):
                 publisher.update(
                     db,
                     progress_pct=pct,
-                    progress_msg=f"已处理 {processed}/{total}，失败 {len(failures)} (并行 {max_workers} workers)",
+                    progress_msg=(
+                        f"已处理 {processed}/{total}，失败 {len(failures)}"
+                        f" (并行 {max_workers} workers)"
+                    ),
                 )
                 last_pct = pct
 

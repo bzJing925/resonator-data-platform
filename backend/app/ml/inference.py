@@ -83,6 +83,10 @@ def load_models(force: bool = False) -> bool:
 
     _DEVICE = _init_device()
 
+    import torch
+
+    from app.ml.models import ResidualNet, SpectralVAE
+
     # 读取元数据推断维度
     if base_latents_path.exists():
         with open(base_latents_path, encoding="utf-8") as f:
@@ -99,8 +103,6 @@ def load_models(force: bool = False) -> bool:
         _PARAMS_STD = torch.tensor(norm_stats["std"], dtype=torch.float32)
 
     import torch
-
-    from app.ml.models import ResidualNet, SpectralVAE
 
     # 构造模型并加载权重
     _VAE = SpectralVAE(n_freq=_N_FREQ, latent_dim=_LATENT_DIM).to(_DEVICE)

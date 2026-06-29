@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+import torch.nn.functional as f
 
 
 class PINNSpectralLoss(nn.Module):
@@ -39,13 +39,13 @@ class PINNSpectralLoss(nn.Module):
 
     def forward(
         self,
-        S_pred: torch.Tensor,
-        S_true: torch.Tensor,
+        s_pred: torch.Tensor,
+        s_true: torch.Tensor,
         z: torch.Tensor,
         z_base: torch.Tensor,
         fs_pred: torch.Tensor | None = None,
         fp_pred: torch.Tensor | None = None,
-        S_base: torch.Tensor | None = None,
+        s_base: torch.Tensor | None = None,
         freq: torch.Tensor | None = None,
         mu: torch.Tensor | None = None,
         logvar: torch.Tensor | None = None,
@@ -70,32 +70,32 @@ class PINNSpectralLoss(nn.Module):
         losses: dict[str, torch.Tensor] = {}
 
         # 1. 重建损失
-        losses["recon"] = F.mse_loss(S_pred, S_true)
+        losses["recon"] = f.mse_loss(s_pred, s_true)
 
         # 2. 同 batch latent 一致性（压电层厚度相同 → 频谱整体相似）
         if z_base is not None:
             if z_base.dim() == 1:
                 z_base = z_base.unsqueeze(0).expand(z.shape[0], -1)
-            losses["coherence"] = F.mse_loss(z, z_base)
+            losses["coherence"] = f.mse_loss(z, z_base)
         else:
             losses["coherence"] = torch.tensor(0.0, device=z.device)
 
         # 3. 频谱平滑性（S参数是解析函数，二阶导应小）
-        d2S = S_pred[:, :, 2:] - 2 * S_pred[:, :, 1:-1] + S_pred[:, :, :-2]
-        losses["smoothness"] = torch.mean(d2S**2)
+        d2s = s_pred[:, :, 2:] - 2 * s_pred[:, :, 1:-1] + s_pred[:, :, :-2]
+        losses["smoothness"] = torch.mean(d2s**2)
 
         # 4. fs < fp 顺序约束（物理合法性）
         if fs_pred is not None and fp_pred is not None:
             # ReLU(fs - fp) > 0 时惩罚
-            violations = F.relu(fs_pred - fp_pred)
+            violations = f.relu(fs_pred - fp_pred)
             losses["fs_fp_order"] = violations.mean()
         else:
             losses["fs_fp_order"] = torch.tensor(0.0, device=z.device)
 
         # 5. 远带回归基准（远离谐振点处应接近基准频谱）
-        if S_base is not None and freq is not None and fs_pred is not None and fp_pred is not None:
+        if s_base is not None and freq is not None and fs_pred is not None and fp_pred is not None:
             losses["far_band"] = self._far_band_loss(
-                S_pred, S_base, freq, fs_pred, fp_pred
+                s_pred, s_base, freq, fs_pred, fp_pred
             )
         else:
             losses["far_band"] = torch.tensor(0.0, device=z.device)
@@ -125,8 +125,8 @@ class PINNSpectralLoss(nn.Module):
 
     def _far_band_loss(
         self,
-        S_pred: torch.Tensor,
-        S_base: torch.Tensor,
+        s_pred: torch.Tensor,
+        s_base: torch.Tensor,
         freq: torch.Tensor,
         fs_pred: torch.Tensor,
         fp_pred: torch.Tensor,
@@ -135,21 +135,21 @@ class PINNSpectralLoss(nn.Module):
 
         定义远带为 freq < 0.8*fs 或 freq > 1.2*fp 的区域。
         """
-        B, _, N = S_pred.shape
-        freq = freq.to(S_pred.device)
+        b, _, n = s_pred.shape
+        freq = freq.to(s_pred.device)
 
         # 扩展 fs/fp 到 (B, 1, 1)
-        fs = fs_pred.view(B, 1, 1)
-        fp = fp_pred.view(B, 1, 1)
-        freq_expanded = freq.view(1, 1, N)
+        fs = fs_pred.view(b, 1, 1)
+        fp = fp_pred.view(b, 1, 1)
+        freq_expanded = freq.view(1, 1, n)
 
         # 远带掩码
         far_mask = (freq_expanded < 0.8 * fs) | (freq_expanded > 1.2 * fp)  # (B, 1, N)
 
-        if S_base.dim() == 2:
-            S_base = S_base.unsqueeze(0).expand(B, -1, -1)
+        if s_base.dim() == 2:
+            s_base = s_base.unsqueeze(0).expand(b, -1, -1)
 
-        diff = (S_pred - S_base) * far_mask.float()
+        diff = (s_pred - s_base) * far_mask.float()
         # 只对远带区域求 MSE
         count = far_mask.sum().clamp(min=1.0)
         return (diff**2).sum() / count

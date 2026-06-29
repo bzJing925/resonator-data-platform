@@ -49,8 +49,7 @@ def _extract_with_7z(zip_path: Path, target_dir: Path, exe: str) -> float:
     start = time.perf_counter()
     result = subprocess.run(
         [exe, "x", "-y", "-o" + str(target_dir), str(zip_path)],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
     )
     elapsed = time.perf_counter() - start
     if result.returncode != 0:
@@ -70,8 +69,7 @@ def _extract_with_unzip(zip_path: Path, target_dir: Path) -> float:
     start = time.perf_counter()
     result = subprocess.run(
         ["unzip", "-q", "-o", str(zip_path), "-d", str(target_dir)],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
     )
     elapsed = time.perf_counter() - start
     if result.returncode != 0:

@@ -11,7 +11,7 @@ import math
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+import torch.nn.functional as f
 
 
 class AdaptiveSampler(nn.Module):
@@ -37,7 +37,10 @@ class AdaptiveSampler(nn.Module):
     ):
         super().__init__()
         self.n_freq = n_freq
-        self.beta = nn.Parameter(torch.tensor([beta_main, beta_spur, beta_smooth]), requires_grad=False)
+        self.beta = nn.Parameter(
+            torch.tensor([beta_main, beta_spur, beta_smooth]),
+            requires_grad=False,
+        )
         self.tau_init = tau_init
         self.tau = tau_init
         self.tau_min = tau_min
@@ -79,7 +82,7 @@ class AdaptiveSampler(nn.Module):
         fp: torch.Tensor | None = None,  # (B,)
     ) -> torch.Tensor:
         """应用区域配额 + 主模区 fs/fp 高斯加权。"""
-        B, N = p_raw.shape
+        b, n = p_raw.shape
         beta = self.beta.to(p_raw.device)
 
         # 区域配额
@@ -91,12 +94,12 @@ class AdaptiveSampler(nn.Module):
             if main_mask.sum() > 0:
                 # 确保 freq 是 2D
                 if freq.dim() == 1:
-                    freq = freq.unsqueeze(0).expand(B, -1)
+                    freq = freq.unsqueeze(0).expand(b, -1)
 
-                bw = (fp - fs).clamp(min=1e-6).unsqueeze(1)  # (B, 1)
+                bw = (fp - fs).clamp(min=1e-6).unsqueeze(1)  # (b, 1)
                 d_fs = torch.abs(freq - fs.unsqueeze(1)) / (bw * 0.3)
                 d_fp = torch.abs(freq - fp.unsqueeze(1)) / (bw * 0.3)
-                gaussian = torch.exp(-torch.minimum(d_fs, d_fp) ** 2)  # (B, N)
+                gaussian = torch.exp(-torch.minimum(d_fs, d_fp) ** 2)  # (b, n)
                 # 只在主模区应用高斯加权
                 p_weighted = p_weighted + main_mask * gaussian * 2.0
 
@@ -127,8 +130,8 @@ class AdaptiveSampler(nn.Module):
             y_soft:  (B, N) soft 采样分布（Gumbel-Softmax 输出）
         """
         if z_db.dim() == 2:
-            z_db = z_db.unsqueeze(1)  # (B, 1, N)
-        B, _, N = z_db.shape
+            z_db = z_db.unsqueeze(1)  # (b, 1, n)
+        b, _, n = z_db.shape
 
         # 输入编码
         region_float = region_ids.float().unsqueeze(1) / 2.0
@@ -151,7 +154,7 @@ class AdaptiveSampler(nn.Module):
         p_weighted = self._apply_region_prior(p_raw, region_ids, freq, fs, fp)
 
         # Softmax 归一化
-        p_norm = F.softmax(p_weighted / self.tau, dim=1)  # (B, N)
+        p_norm = f.softmax(p_weighted / self.tau, dim=1)  # (b, n)
 
         if target_k is None:
             return p_norm, p_norm, k_pred
@@ -162,7 +165,7 @@ class AdaptiveSampler(nn.Module):
         # Gumbel-Softmax
         log_p = torch.log(p_norm.clamp(min=1e-8))
         gumbel = -torch.log(-torch.log(torch.rand_like(log_p).clamp(min=1e-8)))
-        y_soft = F.softmax((log_p + gumbel) / self.tau, dim=1)
+        y_soft = f.softmax((log_p + gumbel) / self.tau, dim=1)
 
         return p_norm, y_soft, k_pred
 
@@ -176,14 +179,14 @@ class AdaptiveSampler(nn.Module):
         Returns:
             mask, k_actual
         """
-        B, N = p_norm.shape
+        b, n = p_norm.shape
         if k is None:
             # 自适应：根据概率分布的熵决定采样点数
-            entropy = -(p_norm * torch.log(p_norm.clamp(min=1e-8))).sum(dim=1)  # (B,)
-            k = int(self.k_min + (entropy.mean().item() / math.log(N)) * (self.k_max - self.k_min))
+            entropy = -(p_norm * torch.log(p_norm.clamp(min=1e-8))).sum(dim=1)  # (b,)
+            k = int(self.k_min + (entropy.mean().item() / math.log(n)) * (self.k_max - self.k_min))
             k = max(self.k_min, min(self.k_max, k))
 
-        _, topk_idx = torch.topk(p_norm, min(k, N), dim=-1)
+        _, topk_idx = torch.topk(p_norm, min(k, n), dim=-1)
         mask = torch.zeros_like(p_norm)
         mask.scatter_(1, topk_idx, 1.0)
         return mask.bool(), k

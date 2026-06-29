@@ -174,7 +174,9 @@ def compute_batch_task(self: Task, extract_result: dict[str, Any]) -> dict[str, 
                     logger.warning("提参失败 %s: %s", Path(s1p_path).name, exc)
 
                 stage_pct = int(100 * i / total)
-                if stage_pct != last_pct and (stage_pct - last_pct >= 5 or i % 100 == 0 or i == total):
+                if stage_pct != last_pct and (
+                    stage_pct - last_pct >= 5 or i % 100 == 0 or i == total
+                ):
                     overall = 30 + int(65 * i / total)
                     publisher.stage_update(
                         db,
@@ -267,14 +269,19 @@ def _extract_parallel(
                 logger.warning("提参失败 %s", result["error"])
 
             stage_pct = int(100 * processed / total)
-            if stage_pct != last_pct and (stage_pct - last_pct >= 5 or processed % 200 == 0 or processed == total):
+            if stage_pct != last_pct and (
+                stage_pct - last_pct >= 5 or processed % 200 == 0 or processed == total
+            ):
                 overall = 30 + int(65 * stage_pct / 100)
                 publisher.stage_update(
                     db,
                     stage="metrics",
                     stage_progress_pct=stage_pct,
                     progress_pct=overall,
-                    progress_msg=f"已处理 {processed}/{total}，失败 {len(failures)} (并行 {max_workers} workers)",
+                    progress_msg=(
+                        f"已处理 {processed}/{total}，"
+                        f"失败 {len(failures)} (并行 {max_workers} workers)"
+                    ),
                 )
                 last_pct = stage_pct
 
@@ -293,8 +300,8 @@ def _bulk_insert_devices(db: Session, rows: list[dict[str, Any]]) -> None:
     if not rows:
         return
 
-    COPY_THRESHOLD = 3000
-    if len(rows) >= COPY_THRESHOLD:
+    copy_threshold = 3000
+    if len(rows) >= copy_threshold:
         try:
             _copy_insert_devices(db, rows)
             return
