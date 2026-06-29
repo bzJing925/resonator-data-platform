@@ -52,8 +52,6 @@ def run(onedir: bool = False):
         f"--add-data={ROOT / 'alembic'}{os.pathsep}alembic",
         f"--add-data={ROOT / 'alembic.ini'}{os.pathsep}.",
         f"--add-data={ROOT / 'pyproject.toml'}{os.pathsep}.",
-        # 打包根目录 .env（如存在），让后端可执行文件自带默认配置
-        *( [f"--add-data={ROOT.parent / '.env'}{os.pathsep}."] if (ROOT.parent / '.env').exists() else [] ),
     ]
 
     # 收集 hidden imports（SQLAlchemy、Pydantic、Celery 等容易漏的包）
@@ -99,6 +97,9 @@ def run(onedir: bool = False):
 
     # scipy / numpy 子模块众多，PyInstaller 容易漏掉，导致桌面版导入卡住
     args.extend(["--collect-all", "scipy", "--collect-all", "numpy"])
+
+    # psycopg 需要完整打包，否则 PyInstaller 中可能出现编码/bytes 解析错误
+    args.extend(["--collect-all", "psycopg", "--hidden-import", "psycopg_binary"])
 
     print("执行 PyInstaller...")
     subprocess.check_call([sys.executable, "-m", "PyInstaller"] + args)

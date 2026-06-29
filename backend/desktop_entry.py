@@ -18,6 +18,10 @@ if meipass:
         os.environ['DOTENV_PATH'] = env_path
     sys.path.insert(0, meipass)
 
+# PyInstaller 打包后 psycopg 可能出现 server version bytes 解析错误，
+# 强制客户端编码为 UTF8 可规避 SQLAlchemy _get_server_version_info 的 re.match 异常。
+os.environ.setdefault('PGCLIENTENCODING', 'UTF8')
+
 # 固定 matplotlib 缓存目录，避免 PyInstaller 每次启动都重建字体缓存。
 # 必须在导入任何 matplotlib 子模块之前设置。
 cache_home = os.path.join(os.path.expanduser('~'), '.aln-data', 'matplotlib-cache')
