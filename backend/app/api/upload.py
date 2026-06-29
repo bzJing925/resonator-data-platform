@@ -69,59 +69,87 @@ def create_upload(
         raise HTTPException(status_code=400, detail="文件名为空，无法解析批次号")
 
     month_dir = settings.uploads_dir / datetime.now(UTC).strftime("%Y-%m")
-    month_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        month_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"无法创建上传目录 {month_dir}：{exc}。"
+                f"请检查 DATA_ROOT ({settings.DATA_ROOT}) 是否存在且当前用户可写。"
+            ),
+        ) from exc
     saved_name = f"{uuid.uuid4().hex}.zip"
     saved_path = month_dir / saved_name
 
     max_bytes = settings.UPLOAD_MAX_GB * 1024**3
+    tmp_dir: Path | None = None
 
-    if is_snp:
-        # .s1p/.s2p/.snp 自动打包为 zip
-        tmp_dir = Path(tempfile.mkdtemp(prefix="aln_snp_"))
-        snp_path = tmp_dir / file.filename
-        written = 0
-        with snp_path.open("wb") as out:
-            while True:
-                chunk = file.file.read(8 * 1024 * 1024)
-                if not chunk:
-                    break
-                written += len(chunk)
-                if written > max_bytes:
-                    out.close()
-                    shutil.rmtree(tmp_dir, ignore_errors=True)
-                    raise HTTPException(
-                        status_code=413,
-                        detail=f"文件超过上限 {settings.UPLOAD_MAX_GB} GB",
-                    )
-                out.write(chunk)
-        # .snp 是通用扩展名，自动识别为 S1P / S2P；AUTO 模式下按文件内容判断
-        arcname = file.filename
-        if fname_lower.endswith(".snp"):
-            if process_type in ("AUTO", "BOTH"):
-                detected = detect_snp_type(snp_path)
-                ext = ".s1p" if detected == "S1P" else ".s2p"
-            else:
-                ext = ".s1p" if process_type == "S1P" else ".s2p"
-            arcname = Path(file.filename).with_suffix(ext).name
-        with zipfile.ZipFile(saved_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.write(snp_path, arcname=arcname)
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-    else:
-        written = 0
-        with saved_path.open("wb") as out:
-            while True:
-                chunk = file.file.read(8 * 1024 * 1024)
-                if not chunk:
-                    break
-                written += len(chunk)
-                if written > max_bytes:
-                    out.close()
-                    saved_path.unlink(missing_ok=True)
-                    raise HTTPException(
-                        status_code=413,
-                        detail=f"文件超过上限 {settings.UPLOAD_MAX_GB} GB",
-                    )
-                out.write(chunk)
+    try:
+        if is_snp:
+            # .s1p/.s2p/.snp 自动打包为 zip
+            tmp_dir = Path(tempfile.mkdtemp(prefix="aln_snp_"))
+            snp_path = tmp_dir / file.filename
+            written = 0
+            with snp_path.open("wb") as out:
+                while True:
+                    chunk = file.file.read(8 * 1024 * 1024)
+                    if not chunk:
+                        break
+                    written += len(chunk)
+                    if written > max_bytes:
+                        out.close()
+                        raise HTTPException(
+                            status_code=413,
+                            detail=f"文件超过上限 {settings.UPLOAD_MAX_GB} GB",
+                        )
+                    out.write(chunk)
+            # .snp 是通用扩展名，自动识别为 S1P / S2P；AUTO 模式下按文件内容判断
+            arcname = file.filename
+            if fname_lower.endswith(".snp"):
+                if process_type in ("AUTO", "BOTH"):
+                    detected = detect_snp_type(snp_path)
+                    ext = ".s1p" if detected == "S1P" else ".s2p"
+                else:
+                    ext = ".s1p" if process_type == "S1P" else ".s2p"
+                arcname = Path(file.filename).with_suffix(ext).name
+            with zipfile.ZipFile(saved_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                zf.write(snp_path, arcname=arcname)
+        else:
+            written = 0
+            with saved_path.open("wb") as out:
+                while True:
+                    chunk = file.file.read(8 * 1024 * 1024)
+                    if not chunk:
+                        break
+                    written += len(chunk)
+                    if written > max_bytes:
+                        out.close()
+                        raise HTTPException(
+                            status_code=413,
+                            detail=f"文件超过上限 {settings.UPLOAD_MAX_GB} GB",
+                        )
+                    out.write(chunk)
+    except HTTPException:
+        # 清理可能产生的临时文件/半成品 zip
+        if tmp_dir is not None:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        saved_path.unlink(missing_ok=True)
+        raise
+    except OSError as exc:
+        if tmp_dir is not None:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        saved_path.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"保存上传文件失败：{exc}。"
+                f"请检查 DATA_ROOT ({settings.DATA_ROOT}) 是否有足够磁盘空间且可写。"
+            ),
+        ) from exc
+    finally:
+        if tmp_dir is not None:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
     # zip 已经在盘上了；下面任何 DB 失败都得把 zip 删掉，避免
     # 并发上传同名文件触发 batch_no unique 冲突时孤儿 zip 占盘。
