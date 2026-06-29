@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Annotated
 
 import numpy as np
-import skrf
 import zipstream
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
@@ -78,11 +77,13 @@ def _copy_maybe_gz(src: Path, dst: Path) -> None:
         shutil.copy2(src, dst)
 
 
-def _read_network(target_path: Path, process_type: str = "S1P") -> skrf.Network:
+def _read_network(target_path: Path, process_type: str = "S1P"):
     """读取 s1p/s2p/snp 文件；.snp 按 process_type 临时改名后读取。
 
     支持透明读取 .s1p.gz / .s2p.gz：先解压到临时文件再交给 skrf。
     """
+    import skrf
+
     suffix = target_path.suffix.lower()
     is_gz = False
     real_suffix = suffix

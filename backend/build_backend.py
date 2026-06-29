@@ -52,12 +52,8 @@ def run(onedir: bool = False):
         f"--add-data={ROOT / 'alembic'}{os.pathsep}alembic",
         f"--add-data={ROOT / 'alembic.ini'}{os.pathsep}.",
         f"--add-data={ROOT / 'pyproject.toml'}{os.pathsep}.",
-        # 打包根目录 .env（如存在），让后端可执行文件自带默认配置
-        *(
-            [f"--add-data={env_path}{os.pathsep}."]
-            if (env_path := ROOT.parent / ".env").exists()
-            else []
-        ),
+        # 注意：不要在这里打包根目录 .env。桌面版应使用默认配置或用户本机环境变量，
+        # 否则构建机上的 DATABASE_URL/端口会覆盖用户本机配置。
     ]
 
     # 收集 hidden imports（SQLAlchemy、Pydantic、Celery 等容易漏的包）
@@ -66,6 +62,12 @@ def run(onedir: bool = False):
         "app.workers.celery_app",
         "app.workers",
         "app.workers.process_batch",
+        "app.workers.extract_batch",
+        "app.workers.compute_batch",
+        "app.workers.pipeline_batch",
+        "app.workers.pipeline.calibration",
+        "app.workers.pipeline.extractor",
+        "app.workers.pipeline.processor",
         "app.workers.progress",
         "uvicorn",
         "uvloop",

@@ -58,7 +58,46 @@ except Exception as exc:
     traceback.print_exc()
     sys.exit(1)
 
+
+def _start_worker() -> None:
+    """桌面版 Celery worker 入口。
+
+    由 Electron 通过 `aln-backend --worker` 启动。使用单进程 solo pool，
+    避免 PyInstaller onefile 在 macOS 上 fork 子进程导致资源重复解压。
+    """
+    try:
+        # 导入 app.workers 注册所有任务
+        from app.workers import celery_app  # noqa: F401
+    except Exception as exc:
+        log('[aln-backend] Failed to import worker tasks: ' + str(exc))
+        traceback.print_exc()
+        sys.exit(1)
+
+    log('[aln-backend] starting celery worker...')
+    try:
+        from app.workers.celery_app import celery_app as app
+
+        # argv 等价于 celery -A app.workers worker --loglevel=info --concurrency=1 --pool=solo
+        app.worker_main(argv=[
+            'worker',
+            '--loglevel=info',
+            '--concurrency=1',
+            '--pool=solo',
+            '-n', 'desktop@%h',
+        ])
+    except Exception as exc:
+        log('[aln-backend] worker exited with error: ' + str(exc))
+        traceback.print_exc()
+        sys.exit(1)
+
+
 if __name__ == '__main__':
+    is_worker = '--worker' in sys.argv
+
+    if is_worker:
+        _start_worker()
+        sys.exit(0)
+
     host = os.environ.get('ALN_BACKEND_HOST', '127.0.0.1')
     port = int(os.environ.get('ALN_BACKEND_PORT', '8000'))
     log(f'[aln-backend] starting server on {host}:{port}')

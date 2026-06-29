@@ -17,9 +17,6 @@ import re
 from enum import StrEnum
 from pathlib import Path
 
-import skrf as rf
-from skrf.calibration.deembedding import ShortOpen
-
 
 class DeembedMethod(StrEnum):
     """去嵌方法。"""
@@ -538,6 +535,9 @@ def deembed(
 
     返回 out_path（Path 对象）。
     """
+    import skrf as rf
+    from skrf.calibration.deembedding import ShortOpen
+
     dut = rf.Network(str(dut_path))
     op = rf.Network(str(open_path))
     sh = rf.Network(str(short_path))
