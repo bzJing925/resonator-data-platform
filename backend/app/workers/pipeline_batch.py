@@ -22,6 +22,7 @@ from app.core.filename import parse_filename
 from app.core.mapping import load_mapping
 from app.db import SessionLocal
 from app.models import Batch, Device, Mapping
+from app.services.file_tree_service import build_file_tree_from_disk
 from app.workers.celery_app import celery_app
 from app.workers.pipeline.calibration import CalibrationIndex
 from app.workers.pipeline.extractor import StreamingExtractor
@@ -34,12 +35,42 @@ INSERT_CHUNK = 2000
 
 # COPY 目标列（排除自增 id，与 devices 表定义顺序一致）
 _COPY_COLUMNS = [
-    "batch_id", "original_filename", "display_name", "mark", "wafer",
-    "folder_name", "coord", "x", "y", "eg", "fl", "ag", "pf",
-    "area_n", "area_um2", "fs_ghz", "fp_ghz", "zs_ohm", "zp_ohm",
-    "qs", "qp", "qs_bodeq", "qp_bodeq", "dbqs", "dbqp",
-    "bodeq_fitted", "bodeq_smooth", "bodeq_raw", "fbode_ghz", "k2eff_pct",
-    "fp2_ghz", "fs2_ghz", "zp2_ohm", "zs2_ohm", "deembedded", "s_param_path",
+    "batch_id",
+    "original_filename",
+    "display_name",
+    "mark",
+    "wafer",
+    "folder_name",
+    "coord",
+    "x",
+    "y",
+    "eg",
+    "fl",
+    "ag",
+    "pf",
+    "area_n",
+    "area_um2",
+    "fs_ghz",
+    "fp_ghz",
+    "zs_ohm",
+    "zp_ohm",
+    "qs",
+    "qp",
+    "qs_bodeq",
+    "qp_bodeq",
+    "dbqs",
+    "dbqp",
+    "bodeq_fitted",
+    "bodeq_smooth",
+    "bodeq_raw",
+    "fbode_ghz",
+    "k2eff_pct",
+    "fp2_ghz",
+    "fs2_ghz",
+    "zp2_ohm",
+    "zs2_ohm",
+    "deembedded",
+    "s_param_path",
     "s_param_port",
 ]
 
@@ -191,6 +222,12 @@ def pipeline_batch_task(
             logger.exception("解压失败")
             raise
 
+        # 初始化虚拟文件树
+        try:
+            build_file_tree_from_disk(db, batch)
+        except Exception:
+            logger.exception("初始化虚拟文件树失败（非致命）")
+
         # ── 2. 文件分类与校准件优先 ───────────────────────────────────
         cal_s2p_files: list[Path] = []
         pending_duts: list[dict[str, Any]] = []
@@ -218,9 +255,7 @@ def pipeline_batch_task(
 
         # 建立校准索引
         if cal_s2p_files:
-            cal_index = CalibrationIndex.build(
-                target_dir, cal_s2p_files, method=deembed_method
-            )
+            cal_index = CalibrationIndex.build(target_dir, cal_s2p_files, method=deembed_method)
 
         # 所有 DUT 都进入待处理队列
         all_duts = pending_duts
@@ -230,8 +265,7 @@ def pipeline_batch_task(
             stage="metrics",
             stage_progress_pct=0,
             progress_pct=35,
-            progress_msg=f"解压完成，发现 {len(all_duts)} 个 DUT，"
-            f"{len(cal_s2p_files)} 个校准件",
+            progress_msg=f"解压完成，发现 {len(all_duts)} 个 DUT，{len(cal_s2p_files)} 个校准件",
         )
 
         if not all_duts:
@@ -255,9 +289,7 @@ def pipeline_batch_task(
         if max_workers == 1:
             # 单线程模式（小批次或 Windows）
             for item in all_duts:
-                result = processor.process(
-                    item, mapping_dict, wafer, cal_index, target_dir
-                )
+                result = processor.process(item, mapping_dict, wafer, cal_index, target_dir)
                 total_processed += 1
                 if result["ok"]:
                     for row in result["rows"]:
@@ -278,8 +310,7 @@ def pipeline_batch_task(
                         stage="metrics",
                         stage_progress_pct=stage_pct,
                         progress_pct=overall,
-                        progress_msg=f"已处理 {total_processed}/{total_duts}，"
-                        f"失败 {len(failures)}",
+                        progress_msg=f"已处理 {total_processed}/{total_duts}，失败 {len(failures)}",
                     )
                     last_pct = stage_pct
 
@@ -337,8 +368,7 @@ def pipeline_batch_task(
 
         # ── 4. 收尾 ─────────────────────────────────────────────────
         device_count = (
-            db.scalar(select(func.count(Device.id)).where(Device.batch_id == batch.id))
-            or 0
+            db.scalar(select(func.count(Device.id)).where(Device.batch_id == batch.id)) or 0
         )
 
         db.execute(

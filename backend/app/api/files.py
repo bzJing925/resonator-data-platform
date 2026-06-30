@@ -22,28 +22,35 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select, text, update
 
 from app.api.deps import DEVICE_COLUMNS, DbSession
-from app.config import get_settings
 from app.core.extract import ExtractError, extract_resonator_params
 from app.core.mapping import load_mapping
 from app.core.touchstone import split_s2p_to_s1p
-from app.models import Batch, Device, Mapping
+from app.models import Batch, Device, FileNode, Mapping
 from app.schemas.file import (
     BatchFileItem,
     ComputeFileRequest,
     ComputeFileResponse,
+    DownloadZipByNodesRequest,
     DownloadZipRequest,
     FileCurveResponse,
+    FileNodeItem,
+    FileTreeDeleteRequest,
+    FileTreeMkdirRequest,
+    FileTreeMoveRequest,
+    FileTreeRenameRequest,
+    FileTreeReorderRequest,
     SplitS2PRequest,
+)
+from app.services.file_tree_service import (
+    batch_files_dir,
+    build_file_tree_from_disk,
+    get_or_create_root_node,
 )
 
 _PARAM_CHOICES = ("s11_db", "s11_phase", "s11_re_im", "z_mag_db", "z_phase")
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/files", tags=["files"])
-
-
-def _batch_files_dir(batch_no: str) -> Path:
-    return get_settings().files_dir / batch_no
 
 
 def _safe_resolve(base_dir: Path, relpath: str) -> Path:
@@ -124,7 +131,7 @@ def list_batch_files(
     if batch is None:
         raise HTTPException(status_code=404, detail=f"批次 {batch_no} 不存在")
 
-    base_dir = _batch_files_dir(batch_no)
+    base_dir = batch_files_dir(batch_no)
     if not base_dir.exists():
         return []
 
@@ -175,7 +182,7 @@ def split_s2p_files(db: DbSession, body: SplitS2PRequest) -> Response:
     if batch is None:
         raise HTTPException(status_code=404, detail=f"批次 {body.batch_no} 不存在")
 
-    base_dir = _batch_files_dir(body.batch_no)
+    base_dir = batch_files_dir(body.batch_no)
     if not base_dir.exists():
         raise HTTPException(status_code=404, detail="批次解压目录不存在")
 
@@ -206,9 +213,7 @@ def split_s2p_files(db: DbSession, body: SplitS2PRequest) -> Response:
             )
         except Exception as exc:
             shutil.rmtree(tmp_root, ignore_errors=True)
-            raise HTTPException(
-                status_code=422, detail=f"拆分失败 {relpath}: {exc}"
-            ) from exc
+            raise HTTPException(status_code=422, detail=f"拆分失败 {relpath}: {exc}") from exc
 
         # 保持原相对路径目录结构，仅把 .s2p 替换为 _s11/_s22.s1p
         rel_stem = relpath[:-4]  # 去掉 .s2p
@@ -236,7 +241,7 @@ def download_files_zip(db: DbSession, body: DownloadZipRequest) -> Response:
     if batch is None:
         raise HTTPException(status_code=404, detail=f"批次 {body.batch_no} 不存在")
 
-    base_dir = _batch_files_dir(body.batch_no)
+    base_dir = batch_files_dir(body.batch_no)
     if not base_dir.exists():
         raise HTTPException(status_code=404, detail="批次解压目录不存在")
 
@@ -250,9 +255,7 @@ def download_files_zip(db: DbSession, body: DownloadZipRequest) -> Response:
             else:
                 actual_suffix = target.suffix.lower()
             if actual_suffix not in {".s1p", ".s2p", ".snp"}:
-                raise HTTPException(
-                    status_code=400, detail=f"非法文件类型: {relpath}"
-                )
+                raise HTTPException(status_code=400, detail=f"非法文件类型: {relpath}")
             selected.append((target, relpath))
     else:
         for p in sorted(base_dir.rglob("*")):
@@ -289,15 +292,13 @@ def get_file_curve(
 ) -> FileCurveResponse:
     """直接从批次解压目录读取指定文件的 S 参数 / 阻抗曲线（无需先入库）。"""
     if param not in _PARAM_CHOICES:
-        raise HTTPException(
-            status_code=400, detail=f"param 必须是 {','.join(_PARAM_CHOICES)} 之一"
-        )
+        raise HTTPException(status_code=400, detail=f"param 必须是 {','.join(_PARAM_CHOICES)} 之一")
 
     batch = db.scalar(select(Batch).where(Batch.batch_no == batch_no))
     if batch is None:
         raise HTTPException(status_code=404, detail=f"批次 {batch_no} 不存在")
 
-    base_dir = _batch_files_dir(batch_no)
+    base_dir = batch_files_dir(batch_no)
     target_path = _find_actual_path(base_dir, relpath)
 
     try:
@@ -349,7 +350,7 @@ def compute_single_file(db: DbSession, body: ComputeFileRequest) -> ComputeFileR
     if batch is None:
         raise HTTPException(status_code=404, detail=f"批次 {body.batch_no} 不存在")
 
-    base_dir = _batch_files_dir(body.batch_no)
+    base_dir = batch_files_dir(body.batch_no)
     target_path = _find_actual_path(base_dir, body.relpath)
 
     mapping_row = db.get(Mapping, batch.mapping_id) if batch.mapping_id else None
@@ -404,14 +405,8 @@ def compute_single_file(db: DbSession, body: ComputeFileRequest) -> ComputeFileR
     db.refresh(device)
 
     # 同步批次统计
-    device_count = (
-        db.scalar(select(func.count(Device.id)).where(Device.batch_id == batch.id)) or 0
-    )
-    db.execute(
-        update(Batch)
-        .where(Batch.id == batch.id)
-        .values(device_count=device_count)
-    )
+    device_count = db.scalar(select(func.count(Device.id)).where(Device.batch_id == batch.id)) or 0
+    db.execute(update(Batch).where(Batch.id == batch.id).values(device_count=device_count))
     db.commit()
     try:
         db.execute(text("REFRESH MATERIALIZED VIEW CONCURRENTLY mv_batch_stats"))
@@ -425,4 +420,334 @@ def compute_single_file(db: DbSession, body: ComputeFileRequest) -> ComputeFileR
         batch_no=body.batch_no,
         relpath=body.relpath,
         metrics=metrics,
+    )
+
+
+# =============================================================================
+# 虚拟文件树（Finder 式文件管理）
+# =============================================================================
+
+
+def _get_batch_or_404(db: DbSession, batch_no: str) -> Batch:
+    batch = db.scalar(select(Batch).where(Batch.batch_no == batch_no))
+    if batch is None:
+        raise HTTPException(status_code=404, detail=f"批次 {batch_no} 不存在")
+    return batch
+
+
+def _device_lookup_for_batch(db: DbSession, batch_id: int) -> dict[tuple[str, str], int]:
+    return {
+        (d.s_param_path or "", d.s_param_port): d.id
+        for d in db.scalars(select(Device).where(Device.batch_id == batch_id)).all()
+    }
+
+
+def _node_to_item(
+    node: FileNode,
+    base_dir: Path,
+    device_lookup: dict[tuple[str, str], int],
+) -> FileNodeItem:
+    size: int | None = None
+    computed = False
+    device_id: int | None = None
+    children_count = 0
+
+    if node.node_type == "file" and node.relpath:
+        target = _safe_resolve(base_dir, node.relpath)
+        gz_target = target.with_suffix(target.suffix + ".gz")
+        for p in (target, gz_target):
+            if p.exists():
+                size = p.stat().st_size
+                break
+        if (node.relpath, "S11") in device_lookup:
+            computed = True
+            device_id = device_lookup[(node.relpath, "S11")]
+        elif (node.relpath, "S22") in device_lookup:
+            computed = True
+            device_id = device_lookup[(node.relpath, "S22")]
+
+    if node.node_type in ("root", "zip", "folder"):
+        children_count = sum(1 for c in node.children if not c.is_deleted)
+
+    return FileNodeItem(
+        id=node.id,
+        parent_id=node.parent_id,
+        node_type=node.node_type,
+        name=node.name,
+        relpath=node.relpath,
+        sort_order=node.sort_order,
+        is_deleted=node.is_deleted,
+        source_zip=node.source_zip,
+        size=size,
+        computed=computed,
+        device_id=device_id,
+        children_count=children_count,
+    )
+
+
+def _collect_file_relpaths_from_nodes(
+    db: DbSession, batch_id: int, node_ids: list[int]
+) -> list[str]:
+    """把选中的 folder/zip/file 节点展开为所有 file 节点的 relpath 列表。"""
+    relpaths: list[str] = []
+    nodes = db.scalars(
+        select(FileNode).where(FileNode.batch_id == batch_id, FileNode.id.in_(node_ids))
+    ).all()
+
+    queue: list[FileNode] = list(nodes)
+    seen: set[int] = set()
+    while queue:
+        node = queue.pop(0)
+        if node.id in seen:
+            continue
+        seen.add(node.id)
+        if node.node_type == "file" and node.relpath:
+            relpaths.append(node.relpath)
+        else:
+            children = db.scalars(
+                select(FileNode).where(
+                    FileNode.parent_id == node.id, FileNode.is_deleted.is_(False)
+                )
+            ).all()
+            queue.extend(children)
+
+    return relpaths
+
+
+@router.get("/tree", response_model=list[FileNodeItem])
+def list_file_tree(
+    db: DbSession,
+    batch_no: Annotated[str, Query(...)],
+    parent_id: Annotated[int | None, Query()] = None,
+) -> list[FileNodeItem]:
+    """列出虚拟文件树某个父节点下的非删除子节点。首次访问会自动从磁盘初始化树。"""
+    batch = _get_batch_or_404(db, batch_no)
+    build_file_tree_from_disk(db, batch)
+
+    if parent_id is None:
+        root = get_or_create_root_node(db, batch)
+        parent_id = root.id
+
+    parent = db.scalar(
+        select(FileNode).where(
+            FileNode.batch_id == batch.id,
+            FileNode.id == parent_id,
+        )
+    )
+    if parent is None:
+        raise HTTPException(status_code=404, detail="父节点不存在")
+
+    children = db.scalars(
+        select(FileNode)
+        .where(
+            FileNode.batch_id == batch.id,
+            FileNode.parent_id == parent_id,
+            FileNode.is_deleted.is_(False),
+        )
+        .order_by(FileNode.sort_order, FileNode.name)
+    ).all()
+
+    base_dir = batch_files_dir(batch_no)
+    device_lookup = _device_lookup_for_batch(db, batch.id)
+    return [_node_to_item(c, base_dir, device_lookup) for c in children]
+
+
+@router.post("/tree/move")
+def move_file_tree_nodes(db: DbSession, body: FileTreeMoveRequest) -> dict[str, int]:
+    """批量移动节点到目标文件夹。"""
+    target = db.get(FileNode, body.target_folder_id)
+    if target is None or target.node_type not in ("root", "zip", "folder"):
+        raise HTTPException(status_code=400, detail="目标文件夹不存在或类型错误")
+
+    nodes = db.scalars(select(FileNode).where(FileNode.id.in_(body.node_ids))).all()
+    if len(nodes) != len(body.node_ids):
+        raise HTTPException(status_code=404, detail="部分节点不存在")
+
+    # 防止把父节点移动到自身子树下
+    forbidden_ids = {target.id}
+    queue: list[int] = [target.id]
+    while queue:
+        pid = queue.pop(0)
+        children = db.scalars(select(FileNode.id).where(FileNode.parent_id == pid)).all()
+        for cid in children:
+            forbidden_ids.add(cid)
+            queue.append(cid)
+
+    moved = 0
+    for node in nodes:
+        if node.id in forbidden_ids:
+            raise HTTPException(
+                status_code=400,
+                detail=f"不能把节点 {node.name} 移动到自身子树下",
+            )
+        node.parent_id = target.id
+        moved += 1
+
+    db.commit()
+    return {"moved": moved}
+
+
+@router.post("/tree/reorder")
+def reorder_file_tree_nodes(db: DbSession, body: FileTreeReorderRequest) -> dict[str, int]:
+    """同父级内按 node_ids 顺序重排。"""
+    nodes = db.scalars(select(FileNode).where(FileNode.id.in_(body.node_ids))).all()
+    if len(nodes) != len(body.node_ids):
+        raise HTTPException(status_code=404, detail="部分节点不存在")
+
+    parent_ids = {n.parent_id for n in nodes}
+    if len(parent_ids) != 1:
+        raise HTTPException(status_code=400, detail="只能对同一父节点下的节点排序")
+    if body.parent_id is not None and body.parent_id not in parent_ids:
+        raise HTTPException(status_code=400, detail="parent_id 与节点实际父级不一致")
+
+    order_map = {nid: idx for idx, nid in enumerate(body.node_ids)}
+    for node in nodes:
+        node.sort_order = order_map[node.id]
+
+    db.commit()
+    return {"reordered": len(nodes)}
+
+
+@router.post("/tree/mkdir", response_model=FileNodeItem)
+def mkdir_file_tree(db: DbSession, body: FileTreeMkdirRequest) -> FileNodeItem:
+    """在指定父节点下新建虚拟文件夹。"""
+    batch = _get_batch_or_404(db, body.batch_no)
+    build_file_tree_from_disk(db, batch)
+
+    if body.parent_id is None:
+        root = get_or_create_root_node(db, batch)
+        parent_id = root.id
+    else:
+        parent_id = body.parent_id
+
+    parent = db.scalar(
+        select(FileNode).where(
+            FileNode.batch_id == batch.id,
+            FileNode.id == parent_id,
+            FileNode.is_deleted.is_(False),
+        )
+    )
+    if parent is None or parent.node_type not in ("root", "zip", "folder"):
+        raise HTTPException(status_code=400, detail="父节点不存在或不能创建子文件夹")
+
+    # 同一父级下名称唯一
+    existing = db.scalar(
+        select(FileNode).where(
+            FileNode.batch_id == batch.id,
+            FileNode.parent_id == parent_id,
+            FileNode.node_type == "folder",
+            FileNode.name == body.name,
+            FileNode.is_deleted.is_(False),
+        )
+    )
+    if existing is not None:
+        raise HTTPException(status_code=409, detail="同目录下已存在同名文件夹")
+
+    # 简单分配一个较大的 sort_order 放在末尾
+    max_order = (
+        db.scalar(
+            select(func.max(FileNode.sort_order)).where(
+                FileNode.batch_id == batch.id,
+                FileNode.parent_id == parent_id,
+            )
+        )
+        or 0
+    )
+
+    folder = FileNode(
+        batch_id=batch.id,
+        parent_id=parent_id,
+        node_type="folder",
+        name=body.name,
+        sort_order=max_order + 1,
+    )
+    db.add(folder)
+    db.commit()
+    db.refresh(folder)
+
+    base_dir = batch_files_dir(batch.batch_no)
+    device_lookup = _device_lookup_for_batch(db, batch.id)
+    return _node_to_item(folder, base_dir, device_lookup)
+
+
+@router.post("/tree/rename", response_model=FileNodeItem)
+def rename_file_tree_node(db: DbSession, body: FileTreeRenameRequest) -> FileNodeItem:
+    """重命名节点（仅 folder/zip，file 节点不建议重命名，避免与磁盘不一致）。"""
+    node = db.get(FileNode, body.node_id)
+    if node is None or node.is_deleted:
+        raise HTTPException(status_code=404, detail="节点不存在")
+    if node.node_type == "root":
+        raise HTTPException(status_code=400, detail="不能重命名根节点")
+
+    node.name = body.name
+    db.commit()
+    db.refresh(node)
+
+    base_dir = batch_files_dir(node.batch.batch_no)
+    device_lookup = _device_lookup_for_batch(db, node.batch_id)
+    return _node_to_item(node, base_dir, device_lookup)
+
+
+@router.post("/tree/delete")
+def delete_file_tree_nodes(db: DbSession, body: FileTreeDeleteRequest) -> dict[str, int]:
+    """软删除节点及其所有后代。"""
+    nodes = db.scalars(select(FileNode).where(FileNode.id.in_(body.node_ids))).all()
+    if len(nodes) != len(body.node_ids):
+        raise HTTPException(status_code=404, detail="部分节点不存在")
+
+    # 级联软删除
+    deleted = 0
+    queue: list[FileNode] = list(nodes)
+    seen: set[int] = set()
+    while queue:
+        node = queue.pop(0)
+        if node.id in seen:
+            continue
+        seen.add(node.id)
+        if not node.is_deleted:
+            node.is_deleted = True
+            deleted += 1
+        children = db.scalars(select(FileNode).where(FileNode.parent_id == node.id)).all()
+        queue.extend(children)
+
+    db.commit()
+    return {"deleted": deleted}
+
+
+@router.post("/download-zip-nodes")
+def download_file_tree_nodes_zip(db: DbSession, body: DownloadZipByNodesRequest) -> Response:
+    """按虚拟节点 ID 打包下载文件；folder/zip 节点会自动展开其下所有 file 节点。"""
+    batch = _get_batch_or_404(db, body.batch_no)
+    build_file_tree_from_disk(db, batch)
+
+    relpaths = _collect_file_relpaths_from_nodes(db, batch.id, body.node_ids)
+    if not relpaths:
+        raise HTTPException(status_code=404, detail="没有可下载的文件")
+
+    return _stream_zip_from_relpaths(batch.batch_no, relpaths)
+
+
+def _stream_zip_from_relpaths(batch_no: str, relpaths: list[str]) -> StreamingResponse:
+    """根据相对路径列表流式打包。"""
+    base_dir = batch_files_dir(batch_no)
+    selected: list[tuple[Path, str]] = []
+    for relpath in relpaths:
+        target = _find_actual_path(base_dir, relpath)
+        if target.suffix.lower() == ".gz":
+            actual_suffix = Path(target.stem).suffix.lower()
+        else:
+            actual_suffix = target.suffix.lower()
+        if actual_suffix not in {".s1p", ".s2p", ".snp"}:
+            raise HTTPException(status_code=400, detail=f"非法文件类型: {relpath}")
+        selected.append((target, relpath))
+
+    zs = zipstream.ZipStream(compress_type=zipstream.ZIP_DEFLATED)
+    for target, arcname in selected:
+        zs.add_path(str(target), arcname=arcname, recurse=False)
+
+    filename = f"{batch_no}_files.zip"
+    return StreamingResponse(
+        zs,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

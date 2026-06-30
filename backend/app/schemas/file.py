@@ -21,6 +21,74 @@ class BatchFileItem(BaseModel):
     device_id: int | None = Field(None, description="对应 Device 行 id（若已计算）")
 
 
+class FileNodeItem(BaseModel):
+    """虚拟文件树节点列表项。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int = Field(..., description="节点 ID")
+    parent_id: int | None = Field(None, description="父节点 ID")
+    node_type: str = Field(..., description="节点类型：root/zip/folder/file")
+    name: str = Field(..., description="显示名称")
+    relpath: str | None = Field(None, description="file 节点对应的磁盘相对路径")
+    sort_order: int = Field(0, description="同父级排序权重")
+    is_deleted: bool = Field(False, description="是否已被软删除")
+    source_zip: str | None = Field(None, description="来源压缩包文件名")
+    size: int | None = Field(None, description="file 节点文件大小（字节）")
+    computed: bool = Field(False, description="file 节点是否已计算 Device")
+    device_id: int | None = Field(None, description="对应 Device id")
+    children_count: int = Field(0, description="非 file 节点的直接子节点数")
+
+
+class FileTreeListRequest(BaseModel):
+    """列出虚拟文件树子节点请求。"""
+
+    batch_no: str = Field(..., description="批次号")
+    parent_id: int | None = Field(None, description="父节点 ID；为空则返回根节点下子项")
+
+
+class FileTreeMoveRequest(BaseModel):
+    """批量移动节点到指定文件夹。"""
+
+    node_ids: list[int] = Field(..., description="待移动节点 ID 列表")
+    target_folder_id: int = Field(..., description="目标文件夹节点 ID")
+
+
+class FileTreeReorderRequest(BaseModel):
+    """同父级内重排节点。"""
+
+    parent_id: int | None = Field(None, description="父节点 ID")
+    node_ids: list[int] = Field(..., description="排序后的节点 ID 列表")
+
+
+class FileTreeMkdirRequest(BaseModel):
+    """新建虚拟文件夹。"""
+
+    batch_no: str = Field(..., description="批次号")
+    parent_id: int | None = Field(None, description="父节点 ID；为空则挂在根节点下")
+    name: str = Field(..., description="文件夹名称")
+
+
+class FileTreeRenameRequest(BaseModel):
+    """重命名节点。"""
+
+    node_id: int = Field(..., description="节点 ID")
+    name: str = Field(..., description="新名称")
+
+
+class FileTreeDeleteRequest(BaseModel):
+    """软删除节点。"""
+
+    node_ids: list[int] = Field(..., description="待删除节点 ID 列表")
+
+
+class DownloadZipByNodesRequest(BaseModel):
+    """按虚拟节点 ID 批量打包下载。"""
+
+    batch_no: str = Field(..., description="批次号")
+    node_ids: list[int] = Field(..., description="file 或 folder 节点 ID 列表；folder 会自动展开其下所有 file")
+
+
 class DownloadZipRequest(BaseModel):
     """批量打包下载请求。relpaths 为空表示下载该批次全部文件。"""
 

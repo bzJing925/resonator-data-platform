@@ -23,6 +23,7 @@ from app.core.filename import parse_filename
 from app.core.touchstone import detect_snp_type, split_s2p_to_s1p
 from app.db import SessionLocal
 from app.models import Batch, Mapping
+from app.services.file_tree_service import build_file_tree_from_disk
 from app.workers.celery_app import celery_app
 from app.workers.progress import ProgressPublisher
 
@@ -360,6 +361,12 @@ def extract_batch_task(
         # 记录解压目录，供 compute_batch 使用
         batch.file_path = str(target_dir)
         db.commit()
+
+        # 初始化虚拟文件树
+        try:
+            build_file_tree_from_disk(db, batch)
+        except Exception:
+            logger.exception("初始化虚拟文件树失败（非致命）")
 
         # 按配置清理原 zip，避免 raw zip + 解压文件双重占盘
         if not settings.KEEP_RAW_ZIP:

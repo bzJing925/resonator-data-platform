@@ -22,6 +22,7 @@ from app.models.base import Base
 
 if TYPE_CHECKING:
     from app.models.device import Device
+    from app.models.file_node import FileNode
     from app.models.mapping import Mapping
 
 
@@ -46,16 +47,18 @@ class Batch(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     uploaded_by: Mapped[str] = mapped_column(Text, default="anonymous", nullable=False)
-    task_id: Mapped[int | None] = mapped_column(
-        ForeignKey("upload_tasks.id", ondelete="SET NULL")
-    )
+    task_id: Mapped[int | None] = mapped_column(ForeignKey("upload_tasks.id", ondelete="SET NULL"))
 
     mapping: Mapped[Mapping] = relationship(back_populates="batches")
 
     @property
     def raw_zip_deleted(self) -> bool:
         return self.raw_zip_path is None
+
     devices: Mapped[list[Device]] = relationship(
+        back_populates="batch", cascade="all, delete-orphan"
+    )
+    file_nodes: Mapped[list[FileNode]] = relationship(
         back_populates="batch", cascade="all, delete-orphan"
     )
 
