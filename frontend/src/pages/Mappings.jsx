@@ -1,4 +1,4 @@
-import React, { memo, useEffect, useRef, useState } from 'react';
+import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
 import I from '../components/Icons.jsx';
 import {
   listMappings,
@@ -6,6 +6,7 @@ import {
   createMapping,
   deleteMapping,
 } from '../api/endpoints.js';
+import { usePageState } from '../contexts/PageStateContext.jsx';
 
 const EntryRow = memo(function EntryRow({ entry }) {
   const e = entry;
@@ -23,13 +24,21 @@ const EntryRow = memo(function EntryRow({ entry }) {
   );
 });
 
+const MAPPINGS_INITIAL_STATE = {
+  selected: null,
+  name: '',
+};
+
 export default function Mappings() {
+  const [state, setState] = usePageState('mappings', MAPPINGS_INITIAL_STATE);
+  const { selected, name } = state;
+  const setSelected = useCallback((v) => setState((s) => ({ ...s, selected: typeof v === 'function' ? v(s.selected) : v })), [setState]);
+  const setName = useCallback((v) => setState((s) => ({ ...s, name: typeof v === 'function' ? v(s.name) : v })), [setState]);
+
   const [mappings, setMappings] = useState([]);
-  const [selected, setSelected] = useState(null);
   const [entries, setEntries] = useState({ items: [], total: 0 });
   const [error, setError] = useState(null);
   const [uploading, setUploading] = useState(false);
-  const [name, setName] = useState('');
   const fileRef = useRef(null);
 
   const loadMappings = () =>

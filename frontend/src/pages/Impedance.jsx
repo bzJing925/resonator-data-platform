@@ -1,7 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import I from '../components/Icons.jsx';
 import { LineChart } from '../components/Charts.jsx';
-import { getBatch, listBatches, listBatchFiles, getFileCurve } from '../api/endpoints.js';
+import { listBatches, listBatchFiles, getFileCurve } from '../api/endpoints.js';
+import { usePageState } from '../contexts/PageStateContext.jsx';
 
 const MAX_PLOT = 30;
 const PAGE_SIZE = 100;
@@ -23,19 +24,46 @@ function groupByFolder(files) {
   return groups;
 }
 
+const IMPEDANCE_INITIAL_STATE = {
+  batchNo: '',
+  folder: '',
+  search: '',
+  page: 1,
+  selected: new Set(),
+  curves: [],
+  showMean: true,
+};
+
 export default function Impedance() {
+  const [state, setState] = usePageState(
+    'impedance',
+    IMPEDANCE_INITIAL_STATE,
+    { dataKeys: ['curves'], maxDataBytes: 1024 * 1024 },
+  );
+  const {
+    batchNo,
+    folder,
+    search,
+    page,
+    selected,
+    curves,
+    showMean,
+  } = state;
+
+  const setBatchNo = useCallback((v) => setState((s) => ({ ...s, batchNo: typeof v === 'function' ? v(s.batchNo) : v })), [setState]);
+  const setFolder = useCallback((v) => setState((s) => ({ ...s, folder: typeof v === 'function' ? v(s.folder) : v })), [setState]);
+  const setSearch = useCallback((v) => setState((s) => ({ ...s, search: typeof v === 'function' ? v(s.search) : v })), [setState]);
+  const setPage = useCallback((v) => setState((s) => ({ ...s, page: typeof v === 'function' ? v(s.page) : v })), [setState]);
+  const setSelected = useCallback((v) => setState((s) => ({ ...s, selected: typeof v === 'function' ? v(s.selected) : v })), [setState]);
+  const setCurves = useCallback((v) => setState((s) => ({ ...s, curves: typeof v === 'function' ? v(s.curves) : v })), [setState]);
+  const setShowMean = useCallback((v) => setState((s) => ({ ...s, showMean: typeof v === 'function' ? v(s.showMean) : v })), [setState]);
+
+  // Transient state: re-fetched from the API on mount / batch change.
   const [batches, setBatches] = useState([]);
-  const [batchNo, setBatchNo] = useState('');
   const [files, setFiles] = useState([]);
   const [loadingFiles, setLoadingFiles] = useState(false);
-  const [folder, setFolder] = useState('');
-  const [search, setSearch] = useState('');
-  const [page, setPage] = useState(1);
-  const [selected, setSelected] = useState(new Set());
-  const [curves, setCurves] = useState([]);
   const [loadingCurves, setLoadingCurves] = useState(false);
   const [error, setError] = useState(null);
-  const [showMean, setShowMean] = useState(true);
 
   useEffect(() => {
     listBatches({ size: 200 })
