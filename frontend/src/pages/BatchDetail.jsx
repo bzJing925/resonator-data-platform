@@ -1,12 +1,11 @@
 import React, { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import I from '../components/Icons.jsx';
+import FileManager from '../components/FileManager.jsx';
 import {
   getBatch,
   listBatchDevices,
-  listBatchFiles,
   exportCsv,
-  downloadFilesZip,
   downloadDeviceS1p,
 } from '../api/endpoints.js';
 import DeviceModal from '../components/DeviceModal.jsx';
@@ -105,9 +104,6 @@ export default function BatchDetail() {
   const [error, setError] = useState(null);
   const [activeDevice, setActiveDevice] = useState(null);
   const [exporting, setExporting] = useState(false);
-  const [files, setFiles] = useState([]);
-  const [selectedFiles, setSelectedFiles] = useState(new Set());
-  const [filesLoading, setFilesLoading] = useState(false);
   const fieldsState = useFields();
 
   // 计算列头：优先用 useFields 的 label+unit，缺失时回退到 fallback
@@ -137,16 +133,6 @@ export default function BatchDetail() {
   }, [batchNo]);
 
   useEffect(() => {
-    let cancelled = false;
-    setFilesLoading(true);
-    listBatchFiles(batchNo, true)
-      .then((d) => { if (!cancelled) { setFiles(d || []); setSelectedFiles(new Set()); } })
-      .catch((e) => { if (!cancelled) setError(e.message); })
-      .finally(() => { if (!cancelled) setFilesLoading(false); });
-    return () => { cancelled = true; };
-  }, [batchNo]);
-
-  useEffect(() => {
     // cancelled 防止快速改 filter 时慢请求后到、覆盖快请求的当前数据：
     // 否则用户连续切 wafer 或翻页时可能看到上一次过滤的结果。
     let cancelled = false;
@@ -172,33 +158,6 @@ export default function BatchDetail() {
     } catch (e) {
       setError(e.message || '下载 S 参数文件失败');
     }
-  }, []);
-
-  const handleDownloadZip = useCallback(async (relpaths = []) => {
-    try {
-      const res = await downloadFilesZip(batchNo, relpaths);
-      const suffix = relpaths.length ? 'selected' : 'all';
-      downloadBlob(res.data, `${batchNo}_${suffix}.zip`);
-    } catch (e) {
-      setError(e.message || '下载 ZIP 失败');
-    }
-  }, [batchNo]);
-
-  const toggleFile = useCallback((relpath) => {
-    setSelectedFiles((prev) => {
-      const next = new Set(prev);
-      if (next.has(relpath)) next.delete(relpath);
-      else next.add(relpath);
-      return next;
-    });
-  }, []);
-
-  const selectAllFiles = useCallback(() => {
-    setSelectedFiles(new Set(files.map((f) => f.relpath)));
-  }, [files]);
-
-  const clearFileSelection = useCallback(() => {
-    setSelectedFiles(new Set());
   }, []);
 
   const onExportCsv = useCallback(async () => {
@@ -235,13 +194,6 @@ export default function BatchDetail() {
         </button>
         <button className="btn" disabled title="敬请期待">
           <I.download size={13} /> 导出 Excel
-        </button>
-        <button
-          className="btn"
-          onClick={() => handleDownloadZip()}
-          title="下载本批次全部 snp 文件打包"
-        >
-          <I.download size={13} /> 下载全部
         </button>
       </div>
 
@@ -300,54 +252,10 @@ export default function BatchDetail() {
 
         <div className="chart-card" style={{ margin: 0, marginBottom: 12 }}>
           <div className="chart-head">
-            <span className="title">源文件列表</span>
-            <span className="axes">{filesLoading ? '加载中…' : `${files.length} 个文件`}</span>
-            <div className="right">
-              <button className="btn sm" onClick={selectAllFiles}>全选</button>
-              <button className="btn sm" onClick={clearFileSelection}>清空</button>
-              <button
-                className="btn sm"
-                disabled={selectedFiles.size === 0}
-                onClick={() => handleDownloadZip(Array.from(selectedFiles))}
-              >
-                下载选中 ({selectedFiles.size})
-              </button>
-            </div>
+            <span className="title">源文件管理</span>
           </div>
-          <div style={{ overflow: 'auto', maxHeight: '30vh' }}>
-            <table className="dtable dtable-wide">
-              <thead>
-                <tr>
-                  <th style={{ width: 40 }}><input type="checkbox" readOnly checked={false} style={{ display: 'none' }} /></th>
-                  <th>文件名</th>
-                  <th>相对路径</th>
-                  <th>大小</th>
-                </tr>
-              </thead>
-              <tbody>
-                {files.length === 0 && !filesLoading && (
-                  <tr>
-                    <td colSpan={4} className="dim" style={{ textAlign: 'center', padding: 24 }}>
-                      暂无源文件（可能已清理）
-                    </td>
-                  </tr>
-                )}
-                {files.map((f) => (
-                  <tr key={f.relpath}>
-                    <td>
-                      <input
-                        type="checkbox"
-                        checked={selectedFiles.has(f.relpath)}
-                        onChange={() => toggleFile(f.relpath)}
-                      />
-                    </td>
-                    <td>{f.name}</td>
-                    <td className="mono dim">{f.relpath}</td>
-                    <td className="num">{(f.size / 1024 / 1024).toFixed(2)} MB</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div style={{ padding: 0, overflow: 'hidden' }}>
+            <FileManager batchNo={batchNo} onError={(msg) => setError(msg)} />
           </div>
         </div>
 

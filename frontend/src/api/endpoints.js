@@ -19,6 +19,36 @@ export const listBatchFiles = (batchNo, includeSnp = false) =>
     .get(`/files?batch_no=${encodeURIComponent(batchNo)}&include_snp=${includeSnp}`)
     .then((r) => r.data);
 
+// 虚拟文件树 API
+export const listFileTree = (batchNo, parentId = null) =>
+  api
+    .get('/files/tree', {
+      params: { batch_no: batchNo, parent_id: parentId },
+    })
+    .then((r) => r.data);
+
+export const moveFileTreeNodes = (body) =>
+  api.post('/files/tree/move', body).then((r) => r.data);
+
+export const reorderFileTreeNodes = (body) =>
+  api.post('/files/tree/reorder', body).then((r) => r.data);
+
+export const mkdirFileTree = (body) =>
+  api.post('/files/tree/mkdir', body).then((r) => r.data);
+
+export const renameFileTreeNode = (body) =>
+  api.post('/files/tree/rename', body).then((r) => r.data);
+
+export const deleteFileTreeNodes = (body) =>
+  api.post('/files/tree/delete', body).then((r) => r.data);
+
+export const downloadFileTreeNodesZip = (batchNo, nodeIds) =>
+  api.post(
+    '/files/download-zip-nodes',
+    { batch_no: batchNo, node_ids: nodeIds },
+    { responseType: 'blob' }
+  );
+
 export const computeFile = (body) =>
   api.post('/files/compute', body).then((r) => r.data);
 
@@ -77,6 +107,12 @@ export const getDeviceSparseSparam = (id, param = 'z_mag_db', piezo = '308', nPo
   api
     .get(`/devices/${id}/sparam-sparse`, { params: { param, piezo, n_points: nPoints } })
     .then((r) => r.data);
+
+export const getMasonMaterial = () =>
+  api.get('/mason-sim/material').then((r) => r.data);
+
+export const postMasonScan = (payload) =>
+  api.post('/mason-sim/scan', payload).then((r) => r.data);
 
 export const downloadBatchZip = (batchNo) =>
   api.get(`/batches/${encodeURIComponent(batchNo)}/download-zip`, {
