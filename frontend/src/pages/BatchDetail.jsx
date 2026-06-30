@@ -10,6 +10,7 @@ import {
 } from '../api/endpoints.js';
 import DeviceModal from '../components/DeviceModal.jsx';
 import useFields, { displayLabel } from '../hooks/useFields.js';
+import { usePageState } from '../contexts/PageStateContext.jsx';
 
 const DeviceRow = memo(function DeviceRow({ device, columns, fmtCell, onRowClick, onDownload }) {
   const d = device;
@@ -93,14 +94,23 @@ const EXPORT_FIELDS = [
   'deembedded', 's_param_path',
 ];
 
+const BATCH_DETAIL_INITIAL_STATE = {
+  page: 1,
+  waferFilter: '',
+  pfFilter: '',
+};
+
 export default function BatchDetail() {
   const { batchNo } = useParams();
+  const [state, setState] = usePageState('batchDetail', BATCH_DETAIL_INITIAL_STATE);
+  const { page, waferFilter, pfFilter } = state;
+  const setPage = useCallback((v) => setState((s) => ({ ...s, page: typeof v === 'function' ? v(s.page) : v })), [setState]);
+  const setWaferFilter = useCallback((v) => setState((s) => ({ ...s, waferFilter: typeof v === 'function' ? v(s.waferFilter) : v })), [setState]);
+  const setPfFilter = useCallback((v) => setState((s) => ({ ...s, pfFilter: typeof v === 'function' ? v(s.pfFilter) : v })), [setState]);
+
   const [detail, setDetail] = useState(null);
   const [devices, setDevices] = useState({ items: [], total: 0 });
-  const [page, setPage] = useState(1);
   const [size] = useState(50);
-  const [waferFilter, setWaferFilter] = useState('');
-  const [pfFilter, setPfFilter] = useState('');
   const [error, setError] = useState(null);
   const [activeDevice, setActiveDevice] = useState(null);
   const [exporting, setExporting] = useState(false);

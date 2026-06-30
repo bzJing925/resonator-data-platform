@@ -1,8 +1,9 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import I from '../components/Icons.jsx';
 import { listMappings, uploadBatch } from '../api/endpoints.js';
 import { useUploadProgress } from '../contexts/UploadProgressContext.jsx';
+import { usePageState } from '../contexts/PageStateContext.jsx';
 import useSSE from '../hooks/useSSE.js';
 
 function ProgressBar({ label, pct, status, compact = false }) {
@@ -37,15 +38,33 @@ function ProgressBar({ label, pct, status, compact = false }) {
   );
 }
 
+const UPLOAD_INITIAL_STATE = {
+  mappingId: '',
+  fStart: '',
+  fEnd: '',
+  deembed: false,
+  deembedMethod: 'default',
+};
+
 export default function Upload() {
+  const [state, setState] = usePageState('upload', UPLOAD_INITIAL_STATE);
+  const {
+    mappingId,
+    fStart,
+    fEnd,
+    deembed,
+    deembedMethod,
+  } = state;
+
+  const setMappingId = useCallback((v) => setState((s) => ({ ...s, mappingId: typeof v === 'function' ? v(s.mappingId) : v })), [setState]);
+  const setFStart = useCallback((v) => setState((s) => ({ ...s, fStart: typeof v === 'function' ? v(s.fStart) : v })), [setState]);
+  const setFEnd = useCallback((v) => setState((s) => ({ ...s, fEnd: typeof v === 'function' ? v(s.fEnd) : v })), [setState]);
+  const setDeembed = useCallback((v) => setState((s) => ({ ...s, deembed: typeof v === 'function' ? v(s.deembed) : v })), [setState]);
+  const setDeembedMethod = useCallback((v) => setState((s) => ({ ...s, deembedMethod: typeof v === 'function' ? v(s.deembedMethod) : v })), [setState]);
+
   const [mappings, setMappings] = useState([]);
-  const [mappingId, setMappingId] = useState('');
   const [files, setFiles] = useState([]);
   const [dragOver, setDragOver] = useState(false);
-  const [fStart, setFStart] = useState('');
-  const [fEnd, setFEnd] = useState('');
-  const [deembed, setDeembed] = useState(false);
-  const [deembedMethod, setDeembedMethod] = useState('default');
   const [submitting, setSubmitting] = useState(false);
   const [taskInfo, setTaskInfo] = useState(null);
   const [submitError, setSubmitError] = useState(null);

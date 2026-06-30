@@ -7,6 +7,7 @@ import I from './components/Icons.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import { getHealth } from './api/endpoints.js';
 import { UploadProgressProvider } from './contexts/UploadProgressContext.jsx';
+import { PageStateProvider } from './contexts/PageStateContext.jsx';
 
 // 路由懒加载：非首屏页面按需加载，显著减小初始 bundle
 const Upload       = React.lazy(() => import('./pages/Upload.jsx'));
@@ -97,32 +98,34 @@ export default function App() {
   }, []);
 
   return (
-    <UploadProgressProvider>
-      <div className="app">
-        <Titlebar health={health} />
-        <Sidebar />
-        <div className="main">
-          <ErrorBoundary>
-            <Suspense fallback={<PageLoader />}>
-              <Routes>
-                <Route path="/" element={<Dashboard />} />
-                <Route path="/explore" element={<Explore />} />
-                <Route path="/batches" element={<Batches />} />
-                <Route path="/batches/:batchNo" element={<BatchDetail />} />
-                <Route path="/mappings" element={<Mappings />} />
-                <Route path="/upload" element={<Upload />} />
-                <Route path="/tasks" element={<Tasks />} />
-                <Route path="/tasks/:taskId" element={<TaskDetail />} />
-                <Route path="/impedance" element={<Impedance />} />
-                <Route path="*" element={<NotFound />} />
-              </Routes>
-            </Suspense>
-          </ErrorBoundary>
+    <PageStateProvider>
+      <UploadProgressProvider>
+        <div className="app">
+          <Titlebar health={health} />
+          <Sidebar />
+          <div className="main">
+            <ErrorBoundary>
+              <Suspense fallback={<PageLoader />}>
+                <Routes>
+                  <Route path="/" element={<Dashboard />} />
+                  <Route path="/explore" element={<Explore />} />
+                  <Route path="/batches" element={<Batches />} />
+                  <Route path="/batches/:batchNo" element={<BatchDetail />} />
+                  <Route path="/mappings" element={<Mappings />} />
+                  <Route path="/upload" element={<Upload />} />
+                  <Route path="/tasks" element={<Tasks />} />
+                  <Route path="/tasks/:taskId" element={<TaskDetail />} />
+                  <Route path="/impedance" element={<Impedance />} />
+                  <Route path="*" element={<NotFound />} />
+                </Routes>
+              </Suspense>
+            </ErrorBoundary>
+          </div>
+          <Statusbar />
+          <FloatingUploadProgress />
         </div>
-        <Statusbar />
-        <FloatingUploadProgress />
-      </div>
-    </UploadProgressProvider>
+      </UploadProgressProvider>
+    </PageStateProvider>
   );
 }
 
