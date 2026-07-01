@@ -15,7 +15,6 @@ from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import ColumnElement, and_, distinct, func, null, or_, select
 
 from app.api.deps import ALLOWED_QUERY_FIELDS, DEVICE_COLUMNS, DbSession
-from app.config import get_settings
 from app.models import Batch, Device
 from app.schemas.query import (
     AggregateRequest,
@@ -23,6 +22,7 @@ from app.schemas.query import (
     QueryRequest,
     QueryResponse,
 )
+from app.services.redis_service import get_redis_client
 
 log = logging.getLogger("aln")
 router = APIRouter(prefix="/query", tags=["query"])
@@ -43,23 +43,8 @@ def _query_cache_key(prefix: str, req: QueryRequest | AggregateRequest) -> str:
     return f"aln:query:{prefix}:{h}"
 
 
-def _get_redis() -> Any | None:
-    """惰性获取 Redis 连接；Redis 故障时返回 None，业务继续走 DB。"""
-    try:
-        from redis import Redis
-
-        return Redis.from_url(
-            get_settings().REDIS_URL,
-            decode_responses=True,
-            socket_connect_timeout=1,
-            socket_timeout=1,
-        )
-    except Exception:
-        return None
-
-
 def _cache_get(key: str) -> dict[str, Any] | None:
-    r = _get_redis()
+    r = get_redis_client()
     if r is None:
         return None
     try:
@@ -72,7 +57,7 @@ def _cache_get(key: str) -> dict[str, Any] | None:
 
 
 def _cache_set(key: str, value: dict[str, Any], ttl: int = _QUERY_CACHE_TTL) -> None:
-    r = _get_redis()
+    r = get_redis_client()
     if r is None:
         return
     try:
@@ -140,9 +125,9 @@ def _leaf_clause(field: str, op: str, val: Any) -> ColumnElement[bool]:
 
 def _build_filter_clause(name: str, spec: Any) -> ColumnElement[bool]:
     """旧版按字段聚合的格式：
-       - list  →  IN
-       - dict  →  多操作符 AND
-       - 标量  →  等值
+    - list  →  IN
+    - dict  →  多操作符 AND
+    - 标量  →  等值
     """
     if isinstance(spec, list):
         if not spec:
@@ -208,9 +193,7 @@ def _build_filters(filters: Any) -> list[ColumnElement[bool]]:
     raise HTTPException(status_code=400, detail="filters 必须是字典")
 
 
-def _aggregate_expr(
-    field: str, op: str, *, dialect: str | None = None
-) -> ColumnElement[Any]:
+def _aggregate_expr(field: str, op: str, *, dialect: str | None = None) -> ColumnElement[Any]:
     col = _resolve_column(field)
     if op == "count":
         return func.count(col)
@@ -285,9 +268,7 @@ def query_devices(req: QueryRequest, db: DbSession) -> QueryResponse:
     if req.order_by is not None:
         order_key = req.order_by.lstrip("-+")
         order_col = _resolve_column(order_key)
-        stmt = stmt.order_by(
-            order_col.desc() if req.order_by.startswith("-") else order_col.asc()
-        )
+        stmt = stmt.order_by(order_col.desc() if req.order_by.startswith("-") else order_col.asc())
 
     # ── COUNT 优化 ──────────────────────────────────────────────
     # skip_count=True 时避免精确 COUNT(*)，用 LIMIT+1 判断 truncated。
@@ -301,9 +282,7 @@ def query_devices(req: QueryRequest, db: DbSession) -> QueryResponse:
         total = len(rows) if not truncated else limit + 1
     else:
         count_stmt = (
-            select(func.count())
-            .select_from(Device)
-            .join(Batch, Device.batch_id == Batch.id)
+            select(func.count()).select_from(Device).join(Batch, Device.batch_id == Batch.id)
         )
         if where:
             count_stmt = count_stmt.where(*where)

@@ -1,7 +1,7 @@
 """PostgreSQL COPY 批量入库单元测试。
 
-覆盖 _bulk_insert_devices 的阈值判断、COPY 调用、异常降级，
-以及 _COPY_COLUMNS 与 Device 表定义的一致性。
+覆盖 bulk_insert_devices 的阈值判断、COPY 调用、异常降级，
+以及 DEVICE_COPY_COLUMNS 与 Device 表定义的一致性。
 """
 
 from __future__ import annotations
@@ -13,15 +13,15 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app.models import Device
-from app.workers.process_batch import (
-    _COPY_COLUMNS,
-    _bulk_insert_devices,
-    _copy_insert_devices,
+from app.services.device_ingest import (
+    DEVICE_COPY_COLUMNS,
+    bulk_insert_devices,
+    copy_insert_devices,
 )
 
 
 def _make_rows(n: int) -> list[dict[str, Any]]:
-    """构造 n 行符合 _COPY_COLUMNS 的测试数据。"""
+    """构造 n 行符合 DEVICE_COPY_COLUMNS 的测试数据。"""
     base = {
         "batch_id": 1,
         "original_filename": "test.s1p",
@@ -63,38 +63,38 @@ def _make_rows(n: int) -> list[dict[str, Any]]:
     return [{**base, "original_filename": f"test_{i}.s1p"} for i in range(n)]
 
 
-# ── _COPY_COLUMNS 一致性 ─────────────────────────────────────────────────
+# ── DEVICE_COPY_COLUMNS 一致性 ─────────────────────────────────────────────────
 
 
 def test_copy_columns_match_device_table() -> None:
-    """_COPY_COLUMNS 的顺序应与 Device 表列一致（排除自增 id）。"""
+    """DEVICE_COPY_COLUMNS 的顺序应与 Device 表列一致（排除自增 id）。"""
     device_cols = [c.name for c in Device.__table__.columns]
     assert "id" in device_cols
     assert device_cols[0] == "id"
     non_id_cols = device_cols[1:]
-    assert _COPY_COLUMNS == non_id_cols
+    assert DEVICE_COPY_COLUMNS == non_id_cols
 
 
 def test_copy_columns_no_id() -> None:
-    """_COPY_COLUMNS 不应包含自增主键 id。"""
-    assert "id" not in _COPY_COLUMNS
+    """DEVICE_COPY_COLUMNS 不应包含自增主键 id。"""
+    assert "id" not in DEVICE_COPY_COLUMNS
 
 
 # ── 阈值判断 ─────────────────────────────────────────────────────────────
 
 
 def test_bulk_insert_calls_copy_above_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
-    """行数 >= 3000 时优先调用 _copy_insert_devices。"""
+    """行数 >= 3000 时优先调用 copy_insert_devices。"""
     copy_called = False
 
     def _fake_copy(_db: Session, rows: list[dict[str, Any]]) -> None:
         nonlocal copy_called
         copy_called = True
 
-    monkeypatch.setattr("app.workers.process_batch._copy_insert_devices", _fake_copy)
+    monkeypatch.setattr("app.services.device_ingest.copy_insert_devices", _fake_copy)
     db = MagicMock(spec=Session)
     rows = _make_rows(3000)
-    _bulk_insert_devices(db, rows)
+    bulk_insert_devices(db, rows)
     assert copy_called is True
 
 
@@ -106,10 +106,10 @@ def test_bulk_insert_calls_orm_below_threshold(monkeypatch: pytest.MonkeyPatch) 
         nonlocal copy_called
         copy_called = True
 
-    monkeypatch.setattr("app.workers.process_batch._copy_insert_devices", _fake_copy)
+    monkeypatch.setattr("app.services.device_ingest.copy_insert_devices", _fake_copy)
     db = MagicMock(spec=Session)
     rows = _make_rows(2999)
-    _bulk_insert_devices(db, rows)
+    bulk_insert_devices(db, rows)
     assert copy_called is False
     db.bulk_insert_mappings.assert_called_once_with(Device, rows)
     db.commit.assert_called_once()
@@ -119,9 +119,9 @@ def test_bulk_insert_calls_orm_below_threshold(monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_bulk_insert_empty_rows_noop() -> None:
-    """空列表 → 什么都不做、不抛异常。"""
+    """空列表 -> 什么都不做、不抛异常。"""
     db = MagicMock(spec=Session)
-    _bulk_insert_devices(db, [])
+    bulk_insert_devices(db, [])
     db.bulk_insert_mappings.assert_not_called()
     db.commit.assert_not_called()
 
@@ -130,25 +130,25 @@ def test_bulk_insert_empty_rows_noop() -> None:
 
 
 def test_copy_fallback_on_exception(monkeypatch: pytest.MonkeyPatch) -> None:
-    """COPY 抛异常 → 降级到 bulk_insert_mappings，不中断。"""
+    """COPY 抛异常 -> 降级到 bulk_insert_mappings，不中断。"""
 
     def _exploding_copy(_db: Session, _rows: list[dict[str, Any]]) -> None:
         raise RuntimeError("COPY 协议失败")
 
-    monkeypatch.setattr("app.workers.process_batch._copy_insert_devices", _exploding_copy)
+    monkeypatch.setattr("app.services.device_ingest.copy_insert_devices", _exploding_copy)
     db = MagicMock(spec=Session)
     rows = _make_rows(3000)
-    _bulk_insert_devices(db, rows)
+    bulk_insert_devices(db, rows)
     # 降级后调用 ORM
     db.bulk_insert_mappings.assert_called_once_with(Device, rows)
     db.commit.assert_called_once()
 
 
-# ── _copy_insert_devices 直接测试（mock psycopg cursor）──────────────────
+# ── copy_insert_devices 直接测试（mock psycopg cursor）──────────────────
 
 
 def test_copy_insert_writes_all_rows(monkeypatch: pytest.MonkeyPatch) -> None:
-    """_copy_insert_devices 应逐行写入 COPY 缓冲区。"""
+    """copy_insert_devices 应逐行写入 COPY 缓冲区。"""
     written_rows: list[tuple[Any, ...]] = []
 
     class FakeCopy:
@@ -185,8 +185,8 @@ def test_copy_insert_writes_all_rows(monkeypatch: pytest.MonkeyPatch) -> None:
     db.connection.return_value.connection = fake_raw_conn
 
     rows = _make_rows(5)
-    _copy_insert_devices(db, rows)
+    copy_insert_devices(db, rows)
     assert len(written_rows) == 5
-    # 第一行应与 _COPY_COLUMNS 顺序一致
+    # 第一行应与 DEVICE_COPY_COLUMNS 顺序一致
     first = written_rows[0]
-    assert len(first) == len(_COPY_COLUMNS)
+    assert len(first) == len(DEVICE_COPY_COLUMNS)

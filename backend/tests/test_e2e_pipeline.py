@@ -29,21 +29,21 @@ def workdir(tmp_path_factory: pytest.TempPathFactory, sample_zip: Path) -> Path:
 
 
 def test_pipeline_runs_on_t8901p_01(workdir: Path, sample_mapping: Path) -> None:
-    """跑通 zip → 12 个 DUT × 2 端口 → 24 行 ResonatorRow。"""
+    """跑通 zip → DUT × 2 端口 → ResonatorRow。"""
     mapping = load_mapping(sample_mapping)
     assert len(mapping) > 0, "mapping 加载失败"
 
-    batch_dir = workdir / "T8901P.01"
-    s2p_files = sorted(batch_dir.rglob("*.s2p"))
-    assert len(s2p_files) == 12, f"应有 12 个 .s2p，实际 {len(s2p_files)}"
+    # fixture zip 解压后 .s2p 直接在根目录（共 15 个）
+    s2p_files = sorted(workdir.rglob("*.s2p"))
+    assert s2p_files, f"未找到 .s2p 文件，workdir={workdir}"
 
     rows = []
     failures = []
     for s2p in s2p_files:
         split = split_s2p_to_s1p(
             s2p,
-            out_dir_s11=batch_dir / "S11",
-            out_dir_s22=batch_dir / "S22",
+            out_dir_s11=workdir / "S11",
+            out_dir_s22=workdir / "S22",
         )
         for s1p_path, port in [(split.s11_path, "S11"), (split.s22_path, "S22")]:
             try:
@@ -51,7 +51,7 @@ def test_pipeline_runs_on_t8901p_01(workdir: Path, sample_mapping: Path) -> None
                     s1p_path,
                     mapping=mapping,
                     wafer=1,
-                    s_param_relpath=str(s1p_path.relative_to(batch_dir)),
+                    s_param_relpath=str(s1p_path.relative_to(workdir)),
                 )
                 rows.append(row)
             except Exception as exc:

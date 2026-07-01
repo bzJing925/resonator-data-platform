@@ -18,6 +18,7 @@ from app.core.extract import ExtractError, extract_resonator_params
 from app.core.mapping import load_mapping
 from app.db import SessionLocal
 from app.models import Batch, Device, Mapping
+from app.services.device_ingest import bulk_insert_devices
 from app.workers.celery_app import celery_app
 from app.workers.progress import ProgressPublisher
 
@@ -25,17 +26,6 @@ logger = logging.getLogger(__name__)
 
 INSERT_CHUNK = 2000
 _PARALLEL_MIN_FILES = 50
-
-# COPY 目标列（排除自增 id，与 devices 表定义顺序一致）
-_COPY_COLUMNS = [
-    "batch_id", "original_filename", "display_name", "mark", "wafer",
-    "folder_name", "coord", "x", "y", "eg", "fl", "ag", "pf",
-    "area_n", "area_um2", "fs_ghz", "fp_ghz", "zs_ohm", "zp_ohm",
-    "qs", "qp", "qs_bodeq", "qp_bodeq", "dbqs", "dbqp",
-    "bodeq_fitted", "bodeq_smooth", "bodeq_raw", "fbode_ghz", "k2eff_pct",
-    "fp2_ghz", "fs2_ghz", "zp2_ohm", "zs2_ohm", "deembedded", "s_param_path",
-    "s_param_port",
-]
 
 
 def _extract_single(args: tuple) -> dict[str, Any]:
@@ -113,9 +103,7 @@ def compute_batch_task(self: Task, extract_result: dict[str, Any]) -> dict[str, 
                 wafer,
                 item.get("s_param_relpath")
                 or (
-                    str(Path(item["path"]).relative_to(target_dir))
-                    if target_dir
-                    else item["path"]
+                    str(Path(item["path"]).relative_to(target_dir)) if target_dir else item["path"]
                 ),
                 item["deembedded"],
                 f_start_ghz,
@@ -127,11 +115,7 @@ def compute_batch_task(self: Task, extract_result: dict[str, Any]) -> dict[str, 
 
         algo_cfg = get_algorithm_config()
         parallel_workers = algo_cfg.worker_extract_workers
-        use_parallel = (
-            parallel_workers > 1
-            and total >= _PARALLEL_MIN_FILES
-            and os.name != "nt"
-        )
+        use_parallel = parallel_workers > 1 and total >= _PARALLEL_MIN_FILES and os.name != "nt"
 
         if use_parallel:
             try:
@@ -157,9 +141,7 @@ def compute_batch_task(self: Task, extract_result: dict[str, Any]) -> dict[str, 
                         wafer=wafer,
                         s_param_relpath=item.get("s_param_relpath")
                         or (
-                            str(Path(s1p_path).relative_to(target_dir))
-                            if target_dir
-                            else s1p_path
+                            str(Path(s1p_path).relative_to(target_dir)) if target_dir else s1p_path
                         ),
                         deembedded=item["deembedded"],
                         f_start_ghz=f_start_ghz,
@@ -188,11 +170,11 @@ def compute_batch_task(self: Task, extract_result: dict[str, Any]) -> dict[str, 
                     last_pct = stage_pct
 
                 if len(device_rows) >= INSERT_CHUNK:
-                    _bulk_insert_devices(db, device_rows)
+                    bulk_insert_devices(db, device_rows)
                     device_rows = []
 
             if device_rows:
-                _bulk_insert_devices(db, device_rows)
+                bulk_insert_devices(db, device_rows)
 
         device_count = (
             db.scalar(select(func.count(Device.id)).where(Device.batch_id == batch.id)) or 0
@@ -286,41 +268,10 @@ def _extract_parallel(
                 last_pct = stage_pct
 
             if len(device_rows) >= INSERT_CHUNK:
-                _bulk_insert_devices(db, device_rows)
+                bulk_insert_devices(db, device_rows)
                 device_rows = []
 
     if device_rows:
-        _bulk_insert_devices(db, device_rows)
+        bulk_insert_devices(db, device_rows)
 
     return device_rows, failures
-
-
-def _bulk_insert_devices(db: Session, rows: list[dict[str, Any]]) -> None:
-    """批量插入 Device；大行数走 PostgreSQL COPY。"""
-    if not rows:
-        return
-
-    copy_threshold = 3000
-    if len(rows) >= copy_threshold:
-        try:
-            _copy_insert_devices(db, rows)
-            return
-        except Exception:
-            logger.exception("COPY 批量插入失败，降级到 bulk_insert")
-
-    db.bulk_insert_mappings(Device, rows)
-    db.commit()
-
-
-def _copy_insert_devices(db: Session, rows: list[dict[str, Any]]) -> None:
-    """用 PostgreSQL COPY FROM 批量插入。"""
-    raw_conn = db.connection().connection
-    cols_sql = ", ".join(_COPY_COLUMNS)
-    copy_sql = f"COPY devices ({cols_sql}) FROM STDIN"
-
-    with raw_conn.cursor() as cur:
-        with cur.copy(copy_sql) as copy:
-            for r in rows:
-                copy.write_row(tuple(r.get(c) for c in _COPY_COLUMNS))
-
-    db.commit()

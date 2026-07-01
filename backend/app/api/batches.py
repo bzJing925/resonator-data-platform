@@ -15,6 +15,7 @@ from app.api.deps import DEVICE_COLUMNS, DbSession
 from app.config import get_settings
 from app.models import Batch, Device, Mapping
 from app.schemas.batch import BatchDetail, BatchListItem, BatchListResponse, BatchStats
+from app.services.batch_stats_service import get_batch_stats
 
 router = APIRouter(prefix="/batches", tags=["batches"])
 
@@ -83,43 +84,8 @@ def get_batch(batch_no: str, db: DbSession) -> BatchDetail:
     ).all()
     wafers = [int(w[0]) for w in wafers_rows if w[0] is not None]
 
-    # ── 优先从物化视图读取批次统计（避免对 devices 大表实时聚合）────
-    fs_mean = fs_median = pass_rate = None
-    total_dev = batch.device_count  # 已冗余存储，无需再 count
-    try:
-        from sqlalchemy import text
-
-        mv_rows = db.execute(
-            text("""
-                SELECT
-                    COALESCE(SUM(pass_count), 0) AS pass_count,
-                    AVG(avg_fs_ghz) AS fs_mean,
-                    AVG(median_fs_ghz) AS fs_median
-                FROM mv_batch_stats
-                WHERE batch_id = :batch_id
-            """),
-            {"batch_id": batch.id},
-        ).mappings().all()
-        if mv_rows:
-            mv = mv_rows[0]
-            pass_count = int(mv["pass_count"] or 0)
-            fs_mean = mv["fs_mean"]
-            fs_median = mv["fs_median"]
-            pass_rate = (pass_count / total_dev) if total_dev > 0 else None
-    except Exception:
-        # 物化视图不存在或查询失败时回退到实时聚合
-        fs_mean = db.scalar(select(func.avg(Device.fs_ghz)).where(Device.batch_id == batch.id))
-        fs_median = db.scalar(
-            select(func.percentile_cont(0.5).within_group(Device.fs_ghz.asc())).where(
-                Device.batch_id == batch.id
-            )
-        )
-        pass_count = db.scalar(
-            select(func.count())
-            .select_from(Device)
-            .where(Device.batch_id == batch.id, Device.pf == "Y")
-        ) or 0
-        pass_rate = (pass_count / total_dev) if total_dev > 0 else None
+    # ── 批次统计 ─────────────────────────────────────────────────
+    stats = get_batch_stats(db, batch.id, total_dev=batch.device_count)
 
     return BatchDetail(
         batch_no=batch.batch_no,
@@ -135,11 +101,7 @@ def get_batch(batch_no: str, db: DbSession) -> BatchDetail:
         uploaded_at=batch.uploaded_at,
         uploaded_by=batch.uploaded_by,
         wafers=wafers,
-        stats=BatchStats(
-            fs_ghz_mean=float(fs_mean) if fs_mean is not None else None,
-            fs_ghz_median=float(fs_median) if fs_median is not None else None,
-            pass_rate=pass_rate,
-        ),
+        stats=BatchStats(**stats),
     )
 
 
@@ -191,17 +153,10 @@ def list_batch_devices(
 
     total = db.scalar(select(func.count()).select_from(Device).where(*conditions)) or 0
     stmt = (
-        select(Device)
-        .where(*conditions)
-        .order_by(Device.id)
-        .offset((page - 1) * size)
-        .limit(size)
+        select(Device).where(*conditions).order_by(Device.id).offset((page - 1) * size).limit(size)
     )
     devices = db.scalars(stmt).all()
-    rows = [
-        {col: getattr(d, col) for col in DEVICE_COLUMNS if col != "batch_id"}
-        for d in devices
-    ]
+    rows = [{col: getattr(d, col) for col in DEVICE_COLUMNS if col != "batch_id"} for d in devices]
     for r, d in zip(rows, devices, strict=True):
         r["batch_no"] = batch_no
         r["id"] = d.id

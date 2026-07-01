@@ -15,13 +15,13 @@ from typing import Any
 
 from celery import Task
 from sqlalchemy import delete, func, select, text, update
-from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.core.filename import parse_filename
 from app.core.mapping import load_mapping
 from app.db import SessionLocal
 from app.models import Batch, Device, Mapping
+from app.services.device_ingest import bulk_insert_devices
 from app.services.file_tree_service import build_file_tree_from_disk
 from app.workers.celery_app import celery_app
 from app.workers.pipeline.calibration import CalibrationIndex
@@ -32,47 +32,6 @@ from app.workers.progress import ProgressPublisher
 logger = logging.getLogger(__name__)
 
 INSERT_CHUNK = 2000
-
-# COPY 目标列（排除自增 id，与 devices 表定义顺序一致）
-_COPY_COLUMNS = [
-    "batch_id",
-    "original_filename",
-    "display_name",
-    "mark",
-    "wafer",
-    "folder_name",
-    "coord",
-    "x",
-    "y",
-    "eg",
-    "fl",
-    "ag",
-    "pf",
-    "area_n",
-    "area_um2",
-    "fs_ghz",
-    "fp_ghz",
-    "zs_ohm",
-    "zp_ohm",
-    "qs",
-    "qp",
-    "qs_bodeq",
-    "qp_bodeq",
-    "dbqs",
-    "dbqp",
-    "bodeq_fitted",
-    "bodeq_smooth",
-    "bodeq_raw",
-    "fbode_ghz",
-    "k2eff_pct",
-    "fp2_ghz",
-    "fs2_ghz",
-    "zp2_ohm",
-    "zs2_ohm",
-    "deembedded",
-    "s_param_path",
-    "s_param_port",
-]
 
 
 def should_use_pipeline(zip_path: str, deembed: bool) -> bool:
@@ -121,37 +80,6 @@ def _wafer_from_batch_no(batch_no: str) -> int | None:
         except ValueError:
             return None
     return None
-
-
-def _bulk_insert_devices(db: Session, rows: list[dict[str, Any]]) -> None:
-    """批量插入 Device；大行数走 PostgreSQL COPY。"""
-    if not rows:
-        return
-
-    copy_threshold = 3000
-    if len(rows) >= copy_threshold:
-        try:
-            _copy_insert_devices(db, rows)
-            return
-        except Exception:
-            logger.exception("COPY 批量插入失败，降级到 bulk_insert")
-
-    db.bulk_insert_mappings(Device, rows)
-    db.commit()
-
-
-def _copy_insert_devices(db: Session, rows: list[dict[str, Any]]) -> None:
-    """用 PostgreSQL COPY FROM 批量插入。"""
-    raw_conn = db.connection().connection
-    cols_sql = ", ".join(_COPY_COLUMNS)
-    copy_sql = f"COPY devices ({cols_sql}) FROM STDIN"
-
-    with raw_conn.cursor() as cur:
-        with cur.copy(copy_sql) as copy:
-            for r in rows:
-                copy.write_row(tuple(r.get(c) for c in _COPY_COLUMNS))
-
-    db.commit()
 
 
 @celery_app.task(bind=True, name="aln.pipeline_batch")
@@ -315,7 +243,7 @@ def pipeline_batch_task(
                     last_pct = stage_pct
 
                 if len(device_rows) >= INSERT_CHUNK:
-                    _bulk_insert_devices(db, device_rows)
+                    bulk_insert_devices(db, device_rows)
                     device_rows = []
         else:
             with ProcessPoolExecutor(max_workers=max_workers) as exe:
@@ -360,11 +288,11 @@ def pipeline_batch_task(
                         last_pct = stage_pct
 
                     if len(device_rows) >= INSERT_CHUNK:
-                        _bulk_insert_devices(db, device_rows)
+                        bulk_insert_devices(db, device_rows)
                         device_rows = []
 
         if device_rows:
-            _bulk_insert_devices(db, device_rows)
+            bulk_insert_devices(db, device_rows)
 
         # ── 4. 收尾 ─────────────────────────────────────────────────
         device_count = (

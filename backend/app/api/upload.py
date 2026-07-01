@@ -15,12 +15,17 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import DbSession
 from app.config import get_settings
 from app.core.touchstone import detect_snp_type
 from app.schemas.upload import UploadAccepted
-from app.services.upload_service import create_batch_and_dispatch
+from app.services.upload_service import (
+    MappingNotFoundError,
+    TaskDispatchError,
+    create_batch_and_dispatch,
+)
 
 router = APIRouter(prefix="/uploads", tags=["uploads"])
 
@@ -144,6 +149,17 @@ def create_upload(
             raise HTTPException(status_code=409, detail=f"批次 {batch_no} 已存在")
     except HTTPException:
         raise
+    except IntegrityError:
+        saved_path.unlink(missing_ok=True)
+        raise
+    except MappingNotFoundError as exc:
+        saved_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except TaskDispatchError as exc:
+        saved_path.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=503, detail=f"任务队列不可用: {exc}"
+        ) from exc
     except Exception as exc:
         saved_path.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail=f"创建批次失败: {exc!s}") from exc

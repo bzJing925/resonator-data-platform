@@ -8,25 +8,23 @@ from __future__ import annotations
 
 import gzip
 import logging
-import re
 import shutil
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
-import numpy as np
 import skrf
 import zipstream
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func, select, text, update
+from sqlalchemy import func, select
 
 from app.api.deps import DEVICE_COLUMNS, DbSession
-from app.core.extract import ExtractError, extract_resonator_params
-from app.core.mapping import load_mapping
+from app.core.curves import PARAM_CHOICES, compute_sparam_curve
+from app.core.extract import ExtractError
 from app.core.touchstone import split_s2p_to_s1p
-from app.models import Batch, Device, FileNode, Mapping
+from app.models import Batch, Device, FileNode
 from app.schemas.file import (
     BatchFileItem,
     ComputeFileRequest,
@@ -42,13 +40,17 @@ from app.schemas.file import (
     FileTreeReorderRequest,
     SplitS2PRequest,
 )
+from app.services.batch_stats_service import refresh_mv_batch_stats
+from app.services.compute_service import (
+    ComputeServiceError,
+    compute_single_device,
+    sync_batch_device_count,
+)
 from app.services.file_tree_service import (
     batch_files_dir,
     build_file_tree_from_disk,
     get_or_create_root_node,
 )
-
-_PARAM_CHOICES = ("s11_db", "s11_phase", "s11_re_im", "z_mag_db", "z_phase")
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/files", tags=["files"])
@@ -290,8 +292,8 @@ def get_file_curve(
     param: Annotated[str, Query()] = "z_mag_db",
 ) -> FileCurveResponse:
     """直接从批次解压目录读取指定文件的 S 参数 / 阻抗曲线（无需先入库）。"""
-    if param not in _PARAM_CHOICES:
-        raise HTTPException(status_code=400, detail=f"param 必须是 {','.join(_PARAM_CHOICES)} 之一")
+    if param not in PARAM_CHOICES:
+        raise HTTPException(status_code=400, detail=f"param 必须是 {','.join(PARAM_CHOICES)} 之一")
 
     batch = db.scalar(select(Batch).where(Batch.batch_no == batch_no))
     if batch is None:
@@ -305,40 +307,19 @@ def get_file_curve(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"读取 S 参数文件失败: {exc}") from exc
 
-    freq_ghz = (net.f / 1e9).tolist()
-    s = net.s[:, 0, 0]
-
-    if param == "s11_db":
-        values = (20 * np.log10(np.maximum(np.abs(s), 1e-12))).tolist()
-    elif param == "s11_phase":
-        values = [float(v) for v in np.degrees(np.unwrap(np.angle(s)))]
-    elif param == "s11_re_im":
-        return FileCurveResponse(
-            batch_no=batch_no,
-            relpath=relpath,
-            param=param,
-            freq_ghz=freq_ghz,
-            values=[],
-            values_re=np.real(s).tolist(),
-            values_im=np.imag(s).tolist(),
-        )
-    elif param == "z_mag_db":
-        z0 = net.z0[0, 0]
-        z = z0 * (1 + s) / (1 - s)
-        values = (20 * np.log10(np.maximum(np.abs(z), 1e-12))).tolist()
-    elif param == "z_phase":
-        z0 = net.z0[0, 0]
-        z = z0 * (1 + s) / (1 - s)
-        values = [float(v) for v in np.degrees(np.unwrap(np.angle(z)))]
-    else:
-        raise HTTPException(status_code=400, detail="param 不支持")
+    try:
+        curve = compute_sparam_curve(net, param)  # type: ignore[arg-type]
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return FileCurveResponse(
         batch_no=batch_no,
         relpath=relpath,
         param=param,
-        freq_ghz=freq_ghz,
-        values=values,
+        freq_ghz=curve["freq_ghz"],
+        values=curve.get("values", []),
+        values_re=curve.get("values_re"),
+        values_im=curve.get("values_im"),
     )
 
 
@@ -352,66 +333,23 @@ def compute_single_file(db: DbSession, body: ComputeFileRequest) -> ComputeFileR
     base_dir = batch_files_dir(body.batch_no)
     target_path = _find_actual_path(base_dir, body.relpath)
 
-    mapping_row = db.get(Mapping, batch.mapping_id) if batch.mapping_id else None
-    mapping_dict = load_mapping(mapping_row.file_path) if mapping_row else {}
-
-    wafer = None
-    m = re.search(r"\.(\d+)$", body.batch_no)
-    if m:
-        try:
-            wafer = int(m.group(1))
-        except ValueError:
-            pass
-
     try:
-        row = extract_resonator_params(
-            target_path,
-            mapping=mapping_dict,
-            wafer=wafer,
-            s_param_relpath=body.relpath,
-            deembedded=body.deembedded,
+        device = compute_single_device(
+            db,
+            batch=batch,
+            relpath=body.relpath,
+            target_path=target_path,
             f_start_ghz=body.f_start_ghz,
             f_end_ghz=body.f_end_ghz,
-            skip_validation=True,
+            deembedded=body.deembedded,
         )
+    except ComputeServiceError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     except ExtractError as exc:
         raise HTTPException(status_code=422, detail=f"指标计算失败: {exc}") from exc
-    except Exception as exc:
-        logger.exception("单文件计算异常 %s", body.relpath)
-        raise HTTPException(status_code=500, detail=f"计算异常: {exc}") from exc
 
-    row["batch_id"] = batch.id
-
-    # 按 (batch_id, s_param_path, s_param_port) 查找是否已存在，存在则更新，否则插入
-    existing = db.scalar(
-        select(Device).where(
-            Device.batch_id == batch.id,
-            Device.s_param_path == body.relpath,
-            Device.s_param_port == row.get("s_param_port", "S11"),
-        )
-    )
-    if existing is not None:
-        for col in DEVICE_COLUMNS:
-            if col == "id":
-                continue
-            if col in row:
-                setattr(existing, col, row[col])
-        device = existing
-    else:
-        device = Device(**{col: row.get(col) for col in DEVICE_COLUMNS if col != "id"})
-        db.add(device)
-    db.commit()
-    db.refresh(device)
-
-    # 同步批次统计
-    device_count = db.scalar(select(func.count(Device.id)).where(Device.batch_id == batch.id)) or 0
-    db.execute(update(Batch).where(Batch.id == batch.id).values(device_count=device_count))
-    db.commit()
-    try:
-        db.execute(text("REFRESH MATERIALIZED VIEW CONCURRENTLY mv_batch_stats"))
-        db.commit()
-    except Exception:
-        logger.exception("刷新物化视图失败（非致命）")
+    sync_batch_device_count(db, batch.id)
+    refresh_mv_batch_stats(db)
 
     metrics = {col: getattr(device, col) for col in DEVICE_COLUMNS if col != "batch_id"}
     return ComputeFileResponse(
