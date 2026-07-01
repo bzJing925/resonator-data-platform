@@ -16,8 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
 from app.models import Batch, Mapping, UploadTask
-from app.workers.extract_batch import extract_batch_task
-from app.workers.compute_batch import compute_batch_task
+from app.workers.dispatch import dispatch_batch_task
 
 logger = logging.getLogger(__name__)
 
@@ -35,34 +34,22 @@ def _dispatch_chain(
     process_type: str = "AUTO",
 ) -> str | None:
     """投递 extract_batch → compute_batch，返回 celery_task_id 或 None。"""
-    from celery import chain
-
-    try:
-        result = chain(
-            extract_batch_task.s(
-                upload_task_id=task.id,
-                zip_path=str(zip_path),
-                batch_no=batch_no,
-                mapping_id=mapping_id,
-                f_start_ghz=f_start_ghz,
-                f_end_ghz=f_end_ghz,
-                deembed_enabled=bool(deembed),
-                deembed_method=deembed_method if deembed else "default",
-                process_type=process_type,
-            ),
-            compute_batch_task.s(),
-        ).apply_async()
-        return result.id
-    except ImportError as exc:
-        import traceback
-
-        task.error_msg = f"Celery 导入失败: {exc}\n{traceback.format_exc()}"
-        return None
-    except Exception as exc:
+    celery_task_id = dispatch_batch_task(
+        task_id=task.id,
+        zip_path=zip_path,
+        batch_no=batch_no,
+        mapping_id=mapping_id,
+        f_start_ghz=f_start_ghz,
+        f_end_ghz=f_end_ghz,
+        deembed=deembed,
+        deembed_method=deembed_method,
+        process_type=process_type,
+    )
+    if celery_task_id is None:
         task.status = "failed"
-        task.error_msg = f"任务投递失败: {exc!s}"
+        task.error_msg = "任务投递失败"
         task.finished_at = datetime.now(UTC)
-        return None
+    return celery_task_id
 
 
 def create_batch_and_dispatch(
@@ -83,8 +70,6 @@ def create_batch_and_dispatch(
 
     若 batch_no 已存在，返回 None（调用方应视为重复并跳过/报错）。
     """
-    settings = get_settings()
-
     existing = db.scalar(select(Batch).where(Batch.batch_no == batch_no))
     if existing is not None:
         logger.warning("批次 %s 已存在，跳过重复 %s", batch_no, source)
