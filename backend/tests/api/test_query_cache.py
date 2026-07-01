@@ -49,14 +49,14 @@ class _BrokenRedis:
 @pytest.fixture
 def fake_redis(monkeypatch: pytest.MonkeyPatch) -> _FakeRedis:
     r = _FakeRedis()
-    monkeypatch.setattr("app.api.query._get_redis", lambda: r)
+    monkeypatch.setattr("app.api.query.get_redis_client", lambda: r)
     return r
 
 
 @pytest.fixture
 def broken_redis(monkeypatch: pytest.MonkeyPatch) -> _BrokenRedis:
     r = _BrokenRedis()
-    monkeypatch.setattr("app.api.query._get_redis", lambda: r)
+    monkeypatch.setattr("app.api.query.get_redis_client", lambda: r)
     return r
 
 
@@ -114,7 +114,7 @@ def test_cache_get_miss(fake_redis: _FakeRedis) -> None:
 
 def test_cache_get_redis_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     """Redis 连接失败 → 静默降级返回 None。"""
-    monkeypatch.setattr("app.api.query._get_redis", lambda: None)
+    monkeypatch.setattr("app.api.query.get_redis_client", lambda: None)
     assert _cache_get("any_key") is None
 
 
@@ -140,7 +140,7 @@ def test_cache_set_success(fake_redis: _FakeRedis) -> None:
 
 def test_cache_set_redis_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     """Redis 不可用 → 静默跳过，不抛异常。"""
-    monkeypatch.setattr("app.api.query._get_redis", lambda: None)
+    monkeypatch.setattr("app.api.query.get_redis_client", lambda: None)
     _cache_set("any_key", {"a": 1})  # 不应抛异常
 
 

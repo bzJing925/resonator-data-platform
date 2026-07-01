@@ -86,7 +86,10 @@ class DownloadZipByNodesRequest(BaseModel):
     """按虚拟节点 ID 批量打包下载。"""
 
     batch_no: str = Field(..., description="批次号")
-    node_ids: list[int] = Field(..., description="file 或 folder 节点 ID 列表；folder 会自动展开其下所有 file")
+    node_ids: list[int] = Field(
+        ...,
+        description="file 或 folder 节点 ID 列表；folder 会自动展开其下所有 file",
+    )
 
 
 class DownloadZipRequest(BaseModel):
@@ -111,9 +114,7 @@ class SplitS2PRequest(BaseModel):
 
     batch_no: str = Field(..., description="批次号")
     relpaths: list[str] = Field(..., description="待拆分的 .s2p 相对路径列表")
-    lowercase: bool = Field(
-        default=True, description="输出文件名是否使用小写 _s11/_s22 后缀"
-    )
+    lowercase: bool = Field(default=True, description="输出文件名是否使用小写 _s11/_s22 后缀")
 
 
 class ComputeFileResponse(BaseModel):

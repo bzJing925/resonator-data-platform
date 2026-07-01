@@ -18,13 +18,12 @@ from fastapi.responses import FileResponse
 
 from app.api.deps import DbSession
 from app.config import get_settings
+from app.core.curves import PARAM_CHOICES, compute_sparam_curve
 from app.models import Device
 
 log = logging.getLogger("aln")
 
 router = APIRouter(prefix="/devices", tags=["devices"])
-
-_PARAM_CHOICES = ("s11_db", "s11_phase", "s11_re_im", "z_mag_db", "z_phase")
 
 # 缓存容量 ≈ 100 个文件 × 600 KB ≈ 60 MB，在容器内存预算内。
 _NETWORK_CACHE_SIZE = 128
@@ -39,6 +38,7 @@ def _load_network(path_str: str):
     S1P 文件一旦入库就不会修改，因此缓存不会过期是安全的。
     """
     import skrf
+
     return skrf.Network(path_str)
 
 
@@ -55,6 +55,7 @@ def _calc_bodeq_cached(
     实际 key 是 (s_hash, freq_hash)，s_bytes/freq_bytes 仅用于反序列化。
     """
     from app.core.extract import calc_bodeq_curve
+
     s = np.frombuffer(s_bytes, dtype=np.complex128)
     freq = np.frombuffer(freq_bytes, dtype=np.float64)
     return calc_bodeq_curve(s, freq)
@@ -78,10 +79,8 @@ def device_sparam(
     param: Annotated[str, Query()] = "s11_db",
     fast: Annotated[bool, Query()] = False,
 ) -> dict[str, Any]:
-    if param not in _PARAM_CHOICES:
-        raise HTTPException(
-            status_code=400, detail=f"param 必须是 {','.join(_PARAM_CHOICES)} 之一"
-        )
+    if param not in PARAM_CHOICES:
+        raise HTTPException(status_code=400, detail=f"param 必须是 {','.join(PARAM_CHOICES)} 之一")
 
     device = db.get(Device, device_id)
     if device is None:
@@ -90,6 +89,7 @@ def device_sparam(
     # --- PINN 快速路径（仅 s11_db）---
     if fast and param == "s11_db":
         from app.ml.inference import predict_s11_db
+
         pinn_result = predict_s11_db(device)
         if pinn_result is not None:
             freq_ghz, values = pinn_result
@@ -117,41 +117,19 @@ def device_sparam(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"读取 S 参数失败: {exc!s}") from exc
 
-    freq_ghz = (net.f / 1e9).tolist()
-    s = net.s[:, 0, 0]
+    try:
+        curve = compute_sparam_curve(net, param)  # type: ignore[arg-type]
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    if param == "s11_db":
-        values = (20 * np.log10(np.maximum(np.abs(s), 1e-12))).tolist()
-    elif param == "s11_phase":
-        values = [float(v) for v in np.degrees(np.unwrap(np.angle(s)))]
-    elif param == "s11_re_im":
-        return {
-            "device_id": device_id,
-            "freq_ghz": freq_ghz,
-            "values_re": np.real(s).tolist(),
-            "values_im": np.imag(s).tolist(),
-            "param": param,
-            "file_path": device.s_param_path,
-        }
-    elif param == "z_mag_db":
-        z0 = net.z0[0, 0]
-        z = z0 * (1 + s) / (1 - s)
-        values = (20 * np.log10(np.maximum(np.abs(z), 1e-12))).tolist()
-    elif param == "z_phase":
-        z0 = net.z0[0, 0]
-        z = z0 * (1 + s) / (1 - s)
-        values = [float(v) for v in np.degrees(np.unwrap(np.angle(z)))]
-    else:
-        raise HTTPException(status_code=400, detail="param 不支持")
-
-    return {
+    response: dict[str, Any] = {
         "device_id": device_id,
-        "freq_ghz": freq_ghz,
-        "values": values,
         "param": param,
         "file_path": device.s_param_path,
         "source": "skrf",
     }
+    response.update(curve)
+    return response
 
 
 @router.get("/{device_id}/bodeq")
@@ -175,9 +153,7 @@ def device_bodeq(device_id: int, db: DbSession) -> dict[str, Any]:
         # BodeQ 计算缓存：key 为 numpy array 的 bytes 摘要
         s_bytes = s.tobytes()
         freq_bytes = freq.tobytes()
-        result = _calc_bodeq_cached(
-            hash(s_bytes), hash(freq_bytes), s_bytes, freq_bytes
-        )
+        result = _calc_bodeq_cached(hash(s_bytes), hash(freq_bytes), s_bytes, freq_bytes)
     except HTTPException:
         raise
     except Exception as exc:
@@ -237,6 +213,7 @@ def device_sparam_sparse(
         }
 
     from app.ml.sparse.inference import predict_z11_sparse
+
     result = predict_z11_sparse(
         str(path),
         cond=cond,
@@ -252,6 +229,7 @@ def device_sparam_sparse(
         )
 
     import numpy as np
+
     z_pred = np.array(result["z_pred"])
     z_true = np.array(result["z_true"])
     rmse = float(np.sqrt(np.mean((z_pred - z_true) ** 2)))
