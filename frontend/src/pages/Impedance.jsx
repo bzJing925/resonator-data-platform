@@ -120,7 +120,7 @@ export default function Impedance() {
     }
     setLoadingFiles(true);
     setError(null);
-    listBatchFiles(batchNo)
+    listBatchFiles(batchNo, true)
       .then((data) => {
         setFiles(data || []);
         setFolder('');
