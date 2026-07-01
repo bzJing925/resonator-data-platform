@@ -9,7 +9,8 @@ import logging
 import os
 import re
 import shutil
-from concurrent.futures import ProcessPoolExecutor, as_completed
+import sys
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -203,9 +204,12 @@ def pipeline_batch_task(
         wafer = _wafer_from_batch_no(batch_no)
         total_duts = len(all_duts)
         max_workers = settings.PIPELINE_WORKERS or os.cpu_count() or 1
-        # macOS spawn 模式下多进程有 pickle 开销，小批次直接单线程
+        # macOS 下 Celery worker 子进程是 daemonic，无法再通过 ProcessPoolExecutor
+        # 创建子进程，因此使用 ThreadPoolExecutor；小批次或 Windows 直接单线程。
+        use_threads = sys.platform == "darwin"
         if total_duts <= 4 or os.name == "nt":
             max_workers = 1
+            use_threads = False
 
         processor = DutProcessor(
             compress_raw=settings.PIPELINE_COMPRESS_RAW,
@@ -246,7 +250,8 @@ def pipeline_batch_task(
                     bulk_insert_devices(db, device_rows)
                     device_rows = []
         else:
-            with ProcessPoolExecutor(max_workers=max_workers) as exe:
+            executor_cls = ThreadPoolExecutor if use_threads else ProcessPoolExecutor
+            with executor_cls(max_workers=max_workers) as exe:
                 futures = {
                     exe.submit(
                         processor.process,
