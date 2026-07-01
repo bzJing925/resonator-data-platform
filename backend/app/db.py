@@ -10,15 +10,19 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.config import get_settings
 
 _settings = get_settings()
-engine = create_engine(
-    _settings.DATABASE_URL,
-    pool_pre_ping=True,
-    future=True,
-    pool_size=_settings.DB_POOL_SIZE,
-    max_overflow=_settings.DB_MAX_OVERFLOW,
-    pool_recycle=_settings.DB_POOL_RECYCLE,
-    pool_timeout=_settings.DB_POOL_TIMEOUT,
-)
+
+_engine_kwargs = {"pool_pre_ping": True, "future": True}
+if _settings.resolved_database_url.startswith("sqlite"):
+    _engine_kwargs["connect_args"] = {"check_same_thread": False}
+else:
+    _engine_kwargs.update(
+        pool_size=_settings.DB_POOL_SIZE,
+        max_overflow=_settings.DB_MAX_OVERFLOW,
+        pool_recycle=_settings.DB_POOL_RECYCLE,
+        pool_timeout=_settings.DB_POOL_TIMEOUT,
+    )
+
+engine = create_engine(_settings.resolved_database_url, **_engine_kwargs)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 
 
