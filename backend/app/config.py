@@ -68,8 +68,8 @@ class Settings(BaseSettings):
 
     @property
     def desktop_dir(self) -> Path:
-        if self.ALN_DESKTOP_DIR:
-            return Path(self.ALN_DESKTOP_DIR)
+        if self.ALN_DESKTOP_DIR is not None:
+            return self.ALN_DESKTOP_DIR
         return Path.home() / ".aln-data"
 
     @property
@@ -80,6 +80,8 @@ class Settings(BaseSettings):
 
     @property
     def watch_dir(self) -> Path:
+        if self.WATCH_DIR is not None:
+            return self.WATCH_DIR
         return self.data_root / "watch"
 
     @property
