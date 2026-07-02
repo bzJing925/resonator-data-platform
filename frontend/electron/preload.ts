@@ -9,4 +9,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('backend:state', (_event, value) => cb(value)),
   openExternal: (url: string) => ipcRenderer.invoke('app:open-external', url),
   platform: process.platform,
+  checkForUpdates: () => ipcRenderer.invoke('updater:check'),
+  installUpdate: () => ipcRenderer.invoke('updater:install'),
 });

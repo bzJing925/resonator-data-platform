@@ -6,6 +6,8 @@ import net from 'node:net';
 import fs from 'node:fs';
 import os from 'node:os';
 
+import { setupUpdater } from './updater';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -258,6 +260,8 @@ app.whenReady().then(async () => {
 
   createSplashWindow();
   createMainWindow();
+
+  setupUpdater();
 
   startBackend().catch((e) => {
     console.error('[main] 启动后端失败:', e.message);
