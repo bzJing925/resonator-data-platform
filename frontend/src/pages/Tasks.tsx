@@ -1,21 +1,30 @@
 import React, { memo, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import I from '../components/Icons.jsx';
-import { listTasks } from '../api/endpoints.js';
+import I from '../components/Icons';
+import { listTasks } from '../api/endpoints';
+import type { Task } from '../types';
 
-const Badge = memo(function Badge({ status }) {
-  const map = {
+interface BadgeProps {
+  status?: string;
+}
+
+const Badge = memo(function Badge({ status }: BadgeProps) {
+  const map: Record<string, [string, string]> = {
     running: ['run', '运行中'],
     success: ['done', '成功'],
     failed: ['err', '失败'],
     error: ['err', '错误'],
     pending: ['idle', '排队中'],
   };
-  const [cls, txt] = map[status] || ['idle', String(status || '').toUpperCase()];
+  const [cls, txt] = map[status || ''] || ['idle', String(status || '').toUpperCase()];
   return <span className={`badge ${cls}`}>{txt}</span>;
 });
 
-const TaskRow = memo(function TaskRow({ task }) {
+interface TaskRowProps {
+  task: Task;
+}
+
+const TaskRow = memo(function TaskRow({ task }: TaskRowProps) {
   const t = task;
   return (
     <tr>
@@ -70,8 +79,8 @@ const TaskRow = memo(function TaskRow({ task }) {
 });
 
 export default function Tasks() {
-  const [tasks, setTasks] = useState([]);
-  const [error, setError] = useState(null);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     // cancelled 让组件卸载后或 effect 重跑时丢弃 in-flight 响应，
@@ -81,9 +90,9 @@ export default function Tasks() {
       listTasks()
         .then((d) => {
           if (cancelled) return;
-          setTasks(Array.isArray(d) ? d : d?.items || []);
+          setTasks(Array.isArray(d) ? d : (d as { items?: Task[] })?.items || []);
         })
-        .catch((e) => { if (!cancelled) setError(e.message); });
+        .catch((e: Error) => { if (!cancelled) setError(e.message); });
     tick();
     const id = setInterval(tick, 5000);
     return () => {
@@ -122,7 +131,7 @@ export default function Tasks() {
           <tbody>
             {tasks.length === 0 && (
               <tr>
-                <td colSpan="7" className="dim" style={{ textAlign: 'center', padding: 24 }}>
+                <td colSpan={7} className="dim" style={{ textAlign: 'center', padding: 24 }}>
                   暂无任务
                 </td>
               </tr>

@@ -1,22 +1,22 @@
 import React, { memo, Suspense, useEffect, useState } from 'react';
 import { Routes, Route, useLocation } from 'react-router-dom';
-import Sidebar from './components/Sidebar.jsx';
-import ErrorBoundary from './components/ErrorBoundary.jsx';
-import FloatingUploadProgress from './components/FloatingUploadProgress.jsx';
-import I from './components/Icons.jsx';
-import Dashboard from './pages/Dashboard.jsx';
-import { getHealth } from './api/endpoints.js';
-import { UploadProgressProvider } from './contexts/UploadProgressContext.jsx';
+import Sidebar from './components/Sidebar';
+import ErrorBoundary from './components/ErrorBoundary';
+import FloatingUploadProgress from './components/FloatingUploadProgress';
+import I from './components/Icons';
+import Dashboard from './pages/Dashboard';
+import { getHealth } from './api/endpoints';
+import { UploadProgressProvider } from './contexts/UploadProgressContext';
 
 // 路由懒加载：非首屏页面按需加载，显著减小初始 bundle
-const Upload       = React.lazy(() => import('./pages/Upload.jsx'));
-const Batches      = React.lazy(() => import('./pages/Batches.jsx'));
-const BatchDetail  = React.lazy(() => import('./pages/BatchDetail.jsx'));
-const Mappings     = React.lazy(() => import('./pages/Mappings.jsx'));
-const Explore      = React.lazy(() => import('./pages/Explore.jsx'));
-const Tasks        = React.lazy(() => import('./pages/Tasks.jsx'));
-const TaskDetail   = React.lazy(() => import('./pages/TaskDetail.jsx'));
-const Impedance    = React.lazy(() => import('./pages/Impedance.jsx'));
+const Upload       = React.lazy(() => import('./pages/Upload'));
+const Batches      = React.lazy(() => import('./pages/Batches'));
+const BatchDetail  = React.lazy(() => import('./pages/BatchDetail'));
+const Mappings     = React.lazy(() => import('./pages/Mappings'));
+const Explore      = React.lazy(() => import('./pages/Explore'));
+const Tasks        = React.lazy(() => import('./pages/Tasks'));
+const TaskDetail   = React.lazy(() => import('./pages/TaskDetail'));
+const Impedance    = React.lazy(() => import('./pages/Impedance'));
 
 const PageLoader = memo(function PageLoader() {
   return (
@@ -27,7 +27,7 @@ const PageLoader = memo(function PageLoader() {
   );
 });
 
-const Titlebar = memo(function Titlebar({ health }) {
+const Titlebar = memo(function Titlebar({ health }: { health?: { status?: string; db?: string; redis?: string } }) {
   const dot = health?.status === 'ok' ? '' : ' warn';
   const statusText = {
     ok: '正常',
@@ -80,7 +80,7 @@ const Statusbar = memo(function Statusbar() {
 });
 
 export default function App() {
-  const [health, setHealth] = useState(null);
+  const [health, setHealth] = useState<{ status?: string; db?: string; redis?: string } | null>(null);
 
   useEffect(() => {
     let alive = true;

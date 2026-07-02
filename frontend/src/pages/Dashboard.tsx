@@ -1,7 +1,8 @@
 import React, { memo, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import I from '../components/Icons.jsx';
-import { getStats, listTasks } from '../api/endpoints.js';
+import I from '../components/Icons';
+import { getStats, listTasks } from '../api/endpoints';
+import type { StatsResponse, Task } from '../types';
 
 /* -------------------------------------------------------------------------
  * SmithChart — signature visual: a slowly rotating Smith chart / resonator
@@ -40,7 +41,15 @@ function SmithChart() {
   );
 }
 
-const Tile = memo(function Tile({ label, value, unit, sub, accent }) {
+interface TileProps {
+  label: string;
+  value: React.ReactNode;
+  unit?: string;
+  sub?: React.ReactNode;
+  accent?: string;
+}
+
+const Tile = memo(function Tile({ label, value, unit, sub, accent }: TileProps) {
   return (
     <div
       style={{
@@ -69,33 +78,37 @@ const Tile = memo(function Tile({ label, value, unit, sub, accent }) {
   );
 });
 
-const StatusBadge = memo(function StatusBadge({ status }) {
-  const map = {
+interface StatusBadgeProps {
+  status?: string;
+}
+
+const StatusBadge = memo(function StatusBadge({ status }: StatusBadgeProps) {
+  const map: Record<string, [string, string]> = {
     running: ['run', '运行中'],
     success: ['done', '成功'],
     failed: ['err', '失败'],
     error: ['err', '错误'],
     pending: ['idle', '排队中'],
   };
-  const [cls, txt] = map[status] || ['idle', String(status || '').toUpperCase()];
+  const [cls, txt] = map[status || ''] || ['idle', String(status || '').toUpperCase()];
   return <span className={`badge ${cls}`}>{txt}</span>;
 });
 
 export default function Dashboard() {
-  const [stats, setStats] = useState(null);
-  const [tasks, setTasks] = useState([]);
-  const [error, setError] = useState(null);
+  const [stats, setStats] = useState<StatsResponse | null>(null);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([getStats(), listTasks()])
       .then(([s, t]) => {
         setStats(s);
-        setTasks(Array.isArray(t) ? t : t?.items || []);
+        setTasks(Array.isArray(t) ? t : (t as { items?: Task[] })?.items || []);
       })
-      .catch((e) => setError(e.message));
+      .catch((e: Error) => setError(e.message));
   }, []);
 
-  const fmtN = (n) => (n == null ? '—' : n.toLocaleString());
+  const fmtN = (n?: number | null) => (n == null ? '—' : n.toLocaleString());
 
   return (
     <>
@@ -199,7 +212,7 @@ export default function Dashboard() {
             <tbody>
               {tasks.length === 0 && (
                 <tr>
-                  <td colSpan="6" className="dim" style={{ textAlign: 'center', padding: 24 }}>
+                  <td colSpan={6} className="dim" style={{ textAlign: 'center', padding: 24 }}>
                     暂无任务
                   </td>
                 </tr>

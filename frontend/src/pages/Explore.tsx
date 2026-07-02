@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import I from '../components/Icons.jsx';
-import { UnifiedChartGrid, WaferMap } from '../components/Charts.jsx';
-import useFields, { displayLabel } from '../hooks/useFields.js';
-import { queryDevices, queryAggregate, exportCsv } from '../api/endpoints.js';
-import DeviceModal from '../components/DeviceModal.jsx';
-import FilterPanel from '../components/FilterPanel.jsx';
+import I from '../components/Icons';
+import { UnifiedChartGrid, WaferMap } from '../components/Charts';
+import useFields, { displayLabel } from '../hooks/useFields';
+import { queryDevices, queryAggregate, exportCsv } from '../api/endpoints';
+import DeviceModal from '../components/DeviceModal';
+import FilterPanel from '../components/FilterPanel';
 
 // Aggregation options for numeric Y/Z fields.
 //   'all' is a UI sentinel meaning "no aggregation, plot raw rows".
@@ -674,6 +674,7 @@ export default function Explore() {
                       xFields={xMeta}
                       yFields={yMeta}
                       zField={zMeta}
+                      onPerformanceWarn={onChartWarn}
                       onWarn={onChartWarn}
                       onPointClick={handlePointClick}
                       onSelection={handleSelection}
@@ -796,6 +797,8 @@ function Inspector({
                 fields={fields}
                 value={xFields}
                 onChange={setXFields}
+                discouragedSections={['geometric']}
+                discouragedHint="几何坐标建议留给 Wafer 版图"
               />
             </div>
             <div className="section">

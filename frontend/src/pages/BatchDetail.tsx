@@ -1,6 +1,6 @@
 import React, { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import I from '../components/Icons.jsx';
+import I from '../components/Icons';
 import {
   getBatch,
   listBatchDevices,
@@ -8,11 +8,29 @@ import {
   exportCsv,
   downloadFilesZip,
   downloadDeviceS1p,
-} from '../api/endpoints.js';
-import DeviceModal from '../components/DeviceModal.jsx';
-import useFields, { displayLabel } from '../hooks/useFields.js';
+} from '../api/endpoints';
+import DeviceModal from '../components/DeviceModal';
+import useFields, { displayLabel } from '../hooks/useFields';
+import type { Batch, Device, FileEntry } from '../types';
 
-const DeviceRow = memo(function DeviceRow({ device, columns, fmtCell, onRowClick, onDownload }) {
+interface DeviceRowProps {
+  device: Device;
+  columns: ColumnDef[];
+  fmtCell: (d: Device, c: ColumnDef) => React.ReactNode;
+  onRowClick: (d: Device) => void;
+  onDownload: (d: Device) => void;
+}
+
+interface ColumnDef {
+  key: string;
+  fallback: string;
+  type: string;
+  digits?: number;
+  header?: string;
+  render?: (d: Device) => React.ReactNode;
+}
+
+const DeviceRow = memo(function DeviceRow({ device, columns, fmtCell, onRowClick, onDownload }: DeviceRowProps) {
   const d = device;
   return (
     <tr style={{ cursor: 'pointer' }} onClick={() => onRowClick(d)}>
@@ -39,7 +57,7 @@ const DeviceRow = memo(function DeviceRow({ device, columns, fmtCell, onRowClick
 // 表格列定义（按"标识 → 工艺 → 主参数 → BodeQ → 中间峰"分组）
 // type: 'text' | 'num'  (num 用 mono 等宽字体右对齐)
 // digits: 数值精度
-const COLUMN_DEFS = [
+const COLUMN_DEFS: ColumnDef[] = [
   // 标识
   { key: 'original_filename', fallback: '原始文件名', type: 'text' },
   { key: 'mark', fallback: '标记 Mark', type: 'text' },
@@ -71,7 +89,7 @@ const COLUMN_DEFS = [
 ];
 
 // 触发浏览器下载一个 Blob
-function downloadBlob(blob, filename) {
+function downloadBlob(blob: Blob, filename: string) {
   const url = window.URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -95,19 +113,19 @@ const EXPORT_FIELDS = [
 ];
 
 export default function BatchDetail() {
-  const { batchNo } = useParams();
-  const [detail, setDetail] = useState(null);
-  const [devices, setDevices] = useState({ items: [], total: 0 });
-  const [page, setPage] = useState(1);
-  const [size] = useState(50);
-  const [waferFilter, setWaferFilter] = useState('');
-  const [pfFilter, setPfFilter] = useState('');
-  const [error, setError] = useState(null);
-  const [activeDevice, setActiveDevice] = useState(null);
-  const [exporting, setExporting] = useState(false);
-  const [files, setFiles] = useState([]);
-  const [selectedFiles, setSelectedFiles] = useState(new Set());
-  const [filesLoading, setFilesLoading] = useState(false);
+  const { batchNo } = useParams<{ batchNo: string }>();
+  const [detail, setDetail] = useState<Batch | null>(null);
+  const [devices, setDevices] = useState<{ items: Device[]; total: number }>({ items: [], total: 0 });
+  const [page, setPage] = useState<number>(1);
+  const [size] = useState<number>(50);
+  const [waferFilter, setWaferFilter] = useState<string>('');
+  const [pfFilter, setPfFilter] = useState<string>('');
+  const [error, setError] = useState<string | null>(null);
+  const [activeDevice, setActiveDevice] = useState<Device | null>(null);
+  const [exporting, setExporting] = useState<boolean>(false);
+  const [files, setFiles] = useState<FileEntry[]>([]);
+  const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
+  const [filesLoading, setFilesLoading] = useState<boolean>(false);
   const fieldsState = useFields();
 
   // 计算列头：优先用 useFields 的 label+unit，缺失时回退到 fallback
@@ -118,73 +136,78 @@ export default function BatchDetail() {
     });
   }, [fieldsState.data]);
 
-  const fmtCell = useCallback((d, c) => {
+  const fmtCell = useCallback((d: Device, c: ColumnDef) => {
     if (c.render) return c.render(d);
     const v = d[c.key];
     if (v == null || v === '') return '—';
     if (c.type === 'num' && typeof v === 'number') {
       return Number.isFinite(v) ? v.toFixed(c.digits ?? 2) : '—';
     }
-    return v;
+    return v as React.ReactNode;
   }, []);
 
   useEffect(() => {
+    if (!batchNo) return;
     let cancelled = false;
     getBatch(batchNo)
       .then((d) => { if (!cancelled) setDetail(d); })
-      .catch((e) => { if (!cancelled) setError(e.message); });
+      .catch((e: Error) => { if (!cancelled) setError(e.message); });
     return () => { cancelled = true; };
   }, [batchNo]);
 
   useEffect(() => {
+    if (!batchNo) return;
     let cancelled = false;
     setFilesLoading(true);
     listBatchFiles(batchNo, true)
       .then((d) => { if (!cancelled) { setFiles(d || []); setSelectedFiles(new Set()); } })
-      .catch((e) => { if (!cancelled) setError(e.message); })
+      .catch((e: Error) => { if (!cancelled) setError(e.message); })
       .finally(() => { if (!cancelled) setFilesLoading(false); });
     return () => { cancelled = true; };
   }, [batchNo]);
 
   useEffect(() => {
+    if (!batchNo) return;
     // cancelled 防止快速改 filter 时慢请求后到、覆盖快请求的当前数据：
     // 否则用户连续切 wafer 或翻页时可能看到上一次过滤的结果。
     let cancelled = false;
-    const params = { page, size };
+    const params: Record<string, unknown> = { page, size };
     if (waferFilter) params.wafer = waferFilter;
     if (pfFilter) params.pf = pfFilter;
     listBatchDevices(batchNo, params)
       .then((d) => { if (!cancelled) setDevices(d); })
-      .catch((e) => { if (!cancelled) setError(e.message); });
+      .catch((e: Error) => { if (!cancelled) setError(e.message); });
     return () => { cancelled = true; };
   }, [batchNo, page, size, waferFilter, pfFilter]);
 
   const items = devices.items || [];
 
-  const handleRowClick = useCallback((d) => setActiveDevice(d), []);
+  const handleRowClick = useCallback((d: Device) => setActiveDevice(d), []);
   const handleCloseDevice = useCallback(() => setActiveDevice(null), []);
 
-  const handleDownloadS1p = useCallback(async (device) => {
+  const handleDownloadS1p = useCallback(async (device: Device) => {
+    if (!device.id) return;
     try {
       const res = await downloadDeviceS1p(device.id);
       const filename = device.original_filename || `${device.batch_no || 'batch'}_D${device.id}.s1p`;
       downloadBlob(res.data, filename);
-    } catch (e) {
+    } catch (e: any) {
       setError(e.message || '下载 S 参数文件失败');
     }
   }, []);
 
-  const handleDownloadZip = useCallback(async (relpaths = []) => {
+  const handleDownloadZip = useCallback(async (relpaths: string[] = []) => {
+    if (!batchNo) return;
     try {
       const res = await downloadFilesZip(batchNo, relpaths);
       const suffix = relpaths.length ? 'selected' : 'all';
       downloadBlob(res.data, `${batchNo}_${suffix}.zip`);
-    } catch (e) {
+    } catch (e: any) {
       setError(e.message || '下载 ZIP 失败');
     }
   }, [batchNo]);
 
-  const toggleFile = useCallback((relpath) => {
+  const toggleFile = useCallback((relpath: string) => {
     setSelectedFiles((prev) => {
       const next = new Set(prev);
       if (next.has(relpath)) next.delete(relpath);
@@ -202,6 +225,7 @@ export default function BatchDetail() {
   }, []);
 
   const onExportCsv = useCallback(async () => {
+    if (!batchNo) return;
     setExporting(true);
     setError(null);
     try {
@@ -213,7 +237,7 @@ export default function BatchDetail() {
       });
       const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
       downloadBlob(res.data, `${batchNo}_devices_${ts}.csv`);
-    } catch (e) {
+    } catch (e: any) {
       setError(e.message || '导出失败');
     } finally {
       setExporting(false);
@@ -431,7 +455,13 @@ export default function BatchDetail() {
   );
 }
 
-function Stat({ label, value, accent }) {
+interface StatProps {
+  label: string;
+  value: React.ReactNode;
+  accent?: string;
+}
+
+function Stat({ label, value, accent }: StatProps) {
   return (
     <div
       style={{

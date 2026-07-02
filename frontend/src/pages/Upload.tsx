@@ -1,11 +1,19 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import I from '../components/Icons.jsx';
-import { listMappings, uploadBatch } from '../api/endpoints.js';
-import { useUploadProgress } from '../contexts/UploadProgressContext.jsx';
+import I from '../components/Icons';
+import { listMappings, uploadBatch } from '../api/endpoints';
+import { useUploadProgress } from '../contexts/UploadProgressContext';
 import useSSE from '../hooks/useSSE';
+import type { Mapping } from '../types';
 
-function ProgressBar({ label, pct, status, compact = false }) {
+interface ProgressBarProps {
+  label: string;
+  pct: number;
+  status?: string;
+  compact?: boolean;
+}
+
+function ProgressBar({ label, pct, status, compact = false }: ProgressBarProps) {
   const color =
     status === 'error' ? 'var(--fail)' : status === 'success' ? 'var(--pass)' : 'var(--primary)';
   return (
@@ -38,26 +46,26 @@ function ProgressBar({ label, pct, status, compact = false }) {
 }
 
 export default function Upload() {
-  const [mappings, setMappings] = useState([]);
-  const [mappingId, setMappingId] = useState('');
-  const [files, setFiles] = useState([]);
-  const [dragOver, setDragOver] = useState(false);
-  const [fStart, setFStart] = useState('');
-  const [fEnd, setFEnd] = useState('');
-  const [deembed, setDeembed] = useState(false);
-  const [deembedMethod, setDeembedMethod] = useState('default');
-  const [submitting, setSubmitting] = useState(false);
-  const [taskInfo, setTaskInfo] = useState(null);
-  const [submitError, setSubmitError] = useState(null);
-  const [uploadPct, setUploadPct] = useState(0);
-  const inputRef = useRef(null);
+  const [mappings, setMappings] = useState<Mapping[]>([]);
+  const [mappingId, setMappingId] = useState<string>('');
+  const [files, setFiles] = useState<File[]>([]);
+  const [dragOver, setDragOver] = useState<boolean>(false);
+  const [fStart, setFStart] = useState<string>('');
+  const [fEnd, setFEnd] = useState<string>('');
+  const [deembed, setDeembed] = useState<boolean>(false);
+  const [deembedMethod, setDeembedMethod] = useState<string>('default');
+  const [submitting, setSubmitting] = useState<boolean>(false);
+  const [taskInfo, setTaskInfo] = useState<{ task_id: string | number; batch_no: string } | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [uploadPct, setUploadPct] = useState<number>(0);
+  const inputRef = useRef<HTMLInputElement | null>(null);
   const navigate = useNavigate();
   const { addTask } = useUploadProgress();
 
   useEffect(() => {
     listMappings()
       .then((data) => {
-        const list = Array.isArray(data) ? data : data?.items || [];
+        const list = Array.isArray(data) ? data : (data as { items?: Mapping[] })?.items || [];
         setMappings(list);
         if (list.length && !mappingId) setMappingId(String(list[0].id));
       })
@@ -75,7 +83,7 @@ export default function Upload() {
 
   const VALID_EXTS = ['.zip', '.s1p', '.s2p', '.snp'];
 
-  const validateFiles = (list) => {
+  const validateFiles = (list: File[]) => {
     const bad = list.filter((f) => !VALID_EXTS.some((ext) => f.name.toLowerCase().endsWith(ext)));
     if (bad.length) {
       setSubmitError(`仅支持 ${VALID_EXTS.join(' / ')} 文件，以下文件被忽略：${bad.map((f) => f.name).join(', ')}`);
@@ -90,26 +98,26 @@ export default function Upload() {
     return list;
   };
 
-  const onPickFiles = (fileList) => {
+  const onPickFiles = (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
     const picked = validateFiles(Array.from(fileList));
     if (picked.length) setFiles((prev) => [...prev, ...picked]);
   };
 
-  const onDrop = (e) => {
+  const onDrop = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
     setDragOver(false);
     onPickFiles(e.dataTransfer.files);
   };
 
-  const onDragOver = (e) => {
+  const onDragOver = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
     setDragOver(true);
   };
 
-  const onDragLeave = (e) => {
+  const onDragLeave = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
     setDragOver(false);
@@ -128,8 +136,8 @@ export default function Upload() {
 
     setSubmitting(true);
     setUploadPct(0);
-    const results = [];
-    const errors = [];
+    const results: { task_id: string | number; batch_no: string }[] = [];
+    const errors: string[] = [];
 
     for (let i = 0; i < files.length; i++) {
       const f = files[i];
@@ -149,8 +157,8 @@ export default function Upload() {
             setUploadPct(Math.round(overall));
           }
         });
-        results.push(res);
-      } catch (e) {
+        results.push(res as { task_id: string | number; batch_no: string });
+      } catch (e: any) {
         errors.push(`${f.name}: ${e.message}`);
       }
     }
@@ -244,7 +252,7 @@ export default function Upload() {
                     <button
                       className="btn sm danger"
                       onClick={() => setFiles((prev) => prev.filter((_, i) => i !== idx))}
-                      disabled={submitting || taskInfo}
+                      disabled={submitting || !!taskInfo}
                     >
                       <I.trash size={12} />
                     </button>
@@ -325,7 +333,7 @@ export default function Upload() {
                 style={{ width: '100%' }}
                 value={mappingId}
                 onChange={(e) => setMappingId(e.target.value)}
-                disabled={submitting || taskInfo}
+                disabled={submitting || !!taskInfo}
               >
                 {mappings.length === 0 && <option value="">（无对照表，请先上传）</option>}
                 {mappings.map((m) => (
@@ -347,7 +355,7 @@ export default function Upload() {
                   value={fStart}
                   onChange={(e) => setFStart(e.target.value)}
                   style={{ flex: 1 }}
-                  disabled={submitting || taskInfo}
+                  disabled={submitting || !!taskInfo}
                 />
                 <span className="dim">—</span>
                 <input
@@ -356,7 +364,7 @@ export default function Upload() {
                   value={fEnd}
                   onChange={(e) => setFEnd(e.target.value)}
                   style={{ flex: 1 }}
-                  disabled={submitting || taskInfo}
+                  disabled={submitting || !!taskInfo}
                 />
               </div>
             </div>

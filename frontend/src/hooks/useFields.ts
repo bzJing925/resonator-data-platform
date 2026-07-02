@@ -1,21 +1,22 @@
 import { useEffect, useState } from 'react';
-import { getQueryFields } from '../api/endpoints.js';
+import { getQueryFields } from '../api/endpoints';
+import type { FieldMeta, FieldsData } from '../types';
 
-let cache = null;
-let inflight = null;
-const listeners = new Set();
+let cache: FieldsData | null = null;
+let inflight: Promise<FieldsData> | null = null;
+const listeners = new Set<(data: FieldsData | null) => void>();
 
-function notify() {
-  listeners.forEach((cb) => cb(cache));
+function notify(data: FieldsData | null) {
+  listeners.forEach((cb) => cb(data));
 }
 
-async function load() {
+async function load(): Promise<FieldsData> {
   if (cache) return cache;
   if (inflight) return inflight;
   inflight = getQueryFields()
-    .then((data) => {
+    .then((data: Record<string, FieldMeta[]>) => {
       cache = normalize(data);
-      notify();
+      notify(cache);
       return cache;
     })
     .catch((err) => {
@@ -25,10 +26,10 @@ async function load() {
   return inflight;
 }
 
-function normalize(raw) {
-  const all = [];
-  const byName = {};
-  const sections = ['categorical', 'geometric', 'numeric', 'process'];
+function normalize(raw: Record<string, FieldMeta[]>): FieldsData {
+  const all: FieldMeta[] = [];
+  const byName: Record<string, FieldMeta> = {};
+  const sections = ['categorical', 'geometric', 'numeric', 'process'] as const;
   sections.forEach((section) => {
     (raw[section] || []).forEach((f) => {
       const item = { ...f, section };
@@ -36,17 +37,35 @@ function normalize(raw) {
       byName[f.name] = item;
     });
   });
-  return { raw, all, byName, numeric: raw.numeric || [], categorical: raw.categorical || [], process: raw.process || [], geometric: raw.geometric || [] };
+  return {
+    raw,
+    all,
+    byName,
+    numeric: raw.numeric || [],
+    categorical: raw.categorical || [],
+    process: raw.process || [],
+    geometric: raw.geometric || [],
+  };
 }
 
-export function displayLabel(field) {
+export function displayLabel(field?: FieldMeta | null): string {
   if (!field) return '';
   if (field.unit) return `${field.label} (${field.unit})`;
   return field.label || field.name;
 }
 
-export default function useFields() {
-  const [state, setState] = useState({ data: cache, loading: !cache, error: null });
+interface UseFieldsState {
+  data: FieldsData | null;
+  loading: boolean;
+  error: Error | null;
+}
+
+export default function useFields(): UseFieldsState {
+  const [state, setState] = useState<UseFieldsState>({
+    data: cache,
+    loading: !cache,
+    error: null,
+  });
 
   useEffect(() => {
     let alive = true;
@@ -59,10 +78,10 @@ export default function useFields() {
       .then((data) => {
         if (alive) setState({ data, loading: false, error: null });
       })
-      .catch((err) => {
+      .catch((err: Error) => {
         if (alive) setState({ data: null, loading: false, error: err });
       });
-    const cb = (data) => alive && setState({ data, loading: false, error: null });
+    const cb = (data: FieldsData | null) => alive && setState({ data, loading: false, error: null });
     listeners.add(cb);
     return () => {
       alive = false;

@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import I from './Icons.jsx';
-import useFields, { displayLabel } from '../hooks/useFields.js';
-import { distinctValues } from '../api/endpoints.js';
+import I from './Icons';
+import useFields, { displayLabel } from '../hooks/useFields';
+import { distinctValues } from '../api/endpoints';
+import type { FieldMeta, FieldsData } from '../types';
 
 /* -------------------------------------------------------------------------
  * 筛选协议（前端 → 后端）
@@ -12,7 +13,7 @@ import { distinctValues } from '../api/endpoints.js';
  * 后端 query.py 的 _build_node 已经支持这个格式。
  * ----------------------------------------------------------------------- */
 
-const SECTION_LABELS = {
+const SECTION_LABELS: Record<string, string> = {
   categorical: '类别字段',
   process: '工艺字段',
   geometric: '几何字段',
@@ -56,20 +57,26 @@ function uid() {
 function makeCondition() {
   return { id: uid(), field: '', op: 'eq', value: '' };
 }
-function opsFor(fieldMeta) {
+function opsFor(fieldMeta?: FieldMeta | null) {
   if (!fieldMeta) return STRING_OPS;
-  return STRING_SECTIONS.has(fieldMeta.section) ? STRING_OPS : NUMERIC_OPS;
+  return STRING_SECTIONS.has(fieldMeta.section || '') ? STRING_OPS : NUMERIC_OPS;
 }
-function defaultOpFor(fieldMeta) {
+function defaultOpFor(fieldMeta?: FieldMeta | null) {
   if (!fieldMeta) return 'eq';
-  return STRING_SECTIONS.has(fieldMeta.section) ? 'in' : 'eq';
+  return STRING_SECTIONS.has(fieldMeta.section || '') ? 'in' : 'eq';
 }
-function reconcileOp(op, fieldMeta) {
+function reconcileOp(op: string, fieldMeta?: FieldMeta | null) {
   const ops = opsFor(fieldMeta);
   return ops.some((o) => o.key === op) ? op : ops[0].key;
 }
 
-function serialize(groupOp, conditions) {
+interface SerializedChild {
+  field: string;
+  op: string;
+  value?: unknown;
+}
+
+function serialize(groupOp: string, conditions: Condition[]) {
   const kids = conditions.map((c) => {
     if (!c.field) return null;
     if (NO_VALUE_OPS.has(c.op)) return { field: c.field, op: c.op };
@@ -89,7 +96,7 @@ function serialize(groupOp, conditions) {
     }
     if (c.value === '' || c.value == null) return null;
     return { field: c.field, op: c.op, value: c.value };
-  }).filter(Boolean);
+  }).filter(Boolean) as SerializedChild[];
   if (kids.length === 0) return {};
   return { op: groupOp, children: kids };
 }
@@ -97,7 +104,13 @@ function serialize(groupOp, conditions) {
 /* -------------------------------------------------------------------------
  * FieldSelect — 字段下拉，按段分组，全列可选。
  * ----------------------------------------------------------------------- */
-function FieldSelect({ fields, value, onChange }) {
+interface FieldSelectProps {
+  fields: FieldsData | null;
+  value: string;
+  onChange: (v: string) => void;
+}
+
+function FieldSelect({ fields, value, onChange }: FieldSelectProps) {
   return (
     <select
       className="input mono filter-field-sel"
@@ -125,12 +138,18 @@ function FieldSelect({ fields, value, onChange }) {
  * 用于 categorical / process 字段 + op='in' 的场景；值通过 fetcher 或 options
  * 提供。Esc / 点外面关闭。
  * ----------------------------------------------------------------------- */
-function MultiSelect({ fieldMeta, value, onChange }) {
+interface MultiSelectProps {
+  fieldMeta?: FieldMeta | null;
+  value?: unknown[];
+  onChange: (v: unknown[]) => void;
+}
+
+function MultiSelect({ fieldMeta, value, onChange }: MultiSelectProps) {
   const [open, setOpen] = useState(false);
-  const [items, setItems] = useState(null);
-  const [error, setError] = useState(null);
-  const popRef = useRef(null);
-  const btnRef = useRef(null);
+  const [items, setItems] = useState<unknown[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const popRef = useRef<HTMLDivElement | null>(null);
+  const btnRef = useRef<HTMLButtonElement | null>(null);
 
   const selected = useMemo(() => new Set((value || []).map(String)), [value]);
 
@@ -146,8 +165,8 @@ function MultiSelect({ fieldMeta, value, onChange }) {
       return;
     }
     distinctValues(fieldMeta.name)
-      .then((res) => setItems(Array.isArray(res) ? res : res.values || []))
-      .catch((e) => setError(e.message || String(e)));
+      .then((res) => setItems(Array.isArray(res) ? res : (res as { values?: unknown[] }).values || []))
+      .catch((e: Error) => setError(e.message || String(e)));
   }, [open, items, fieldMeta]);
 
   // 字段切换后清缓存。
@@ -156,12 +175,12 @@ function MultiSelect({ fieldMeta, value, onChange }) {
   // 点击外面关闭。
   useEffect(() => {
     if (!open) return;
-    const onDoc = (e) => {
-      if (popRef.current?.contains(e.target)) return;
-      if (btnRef.current?.contains(e.target)) return;
+    const onDoc = (e: MouseEvent) => {
+      if (popRef.current?.contains(e.target as Node)) return;
+      if (btnRef.current?.contains(e.target as Node)) return;
       setOpen(false);
     };
-    const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
     document.addEventListener('mousedown', onDoc);
     document.addEventListener('keydown', onKey);
     return () => {
@@ -170,7 +189,7 @@ function MultiSelect({ fieldMeta, value, onChange }) {
     };
   }, [open]);
 
-  const toggle = (v) => {
+  const toggle = (v: unknown) => {
     const sv = String(v);
     const next = (items || []).filter((it) => {
       const isSel = selected.has(String(it));
@@ -251,11 +270,18 @@ function MultiSelect({ fieldMeta, value, onChange }) {
 /* -------------------------------------------------------------------------
  * ValueInput — 根据 (fieldMeta, op) 决定值控件。
  * ----------------------------------------------------------------------- */
-function ValueInput({ fieldMeta, op, value, onChange }) {
+interface ValueInputProps {
+  fieldMeta?: FieldMeta | null;
+  op: string;
+  value?: unknown;
+  onChange: (v: unknown) => void;
+}
+
+function ValueInput({ fieldMeta, op, value, onChange }: ValueInputProps) {
   if (NO_VALUE_OPS.has(op)) {
     return <span className="filter-value-placeholder">（不需要值）</span>;
   }
-  const isNumeric = fieldMeta && !STRING_SECTIONS.has(fieldMeta.section);
+  const isNumeric = fieldMeta && !STRING_SECTIONS.has(fieldMeta.section || '');
 
   if (RANGE_OPS.has(op)) {
     const v = Array.isArray(value) ? value : ['', ''];
@@ -294,7 +320,7 @@ function ValueInput({ fieldMeta, op, value, onChange }) {
       <input
         className="input mono"
         placeholder="v1, v2, v3"
-        value={Array.isArray(value) ? value.join(', ') : value ?? ''}
+        value={Array.isArray(value) ? value.join(', ') : (value as string) ?? ''}
         onChange={(e) => onChange(e.target.value)}
         style={{ flex: 1, minWidth: 0 }}
       />
@@ -307,7 +333,7 @@ function ValueInput({ fieldMeta, op, value, onChange }) {
       className="input mono"
       type={isNumeric ? 'number' : 'text'}
       placeholder={isNumeric ? '数值' : '字符串'}
-      value={value ?? ''}
+      value={(value as string | number) ?? ''}
       onChange={(e) => {
         const s = e.target.value;
         if (isNumeric) {
@@ -328,16 +354,30 @@ function ValueInput({ fieldMeta, op, value, onChange }) {
 /* -------------------------------------------------------------------------
  * ConditionRow — 一行筛选条件：字段 / 运算符 / 值 / 删除。
  * ----------------------------------------------------------------------- */
-function ConditionRow({ cond, fields, onChange, onRemove }) {
+interface Condition {
+  id: string;
+  field: string;
+  op: string;
+  value?: unknown;
+}
+
+interface ConditionRowProps {
+  cond: Condition;
+  fields: FieldsData | null;
+  onChange: (c: Condition) => void;
+  onRemove: () => void;
+}
+
+function ConditionRow({ cond, fields, onChange, onRemove }: ConditionRowProps) {
   const fieldMeta = fields?.byName?.[cond.field] || null;
   const ops = opsFor(fieldMeta);
 
-  const setField = (name) => {
+  const setField = (name: string) => {
     const meta = fields?.byName?.[name] || null;
     // 切换字段时，让 op 重置为该类型的默认值；类别字段默认 in 更顺手。
     onChange({ ...cond, field: name, op: defaultOpFor(meta), value: '' });
   };
-  const setOp = (nextOp) => {
+  const setOp = (nextOp: string) => {
     // 值结构在 between / list / 标量 / 空值之间不通用，切换时清空。
     const wasRange = RANGE_OPS.has(cond.op);
     const isRange = RANGE_OPS.has(nextOp);
@@ -345,7 +385,7 @@ function ConditionRow({ cond, fields, onChange, onRemove }) {
     const isList = LIST_OPS.has(nextOp);
     const wasNoVal = NO_VALUE_OPS.has(cond.op);
     const isNoVal = NO_VALUE_OPS.has(nextOp);
-    let nextValue = cond.value;
+    let nextValue: unknown = cond.value;
     if (wasRange !== isRange || wasList !== isList || wasNoVal !== isNoVal) {
       nextValue = isRange ? ['', ''] : isList ? [] : '';
     }
@@ -389,13 +429,18 @@ function ConditionRow({ cond, fields, onChange, onRemove }) {
  * value:    后端期望的 filters dict（应用过的那一份），仅作初始展示参考。
  * onApply:  点"应用筛选"时回调一个 dict（`{}` 表示无筛选）。
  * ----------------------------------------------------------------------- */
-export default function FilterPanel({ value, onApply }) {
+interface FilterPanelProps {
+  value?: Record<string, unknown>;
+  onApply: (filters: Record<string, unknown>) => void;
+}
+
+export default function FilterPanel({ value, onApply }: FilterPanelProps) {
   const { data: fields, loading: fLoading, error: fErr } = useFields();
   const [groupOp, setGroupOp] = useState('and');
-  const [conditions, setConditions] = useState([makeCondition()]);
+  const [conditions, setConditions] = useState<Condition[]>([makeCondition()]);
 
   const wire = useMemo(() => serialize(groupOp, conditions), [groupOp, conditions]);
-  const hasAny = !!wire.children?.length;
+  const hasAny = !!(wire as { children?: unknown[] }).children?.length;
 
   const apply = () => onApply(wire);
   const clear = () => {
@@ -405,9 +450,9 @@ export default function FilterPanel({ value, onApply }) {
   };
   const addCondition = () =>
     setConditions((cs) => [...cs, makeCondition()]);
-  const updateAt = (id, next) =>
+  const updateAt = (id: string, next: Condition) =>
     setConditions((cs) => cs.map((c) => (c.id === id ? next : c)));
-  const removeAt = (id) =>
+  const removeAt = (id: string) =>
     setConditions((cs) => (cs.length <= 1 ? [makeCondition()] : cs.filter((c) => c.id !== id)));
 
   return (
@@ -437,7 +482,7 @@ export default function FilterPanel({ value, onApply }) {
       <div className="panel-body">
         {fErr && (
           <div className="dim" style={{ color: 'var(--fail)', fontSize: 11 }}>
-            字段加载失败：{fErr.message}
+            字段加载失败：{(fErr as Error).message || String(fErr)}
           </div>
         )}
         {fLoading && !fields && (
@@ -491,3 +536,5 @@ export default function FilterPanel({ value, onApply }) {
     </div>
   );
 }
+
+export type { Condition };

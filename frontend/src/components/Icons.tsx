@@ -1,6 +1,20 @@
 import React from 'react';
 
-const Icon = ({ d, size = 16, fill, stroke = 'currentColor', sw = 1.6, vb = 24, style }) => (
+interface IconProps {
+  d?: string | React.ReactNode;
+  size?: number;
+  fill?: string;
+  stroke?: string;
+  sw?: number;
+  vb?: number;
+  style?: React.CSSProperties;
+}
+
+interface IconDict {
+  [key: string]: (p: IconProps) => React.ReactElement;
+}
+
+const Icon: React.FC<IconProps> = ({ d, size = 16, fill, stroke = 'currentColor', sw = 1.6, vb = 24, style }) => (
   <svg
     width={size}
     height={size}
@@ -17,7 +31,7 @@ const Icon = ({ d, size = 16, fill, stroke = 'currentColor', sw = 1.6, vb = 24, 
   </svg>
 );
 
-const I = {
+const I: IconDict = {
   scatter: (p) => (
     <Icon
       {...p}
@@ -143,9 +157,7 @@ const I = {
       }
     />
   ),
-  trash: (p) => (
-    <Icon {...p} d="M4 7h16M9 7V4h6v3M6 7l1 13a1 1 0 001 1h8a1 1 0 001-1l1-13M10 11v6M14 11v6" />
-  ),
+  trash: (p) => <Icon {...p} d="M4 7h16M9 7V4h6v3M6 7l1 13a1 1 0 001 1h8a1 1 0 001-1l1-13M10 11v6M14 11v6" />,
   doc: (p) => <Icon {...p} d="M14 3H6a1 1 0 00-1 1v16a1 1 0 001 1h12a1 1 0 001-1V8z M14 3v5h5" />,
   more: (p) => (
     <Icon
@@ -200,3 +212,4 @@ const I = {
 };
 
 export default I;
+export type { IconProps };

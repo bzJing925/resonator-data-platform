@@ -1,13 +1,18 @@
 import React, { memo, useEffect, useRef, useState } from 'react';
-import I from '../components/Icons.jsx';
+import I from '../components/Icons';
 import {
   listMappings,
   listMappingEntries,
   createMapping,
   deleteMapping,
-} from '../api/endpoints.js';
+} from '../api/endpoints';
+import type { Mapping, MappingEntry } from '../types';
 
-const EntryRow = memo(function EntryRow({ entry }) {
+interface EntryRowProps {
+  entry: MappingEntry;
+}
+
+const EntryRow = memo(function EntryRow({ entry }: EntryRowProps) {
   const e = entry;
   return (
     <tr>
@@ -24,25 +29,26 @@ const EntryRow = memo(function EntryRow({ entry }) {
 });
 
 export default function Mappings() {
-  const [mappings, setMappings] = useState([]);
-  const [selected, setSelected] = useState(null);
-  const [entries, setEntries] = useState({ items: [], total: 0 });
-  const [error, setError] = useState(null);
-  const [uploading, setUploading] = useState(false);
-  const [name, setName] = useState('');
-  const fileRef = useRef(null);
+  const [mappings, setMappings] = useState<Mapping[]>([]);
+  const [selected, setSelected] = useState<number | string | null>(null);
+  const [entries, setEntries] = useState<{ items: MappingEntry[]; total: number }>({ items: [], total: 0 });
+  const [error, setError] = useState<string | null>(null);
+  const [uploading, setUploading] = useState<boolean>(false);
+  const [name, setName] = useState<string>('');
+  const fileRef = useRef<HTMLInputElement | null>(null);
 
   const loadMappings = () =>
     listMappings()
       .then((data) => {
-        const list = Array.isArray(data) ? data : data?.items || [];
+        const list = Array.isArray(data) ? data : (data as { items?: Mapping[] })?.items || [];
         setMappings(list);
         if (!selected && list.length) setSelected(list[0].id);
       })
-      .catch((e) => setError(e.message));
+      .catch((e: Error) => setError(e.message));
 
   useEffect(() => {
     loadMappings();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -51,7 +57,7 @@ export default function Mappings() {
     let cancelled = false;
     listMappingEntries(selected, { page: 1, size: 200 })
       .then((d) => { if (!cancelled) setEntries(d); })
-      .catch((e) => { if (!cancelled) setError(e.message); });
+      .catch((e: Error) => { if (!cancelled) setError(e.message); });
     return () => { cancelled = true; };
   }, [selected]);
 
@@ -74,20 +80,20 @@ export default function Mappings() {
       setName('');
       if (fileRef.current) fileRef.current.value = '';
       await loadMappings();
-    } catch (e) {
+    } catch (e: any) {
       setError(e.message);
     } finally {
       setUploading(false);
     }
   };
 
-  const onDelete = async (id) => {
+  const onDelete = async (id: number | string) => {
     if (!confirm('确认删除？仅在无批次引用时可删。')) return;
     try {
       await deleteMapping(id);
       if (selected === id) setSelected(null);
       loadMappings();
-    } catch (e) {
+    } catch (e: any) {
       alert(e.message);
     }
   };

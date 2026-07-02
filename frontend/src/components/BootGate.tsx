@@ -1,11 +1,15 @@
 import React, { useEffect, useState } from 'react';
-import { getHealth } from '../api/endpoints.js';
+import { getHealth } from '../api/endpoints';
 
 const isElectron = () => !!(window.electronAPI);
 
-export default function BootGate({ children }) {
+interface BootGateProps {
+  children?: React.ReactNode;
+}
+
+export default function BootGate({ children }: BootGateProps) {
   const [ready, setReady] = useState(() => !isElectron());
-  const [error, setError] = useState(null);
+  const [error, setError] = useState<string | null>(null);
   const [dots, setDots] = useState('');
 
   useEffect(() => {

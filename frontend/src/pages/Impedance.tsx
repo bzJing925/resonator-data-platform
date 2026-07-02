@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import I from '../components/Icons.jsx';
-import { LineChart } from '../components/Charts.jsx';
-import { getBatch, listBatches, listBatchFiles, getFileCurve } from '../api/endpoints.js';
+import I from '../components/Icons';
+import { LineChart } from '../components/Charts';
+import { getBatch, listBatches, listBatchFiles, getFileCurve } from '../api/endpoints';
+import type { Batch, FileEntry } from '../types';
 
 const MAX_PLOT = 30;
 const PAGE_SIZE = 100;
@@ -11,8 +12,8 @@ const PALETTE = [
   '#2563eb', '#ea580c', '#14b8a6', '#8b5cf6', '#f59e0b',
 ];
 
-function groupByFolder(files) {
-  const groups = new Map();
+function groupByFolder(files: FileEntry[]) {
+  const groups = new Map<string, { label: string; files: FileEntry[] }>();
   groups.set('', { label: '全部', files: [] });
   for (const f of files) {
     const folder = f.relpath.includes('/') ? f.relpath.split('/')[0] : '(根目录)';
@@ -24,18 +25,18 @@ function groupByFolder(files) {
 }
 
 export default function Impedance() {
-  const [batches, setBatches] = useState([]);
-  const [batchNo, setBatchNo] = useState('');
-  const [files, setFiles] = useState([]);
-  const [loadingFiles, setLoadingFiles] = useState(false);
-  const [folder, setFolder] = useState('');
-  const [search, setSearch] = useState('');
-  const [page, setPage] = useState(1);
-  const [selected, setSelected] = useState(new Set());
-  const [curves, setCurves] = useState([]);
-  const [loadingCurves, setLoadingCurves] = useState(false);
-  const [error, setError] = useState(null);
-  const [showMean, setShowMean] = useState(true);
+  const [batches, setBatches] = useState<Batch[]>([]);
+  const [batchNo, setBatchNo] = useState<string>('');
+  const [files, setFiles] = useState<FileEntry[]>([]);
+  const [loadingFiles, setLoadingFiles] = useState<boolean>(false);
+  const [folder, setFolder] = useState<string>('');
+  const [search, setSearch] = useState<string>('');
+  const [page, setPage] = useState<number>(1);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [curves, setCurves] = useState<{ relpath: string; name: string; freq: number[]; values: number[] }[]>([]);
+  const [loadingCurves, setLoadingCurves] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+  const [showMean, setShowMean] = useState<boolean>(true);
 
   useEffect(() => {
     listBatches({ size: 200 })
@@ -115,26 +116,27 @@ export default function Impedance() {
     setCurves([]);
     const toPlot = Array.from(selected).slice(0, MAX_PLOT);
     try {
-      const results = await Promise.all(
+      const results: ({ relpath: string; name: string; freq: number[]; values: number[]; error?: null } | { relpath: string; name: string; error: string; freq?: undefined; values?: undefined })[] = await Promise.all(
         toPlot.map(async (relpath) => {
           try {
             const data = await getFileCurve(batchNo, relpath, 'z_mag_db');
             return {
               relpath,
-              name: data.relpath.split('/').pop(),
+              name: data.relpath.split('/').pop() || relpath,
               freq: data.freq_ghz,
               values: data.values,
+              error: null as null,
             };
-          } catch (e) {
-            return { relpath, name: relpath.split('/').pop(), error: e.message };
+          } catch (e: any) {
+            return { relpath, name: relpath.split('/').pop() || relpath, error: e.message || String(e) };
           }
         })
       );
-      setCurves(results.filter((r) => !r.error && r.freq.length));
+      setCurves(results.filter((r): r is { relpath: string; name: string; freq: number[]; values: number[] } => !r.error && !!r.freq.length));
       const errCount = results.filter((r) => r.error).length;
       if (errCount) setError(`${errCount} 条曲线加载失败`);
-    } catch (e) {
-      setError(e.message);
+    } catch (e: any) {
+      setError(e.message || String(e));
     } finally {
       setLoadingCurves(false);
     }
@@ -223,7 +225,7 @@ export default function Impedance() {
                 {Array.from(groups.keys())
                   .filter((k) => k !== '')
                   .map((k) => (
-                    <option key={k} value={k}>{k} ({groups.get(k).files.length})</option>
+                    <option key={k} value={k}>{k} ({groups.get(k)?.files.length || 0})</option>
                   ))}
               </select>
               <input

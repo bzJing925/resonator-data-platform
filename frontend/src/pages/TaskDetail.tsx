@@ -1,20 +1,22 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import I from '../components/Icons.jsx';
-import { getTask } from '../api/endpoints.js';
+import I from '../components/Icons';
+import { getTask } from '../api/endpoints';
 import useSSE from '../hooks/useSSE';
+import type { Task } from '../types';
 
 export default function TaskDetail() {
-  const { taskId } = useParams();
-  const [task, setTask] = useState(null);
-  const [error, setError] = useState(null);
+  const { taskId } = useParams<{ taskId: string }>();
+  const [task, setTask] = useState<Task | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const sse = useSSE(taskId);
 
   useEffect(() => {
+    if (!taskId) return;
     let cancelled = false;
     getTask(taskId)
       .then((d) => { if (!cancelled) setTask(d); })
-      .catch((e) => { if (!cancelled) setError(e.message); });
+      .catch((e: Error) => { if (!cancelled) setError(e.message); });
     return () => { cancelled = true; };
   }, [taskId, sse.done]);
 

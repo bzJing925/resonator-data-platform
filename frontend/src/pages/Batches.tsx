@@ -1,9 +1,15 @@
 import React, { memo, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import I from '../components/Icons.jsx';
-import { listBatches, deleteBatch } from '../api/endpoints.js';
+import I from '../components/Icons';
+import { listBatches, deleteBatch } from '../api/endpoints';
+import type { Batch } from '../types';
 
-const BatchRow = memo(function BatchRow({ batch, onDelete }) {
+interface BatchRowProps {
+  batch: Batch;
+  onDelete: (batchNo: string) => Promise<void>;
+}
+
+const BatchRow = memo(function BatchRow({ batch, onDelete }: BatchRowProps) {
   const b = batch;
   return (
     <tr>
@@ -49,20 +55,25 @@ const BatchRow = memo(function BatchRow({ batch, onDelete }) {
 });
 
 export default function Batches() {
-  const [page, setPage] = useState(1);
-  const [size] = useState(20);
-  const [data, setData] = useState({ items: [], total: 0, page: 1, size: 20 });
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [search, setSearch] = useState('');
+  const [page, setPage] = useState<number>(1);
+  const [size] = useState<number>(20);
+  const [data, setData] = useState<{ items: Batch[]; total: number; page: number; size: number }>({
+    items: [],
+    total: 0,
+    page: 1,
+    size: 20,
+  });
+  const [loading, setLoading] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState<string>('');
 
   // load 接受外部 cancelled flag —— useEffect 重跑时能让旧请求丢弃结果，
   // 避免分页/size 快速切换时慢请求覆盖快请求结果。
   const load = (cancelled = { current: false }) => {
     setLoading(true);
     listBatches({ page, size, sort: '-uploaded_at' })
-      .then((d) => { if (!cancelled.current) setData(d); })
-      .catch((e) => { if (!cancelled.current) setError(e.message); })
+      .then((d) => { if (!cancelled.current) setData(d as { items: Batch[]; total: number; page: number; size: number }); })
+      .catch((e: Error) => { if (!cancelled.current) setError(e.message); })
       .finally(() => { if (!cancelled.current) setLoading(false); });
   };
 
@@ -73,12 +84,12 @@ export default function Batches() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, size]);
 
-  const onDelete = async (batchNo) => {
+  const onDelete = async (batchNo: string) => {
     if (!confirm(`确认删除批次 ${batchNo}？此操作不可逆。`)) return;
     try {
       await deleteBatch(batchNo);
       load();
-    } catch (e) {
+    } catch (e: any) {
       alert(e.message);
     }
   };
@@ -136,7 +147,7 @@ export default function Batches() {
           <tbody>
             {filtered.length === 0 && !loading && (
               <tr>
-                <td colSpan="8" className="dim" style={{ textAlign: 'center', padding: 24 }}>
+                <td colSpan={8} className="dim" style={{ textAlign: 'center', padding: 24 }}>
                   暂无批次
                 </td>
               </tr>

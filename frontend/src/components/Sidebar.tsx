@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import I from './Icons.jsx';
+import I from './Icons';
 
 const NAV = [
   { to: '/', icon: I.dashboard, label: '仪表盘', end: true },

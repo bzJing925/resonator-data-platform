@@ -1,5 +1,12 @@
 import React, { useCallback, useEffect, useMemo } from 'react';
 import Plot from 'react-plotly.js';
+import type { ChartField } from '../types';
+
+// Plotly's bundled TypeScript definitions are very strict about literal
+// unions (axis type, legend orientation, grid roworder, etc.). Our chart
+// code builds layouts dynamically, so we cast through this wrapper to
+// avoid fighting the type checker on every trace/layout property.
+const PlotAny = Plot as unknown as React.FC<any>;
 
 // Sentinel for null/undefined Z bucket — kept as a literal so the legend
 // reads "∅" and groupBy() / distinctSortedValues() / per-trace filters all
@@ -8,7 +15,7 @@ import Plot from 'react-plotly.js';
 const NULL_KEY = '∅';
 const isNullish = (v) => v === null || v === undefined;
 
-const baseLayout = {
+const baseLayout: any = {
   paper_bgcolor: '#181B21',
   plot_bgcolor: '#181B21',
   font: { family: 'Inter, system-ui, sans-serif', size: 11, color: '#C4C8D0' },
@@ -178,7 +185,7 @@ export function ScatterPlot({
   }, [onPointClick]);
 
   return (
-    <Plot
+    <PlotAny
       divId="chart-scatter"
       data={traces}
       layout={layout}
@@ -245,7 +252,7 @@ export function BoxPlot({ rows, xKey, yKey, colorKey, xLabel, yLabel, colorIsCat
   }), [xLabel, yLabel, xKey, yKey, colorKey, colorIsCategory]);
 
   return (
-    <Plot
+    <PlotAny
       divId="chart-box"
       data={traces}
       layout={layout}
@@ -316,7 +323,7 @@ export function ViolinPlot({ rows, xKey, yKey, colorKey, xLabel, yLabel, colorIs
   }), [xLabel, yLabel, xKey, yKey, colorKey, colorIsCategory]);
 
   return (
-    <Plot
+    <PlotAny
       divId="chart-violin"
       data={traces}
       layout={layout}
@@ -330,7 +337,19 @@ export function ViolinPlot({ rows, xKey, yKey, colorKey, xLabel, yLabel, colorIs
 /* ------------------------------------------------------------------
  *  LineChart — basic single/multi-series line.
  * ------------------------------------------------------------------ */
-export function LineChart({ x, y, xLabel, yLabel, name, color, markers = [], series, showLegend, xIsCategory, extraShapes = [] }) {
+export function LineChart({ x, y, xLabel, yLabel, name, color, markers = [], series, showLegend, xIsCategory, extraShapes = [] }: {
+  x?: number[];
+  y?: number[];
+  xLabel?: string;
+  yLabel?: string;
+  name?: string;
+  color?: string;
+  markers?: { x: number; label?: string; color?: string }[];
+  series?: { x?: number[]; y: number[]; name?: string; color?: string; width?: number; opacity?: number; mode?: string; dash?: string }[];
+  showLegend?: boolean;
+  xIsCategory?: boolean;
+  extraShapes?: unknown[];
+}) {
   const traces = useMemo(() => {
     if (series && series.length) {
       return series.map((s, i) => ({
@@ -380,7 +399,7 @@ export function LineChart({ x, y, xLabel, yLabel, name, color, markers = [], ser
   }, [xLabel, yLabel, showLegend, xIsCategory, markers, extraShapes]);
 
   return (
-    <Plot
+    <PlotAny
       divId="chart-line"
       data={traces}
       layout={layout}
@@ -575,7 +594,7 @@ export function FacetedGrid({
   }
 
   return (
-    <Plot
+    <PlotAny
       divId="chart-faceted"
       data={traces}
       layout={layout}
@@ -729,7 +748,7 @@ export function WaferMap({
   }, [onPointClick]);
 
   return (
-    <Plot
+    <PlotAny
       divId="chart-wafer"
       data={traces}
       layout={layout}
@@ -1257,7 +1276,8 @@ function buildSwarmTraces({ rows, xField, yField, zField, axisRef, zCategoryValu
       for (const xc of xCats) {
         const grp = groups.get(groupKey(xc, zv)) || [];
         const tickIdx = xIndexOf.get(xc);
-        const { xs, ys } = swarmGroup(grp, tickIdx + zCenter, subSlotW);
+        if (tickIdx == null) continue;
+        const { xs, ys } = swarmGroup(grp, (tickIdx as number) + (zCenter as number), subSlotW as number);
         allXs.push(...xs);
         allYs.push(...ys);
         allCustom.push(...grp);
@@ -1291,6 +1311,7 @@ function buildSwarmTraces({ rows, xField, yField, zField, axisRef, zCategoryValu
     for (const xc of xCats) {
       const grp = groups.get(groupKey(xc, '__all__')) || [];
       const tickIdx = xIndexOf.get(xc);
+      if (tickIdx == null) continue;
       const { xs, ys } = swarmGroup(grp, tickIdx, 1);
       allXs.push(...xs);
       allYs.push(...ys);
@@ -1467,6 +1488,18 @@ export function UnifiedChartGrid({
   onWarn,
   onPointClick,
   onSelection,
+}: {
+  chartType: string;
+  rows: Record<string, unknown>[];
+  xFields: ChartField[];
+  yFields: ChartField[];
+  zField?: ChartField | null;
+  height?: number;
+  width?: number | null;
+  onPerformanceWarn?: (warn: { rowCount: number; threshold: number }) => void;
+  onWarn?: (warn: unknown) => void;
+  onPointClick?: (d: unknown) => void;
+  onSelection?: (e: unknown) => void;
 }) {
   const cols = (xFields || []).length;
   const nRows = (yFields || []).length;
@@ -1498,8 +1531,8 @@ export function UnifiedChartGrid({
       : null;
 
     const hasNumericZ = effZ && !effZ.isCategorical && chartType === 'scatter';
-    const outTraces = [];
-    const outLayout = {
+    const outTraces: any[] = [];
+    const outLayout: any = {
       ...baseLayout,
       grid: {
         rows: nRows,
@@ -1533,7 +1566,7 @@ export function UnifiedChartGrid({
 
         const yIsCat = !!yField.isCategorical;
 
-        const xLayout = {
+        const xLayout: any = {
           ...baseLayout.xaxis,
           title: { text: axisTitle(xField), font: { size: 11 } },
           tickfont: { size: 10 },
@@ -1644,7 +1677,7 @@ export function UnifiedChartGrid({
   }
 
   return (
-    <Plot
+    <PlotAny
       divId="chart-unified"
       data={allTraces}
       layout={layout}

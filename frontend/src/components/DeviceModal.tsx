@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import I from './Icons.jsx';
-import { LineChart } from './Charts.jsx';
+import I from './Icons';
+import { LineChart } from './Charts';
 import {
   getDeviceSparam,
   getDeviceBodeq,

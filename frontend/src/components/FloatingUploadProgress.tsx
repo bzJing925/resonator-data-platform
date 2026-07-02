@@ -1,9 +1,22 @@
 import React, { useEffect } from 'react';
-import I from './Icons.jsx';
+import I from './Icons';
 import useSSE from '../hooks/useSSE';
-import { useUploadProgress } from '../contexts/UploadProgressContext.jsx';
+import { useUploadProgress } from '../contexts/UploadProgressContext';
 
-function TaskItem({ task }) {
+interface TaskItemProps {
+  task: {
+    task_id: string | number;
+    batch_no?: string;
+    done?: boolean;
+    status?: string;
+    progress?: number;
+    stage?: string;
+    stageProgress?: number;
+    message?: string;
+  };
+}
+
+function TaskItem({ task }: TaskItemProps) {
   const { removeTask, updateTask } = useUploadProgress();
   const sse = useSSE(task.task_id, { enabled: !task.done });
 
@@ -118,20 +131,26 @@ function TaskItem({ task }) {
   );
 }
 
+interface UploadTask {
+  task_id: string | number;
+  done?: boolean;
+  addedAt?: number;
+}
+
 export default function FloatingUploadProgress() {
   const { tasks, removeTask } = useUploadProgress();
 
   if (tasks.length === 0) return null;
 
   // 自动移除已完成的任务（保留 30 秒，方便用户看到成功/失败）
-  const visibleTasks = tasks.filter((t) => {
+  const visibleTasks = tasks.filter((t: UploadTask) => {
     if (!t.done) return true;
     return Date.now() - (t.addedAt || 0) < 30000;
   });
 
   if (visibleTasks.length === 0) {
     // 全部过期，批量清理
-    tasks.filter((t) => t.done).forEach((t) => removeTask(t.task_id));
+    tasks.filter((t: UploadTask) => t.done).forEach((t: UploadTask) => removeTask(t.task_id));
     return null;
   }
 
@@ -164,13 +183,13 @@ export default function FloatingUploadProgress() {
         }}
       >
         <span style={{ fontSize: 12, fontWeight: 600 }}>上传任务 ({tasks.length})</span>
-        <button className="btn ghost sm" style={{ padding: '2px 6px' }} onClick={() => tasks.forEach((t) => removeTask(t.task_id))}>
+        <button className="btn ghost sm" style={{ padding: '2px 6px' }} onClick={() => tasks.forEach((t: UploadTask) => removeTask(t.task_id))}>
           全部关闭
         </button>
       </div>
       <div style={{ overflow: 'auto' }}>
-        {tasks.map((t) => (
-          <TaskItem key={t.task_id} task={t} />
+        {tasks.map((t: UploadTask) => (
+          <TaskItem key={t.task_id} task={t as TaskItemProps['task']} />
         ))}
       </div>
     </div>
