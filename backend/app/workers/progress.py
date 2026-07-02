@@ -20,7 +20,11 @@ class ProgressPublisher:
     def __init__(self, task_id: int) -> None:
         self.task_id = task_id
         self.channel = f"task:{task_id}"
-        self._redis: Redis = Redis.from_url(get_settings().REDIS_URL, decode_responses=True)
+        settings = get_settings()
+        if not settings.is_desktop:
+            self._redis: Redis | None = Redis.from_url(settings.REDIS_URL, decode_responses=True)
+        else:
+            self._redis = None
 
     def _publish(self, payload: dict[str, Any]) -> None:
         try:
