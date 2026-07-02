@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import I from '../components/Icons.jsx';
 import { getTask } from '../api/endpoints.js';
-import useSSE from '../hooks/useSSE.js';
+import useSSE from '../hooks/useSSE';
 
 export default function TaskDetail() {
   const { taskId } = useParams();

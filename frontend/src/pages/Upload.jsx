@@ -3,7 +3,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import I from '../components/Icons.jsx';
 import { listMappings, uploadBatch } from '../api/endpoints.js';
 import { useUploadProgress } from '../contexts/UploadProgressContext.jsx';
-import useSSE from '../hooks/useSSE.js';
+import useSSE from '../hooks/useSSE';
 
 function ProgressBar({ label, pct, status, compact = false }) {
   const color =

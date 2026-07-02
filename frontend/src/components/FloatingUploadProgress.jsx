@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react';
 import I from './Icons.jsx';
-import useSSE from '../hooks/useSSE.js';
+import useSSE from '../hooks/useSSE';
 import { useUploadProgress } from '../contexts/UploadProgressContext.jsx';
 
 function TaskItem({ task }) {

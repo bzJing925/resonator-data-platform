@@ -1,4 +1,4 @@
-import api from './client.js';
+import api from './client';
 
 export const getHealth = () => api.get('/health').then((r) => r.data);
 export const getStats = () => api.get('/stats').then((r) => r.data);
