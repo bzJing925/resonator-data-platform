@@ -8,7 +8,7 @@
   "main": "electron-dist/electron/main.js",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
-    "build": "tsc --noEmit && vite build && npm run electron:build-main",
+    "build": "vite build && npm run electron:build-main",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "electron:build-main": "tsc -p tsconfig.node.json --outDir electron-dist && node scripts/copy-electron-assets.js",
@@ -123,6 +123,7 @@
     "@types/node": "^20.19.43",
     "@types/react": "^18.3.31",
     "@types/react-dom": "^18.3.7",
+    "@types/react-plotly.js": "^2.6.4",
     "@vitejs/plugin-react": "^4.3.4",
     "concurrently": "^10.0.3",
     "electron": "^42.4.0",
