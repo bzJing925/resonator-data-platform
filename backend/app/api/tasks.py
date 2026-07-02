@@ -43,6 +43,11 @@ def get_task(task_id: int, db: DbSession) -> TaskDetail:
 
 async def _stream_task_events(task_id: int) -> AsyncIterator[dict]:
     settings = get_settings()
+    if settings.is_desktop:
+        async for item in _stream_task_polling(task_id):
+            yield item
+        return
+
     r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
     pubsub = r.pubsub()
     channel = f"task:{task_id}"
@@ -132,6 +137,57 @@ async def _stream_task_events(task_id: int) -> AsyncIterator[dict]:
             await r.close()
         except Exception:
             pass
+
+
+async def _stream_task_polling(task_id: int) -> AsyncIterator[dict]:
+    start_ts = time.monotonic()
+
+    while True:
+        with next(get_db()) as db:
+            task = db.get(UploadTask, task_id)
+            if task is None:
+                yield {
+                    "event": "error",
+                    "data": json.dumps({"error_msg": f"任务 {task_id} 不存在"}),
+                }
+                return
+
+            yield {
+                "event": "progress",
+                "data": json.dumps(
+                    {
+                        "progress_pct": task.progress_pct,
+                        "progress_msg": task.progress_msg,
+                        "status": task.status,
+                        "stage": task.stage,
+                        "stage_progress_pct": task.stage_progress_pct,
+                    }
+                ),
+            }
+
+            if task.status == "success":
+                yield {
+                    "event": "done",
+                    "data": json.dumps({"status": "success", "batch_no": task.batch_no}),
+                }
+                return
+            if task.status == "failed":
+                yield {
+                    "event": "error",
+                    "data": json.dumps({"status": "failed", "error_msg": task.error_msg}),
+                }
+                return
+
+        if time.monotonic() - start_ts > _STREAM_MAX_SECONDS:
+            yield {
+                "event": "error",
+                "data": json.dumps(
+                    {"error_msg": f"流超时 {_STREAM_MAX_SECONDS}s，请重新拉取任务状态"}
+                ),
+            }
+            return
+
+        await asyncio.sleep(1.0)
 
 
 @router.get("/{task_id}/stream")
