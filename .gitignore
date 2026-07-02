@@ -23,6 +23,9 @@ wheels/
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
+frontend/release/
+frontend/electron-dist/
+frontend/*.tsbuildinfo
 
 # 数据导出/临时
 backend/exports/
