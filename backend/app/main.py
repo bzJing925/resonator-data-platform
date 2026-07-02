@@ -24,8 +24,8 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.api import batches, devices, export, files, mappings, query, system, tasks, upload
 from app.config import get_settings
@@ -37,12 +37,23 @@ log = logging.getLogger("aln")
 
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
+    settings = get_settings()
+    worker_thread = None
+    if settings.is_desktop:
+        from app.desktop_setup import init_desktop_environment
+        from app.workers.local_queue import start_local_worker, stop_local_worker
+
+        init_desktop_environment()
+        worker_thread = start_local_worker()
+
     watcher_task = None
-    if settings.WATCH_ENABLED:
+    if settings.WATCH_ENABLED and not settings.is_desktop:
         from app.watch.watcher import watch_uploads
 
         watcher_task = asyncio.create_task(watch_uploads())
     yield
+    if worker_thread is not None:
+        stop_local_worker()
     if watcher_task is not None:
         watcher_task.cancel()
         try:

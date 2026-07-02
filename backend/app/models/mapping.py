@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
+    JSON,
     BigInteger,
     Boolean,
     DateTime,
@@ -15,7 +16,6 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -56,7 +56,7 @@ class MappingEntry(Base):
     area_s11: Mapped[int | None]
     area_s22: Mapped[int | None]
     has_pf: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    raw_tokens: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    raw_tokens: Mapped[dict[str, Any] | None] = mapped_column(JSON)
 
     mapping: Mapped[Mapping] = relationship(back_populates="entries")
 

@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from app.config import get_settings
+from app.desktop_setup import init_desktop_environment
 from app.workers.dispatch import dispatch_batch_task
 
 
@@ -49,3 +50,16 @@ def test_dispatch_uses_local_queue_in_desktop_mode(monkeypatch, tmp_path):
 
     pending = get_local_queue().list_pending()
     assert any(item.task_id == task_id for item in pending)
+
+
+def test_init_desktop_environment_creates_dirs_and_db(monkeypatch, tmp_path):
+    monkeypatch.setenv("ALN_DESKTOP_MODE", "true")
+    monkeypatch.setenv("ALN_DESKTOP_DIR", str(tmp_path))
+    get_settings.cache_clear()
+
+    init_desktop_environment()
+
+    assert (tmp_path / "aln-data.db").exists()
+    assert (tmp_path / "uploads").exists()
+    assert (tmp_path / "files").exists()
+    assert (tmp_path / "mappings").exists()
