@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain, shell, Menu } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawn } from 'node:child_process';
+import { spawn, ChildProcess } from 'node:child_process';
 import net from 'node:net';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -22,9 +22,9 @@ const isDev = !isPackaged;
 // ---------------------------------------------------------------------------
 // 窗口管理
 // ---------------------------------------------------------------------------
-let mainWindow = null;
-let splashWindow = null;
-let backendProcess = null;
+let mainWindow: BrowserWindow | null = null;
+let splashWindow: BrowserWindow | null = null;
+let backendProcess: ChildProcess | null = null;
 let backendReady = false;
 
 function createSplashWindow() {
@@ -44,7 +44,7 @@ function createSplashWindow() {
 
   splashWindow.loadFile(path.join(__dirname, 'splash.html'));
   splashWindow.once('ready-to-show', () => {
-    splashWindow.show();
+    splashWindow?.show();
   });
 }
 
@@ -57,7 +57,7 @@ function createMainWindow() {
     title: 'ALN Resonator Data Platform',
     show: false,
     webPreferences: {
-      preload: path.join(__dirname, 'preload.cjs'),
+      preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -81,8 +81,8 @@ function createMainWindow() {
     if (splashWindow && !splashWindow.isDestroyed()) {
       splashWindow.close();
     }
-    mainWindow.show();
-    if (isDev) mainWindow.webContents.openDevTools({ mode: 'detach' });
+    mainWindow?.show();
+    if (isDev) mainWindow?.webContents.openDevTools({ mode: 'detach' });
   });
 
   mainWindow.on('closed', () => {
@@ -93,7 +93,7 @@ function createMainWindow() {
 // ---------------------------------------------------------------------------
 // 后端服务管理
 // ---------------------------------------------------------------------------
-function waitForBackend(maxAttempts = 300, intervalMs = 200) {
+function waitForBackend(maxAttempts = 300, intervalMs = 200): Promise<void> {
   return new Promise((resolve, reject) => {
     let attempts = 0;
     const tryConnect = () => {
@@ -101,7 +101,7 @@ function waitForBackend(maxAttempts = 300, intervalMs = 200) {
       const req = net
         .connect(BACKEND_PORT, BACKEND_HOST, () => {
           req.destroy();
-          resolve(true);
+          resolve();
         })
         .on('error', () => {
           if (attempts >= maxAttempts) {
@@ -127,9 +127,9 @@ async function startBackend() {
   }
 
   const projectRoot = path.resolve(__dirname, '..', '..');
-  let command;
-  let args;
-  let cwd;
+  let command: string;
+  let args: string[];
+  let cwd: string;
 
   if (isPackaged) {
     const backendDir = path.join(process.resourcesPath, 'backend');
@@ -192,7 +192,7 @@ async function startBackend() {
     backendReady = true;
     console.log('[main] 后端服务就绪');
     notifyBackendReady();
-  } catch (e) {
+  } catch (e: any) {
     console.error('[main] 等待后端就绪超时:', e.message);
   }
 }
@@ -206,8 +206,8 @@ function notifyBackendReady() {
 function stopBackend() {
   if (backendProcess) {
     console.log('[main] 停止后端服务...');
-    if (process.platform === 'win32') {
-      spawn('taskkill', ['/pid', backendProcess.pid, '/f', '/t']);
+    if (process.platform === 'win32' && backendProcess.pid) {
+      spawn('taskkill', ['/pid', String(backendProcess.pid), '/f', '/t']);
     } else {
       backendProcess.kill('SIGTERM');
     }
@@ -275,5 +275,5 @@ app.on('before-quit', () => {
 // ---------------------------------------------------------------------------
 ipcMain.handle('app:get-version', () => app.getVersion());
 ipcMain.handle('app:get-backend-url', () => BACKEND_URL);
-ipcMain.handle('app:open-external', (_event, url) => shell.openExternal(url));
+ipcMain.handle('app:open-external', (_event, url: string) => shell.openExternal(url));
 ipcMain.handle('backend:is-ready', () => backendReady);

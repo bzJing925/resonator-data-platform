@@ -1,20 +1,22 @@
 {
   "name": "aln-data-frontend",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "ALN Resonator Test Data Platform",
   "author": "aln-data <dev@aln-data.local>",
   "type": "module",
+  "main": "electron-dist/electron/main.js",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
-    "build": "vite build",
+    "build": "tsc --noEmit && vite build && npm run electron:build-main",
     "preview": "vite preview",
-    "electron:dev": "concurrently \"npm run dev\" \"wait-on http://127.0.0.1:5173 && electron .\"",
+    "typecheck": "tsc --noEmit",
+    "electron:build-main": "tsc -p tsconfig.node.json --outDir electron-dist && node scripts/copy-electron-assets.js",
+    "electron:dev": "npm run electron:build-main && concurrently \"npm run dev\" \"wait-on http://127.0.0.1:5173 && electron .\"",
     "electron:preview": "npm run build && electron .",
-    "electron:pack": "electron-builder",
+    "electron:pack": "npm run build && electron-builder",
     "dist": "npm run build && electron-builder"
   },
-  "main": "electron/main.js",
   "homepage": ".",
   "build": {
     "appId": "com.alndata.desktop",
@@ -26,25 +28,35 @@
     },
     "files": [
       "dist/**/*",
-      "electron/**/*",
+      "electron-dist/**/*",
       "package.json"
     ],
     "extraResources": [
       {
         "from": "build/backend",
         "to": "backend",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "protocols": [
       {
         "name": "ALN Data Platform",
-        "schemes": ["alndata"]
+        "schemes": [
+          "alndata"
+        ]
       }
     ],
     "mac": {
       "target": [
-        { "target": "dmg", "arch": ["x64", "arm64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
       ],
       "icon": "build-resources/icon.icns",
       "category": "public.app-category.science",
@@ -54,14 +66,32 @@
     "dmg": {
       "sign": false,
       "contents": [
-        { "x": 130, "y": 220 },
-        { "x": 410, "y": 220, "type": "link", "path": "/Applications" }
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
       ]
     },
     "win": {
       "target": [
-        { "target": "nsis", "arch": ["x64"] },
-        { "target": "portable", "arch": ["x64"] }
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
       "icon": "build-resources/icon.ico"
     },
@@ -82,10 +112,14 @@
     "react-router-dom": "^6.28.1"
   },
   "devDependencies": {
+    "@types/node": "^20.19.43",
+    "@types/react": "^18.3.31",
+    "@types/react-dom": "^18.3.7",
     "@vitejs/plugin-react": "^4.3.4",
     "concurrently": "^10.0.3",
     "electron": "^42.4.0",
     "electron-builder": "^26.15.3",
+    "typescript": "^5.4.5",
     "vite": "^5.4.11",
     "wait-on": "^9.0.10"
   }
