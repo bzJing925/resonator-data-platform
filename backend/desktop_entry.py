@@ -11,8 +11,11 @@ import traceback
 meipass = getattr(sys, '_MEIPASS', None)
 if meipass:
     os.environ['ALN_DESKTOP'] = '1'
+    os.environ['ALN_DESKTOP_MODE'] = 'true'
     # 桌面版数据目录强制固定到用户目录，覆盖 .env 里可能写死的开发绝对路径
-    os.environ['DATA_ROOT'] = os.path.join(os.path.expanduser('~'), '.aln-data', 'data')
+    desktop_dir = os.path.join(os.path.expanduser('~'), '.aln-data')
+    os.environ['ALN_DESKTOP_DIR'] = desktop_dir
+    os.environ['DATA_ROOT'] = os.path.join(desktop_dir, 'data')
     env_path = os.path.join(meipass, '.env')
     if os.path.isfile(env_path):
         os.environ['DOTENV_PATH'] = env_path
@@ -45,7 +48,7 @@ def log(msg):
 
 log(f'[aln-backend] MPLCONFIGDIR={cache_home} home={os.path.expanduser("~")} meipass={meipass}')
 log(
-    f"[aln-backend] DOTENV_PATH={os.environ.get('DOTENV_PATH')} "
+    f'[aln-backend] DOTENV_PATH={os.environ.get("DOTENV_PATH")} '
     f"DATA_ROOT={os.environ.get('DATA_ROOT')}"
 )
 log(f'[aln-backend] sys.executable={sys.executable}')

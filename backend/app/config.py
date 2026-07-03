@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -26,6 +27,10 @@ class Settings(BaseSettings):
         env_file=os.environ.get("DOTENV_PATH", str(_repo_root / ".env")),
         extra="ignore",
     )
+
+    # 桌面模式
+    ALN_DESKTOP_MODE: bool = False
+    ALN_DESKTOP_DIR: Path | None = None
 
     # 数据库
     DATABASE_URL: str = "postgresql+psycopg://aln:aln@localhost:5432/aln"
@@ -41,7 +46,7 @@ class Settings(BaseSettings):
 
     # 目录监听上传
     WATCH_ENABLED: bool = True
-    WATCH_DIR: Path | None = None  # 默认 = DATA_ROOT / "watch"
+    WATCH_DIR: Path | None = None  # 默认 = data_root / "watch"
     WATCH_DELETE_PROCESSED: bool = True  # 成功后是否删除原 zip
 
     # 数据保留策略
@@ -67,28 +72,59 @@ class Settings(BaseSettings):
     DB_POOL_TIMEOUT: int = 30  # 等待连接池释放的超时秒数
 
     @property
+    def is_desktop(self) -> bool:
+        return self.ALN_DESKTOP_MODE
+
+    @property
+    def desktop_dir(self) -> Path:
+        if self.ALN_DESKTOP_DIR is not None:
+            return self.ALN_DESKTOP_DIR
+        return Path.home() / ".aln-data"
+
+    @property
+    def data_root(self) -> Path:
+        if self.is_desktop:
+            return self.desktop_dir
+        return self.DATA_ROOT
+
+    @property
     def watch_dir(self) -> Path:
-        return self.WATCH_DIR or (self.DATA_ROOT / "watch")
+        if self.WATCH_DIR is not None:
+            return self.WATCH_DIR
+        return self.data_root / "watch"
 
     @property
     def uploads_dir(self) -> Path:
-        return self.DATA_ROOT / "uploads"
+        return self.data_root / "uploads"
 
     @property
     def files_dir(self) -> Path:
-        return self.DATA_ROOT / "files"
+        return self.data_root / "files"
 
     @property
     def mappings_dir(self) -> Path:
-        return self.DATA_ROOT / "mappings"
+        return self.data_root / "mappings"
 
     @property
     def exports_dir(self) -> Path:
-        return self.DATA_ROOT / "exports"
+        return self.data_root / "exports"
 
     @property
     def logs_dir(self) -> Path:
-        return self.DATA_ROOT / "logs"
+        return self.data_root / "logs"
+
+    @property
+    def resolved_database_url(self) -> str:
+        if self.is_desktop:
+            return f"sqlite:///{self.desktop_dir / 'aln-data.db'}"
+        return self.DATABASE_URL
+
+    @model_validator(mode="after")
+    def _apply_desktop_database(self) -> Settings:
+        """桌面模式下强制使用 SQLite 并将路径写入 DATABASE_URL。"""
+        if self.is_desktop:
+            self.DATABASE_URL = self.resolved_database_url
+        return self
 
 
 @dataclass
