@@ -1,8 +1,12 @@
 import { app, ipcMain } from 'electron';
-import { autoUpdater, UpdateCheckResult } from 'electron-updater';
+import { createRequire } from 'node:module';
+import type { UpdateCheckResult } from 'electron-updater';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+
+const require = createRequire(import.meta.url);
+const { autoUpdater } = require('electron-updater');
 
 interface UpdateSource {
   type: 'github' | 'static';
@@ -45,11 +49,11 @@ export function setupUpdater(): void {
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = false;
 
-  autoUpdater.on('update-available', (info) => {
+  autoUpdater.on('update-available', (info: any) => {
     console.log('[updater] 有可用更新:', info.version);
   });
 
-  autoUpdater.on('update-downloaded', (info) => {
+  autoUpdater.on('update-downloaded', (info: any) => {
     console.log('[updater] 更新已下载:', info.version);
   });
 
@@ -74,7 +78,7 @@ export function setupUpdater(): void {
   });
 
   setTimeout(() => {
-    autoUpdater.checkForUpdates().catch((err) => {
+    autoUpdater.checkForUpdates().catch((err: any) => {
       console.error('[updater] 自动检查失败:', err);
     });
   }, 10000);
