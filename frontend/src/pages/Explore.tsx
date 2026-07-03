@@ -970,26 +970,49 @@ function Inspector({
 /* -------------------------------------------------------------------------
  * AxisFieldCheckList — compact multi-select list for the curated X axis fields.
  * ----------------------------------------------------------------------- */
-function AxisFieldCheckList({ options, value, onChange }) {
+function AxisFieldCheckList({
+  options,
+  value,
+  onChange,
+  discouragedSections = [],
+  discouragedHint = '',
+}: {
+  options: any[];
+  value: string[];
+  onChange: (v: string[]) => void;
+  discouragedSections?: string[];
+  discouragedHint?: string;
+}) {
   const selected = useMemo(() => new Set(value), [value]);
-  const toggle = (name) => {
+  const toggle = (name: string) => {
     if (selected.has(name)) onChange(value.filter((v) => v !== name));
     else onChange([...value, name]);
   };
+  const hasDiscouragedSelected = useMemo(
+    () => Array.from(selected).some((name) => {
+      const f = options?.find((o) => o.name === name);
+      return f && discouragedSections.includes(f.section);
+    }),
+    [selected, options, discouragedSections]
+  );
   if (!options) return <div className="dim" style={{ fontSize: 11 }}>加载中…</div>;
   if (options.length === 0) {
     return <div className="dim" style={{ fontSize: 11 }}>暂无可用 X 字段</div>;
   }
   return (
     <div className="explore-fieldlist compact">
+      {discouragedHint && hasDiscouragedSelected && (
+        <div className="hint" style={{ marginBottom: 6, fontSize: 11 }}>{discouragedHint}</div>
+      )}
       <div className="explore-fieldgroup">
         <div className="explore-fieldgroup-body">
           {options.map((f) => {
             const checked = selected.has(f.name);
+            const discouraged = discouragedSections.includes(f.section);
             return (
               <label
                 key={f.name}
-                className={`explore-fieldchip${checked ? ' checked' : ''}`}
+                className={`explore-fieldchip${checked ? ' checked' : ''}${discouraged ? ' discouraged' : ''}`}
                 title={displayLabel(f)}
               >
                 <input
@@ -1001,7 +1024,7 @@ function AxisFieldCheckList({ options, value, onChange }) {
                 <span className="explore-fieldchip-cb" aria-hidden>
                   {checked && <I.check size={9} stroke="#fff" sw={2.5} />}
                 </span>
-                <span className="explore-fieldchip-label">{axisPickerLabel(f)}</span>
+                <span className="explore-fieldchip-label" style={discouraged ? { opacity: 0.6 } : undefined}>{axisPickerLabel(f)}</span>
               </label>
             );
           })}

@@ -79,6 +79,34 @@ export const getDeviceSparseSparam = (id: number | string, param = 'z_mag_db', p
     .get(`/devices/${id}/sparam-sparse`, { params: { param, piezo, n_points: nPoints } })
     .then((r) => r.data);
 
+// 虚拟文件树 API
+export const listFileTree = (batchNo: string, parentId: number | string | null = null) =>
+  api
+    .get('/files/tree', { params: { batch_no: batchNo, parent_id: parentId } })
+    .then((r) => r.data);
+
+export const moveFileTreeNodes = (body: Record<string, unknown>) =>
+  api.post('/files/tree/move', body).then((r) => r.data);
+
+export const reorderFileTreeNodes = (body: Record<string, unknown>) =>
+  api.post('/files/tree/reorder', body).then((r) => r.data);
+
+export const mkdirFileTree = (body: Record<string, unknown>) =>
+  api.post('/files/tree/mkdir', body).then((r) => r.data);
+
+export const renameFileTreeNode = (body: Record<string, unknown>) =>
+  api.post('/files/tree/rename', body).then((r) => r.data);
+
+export const deleteFileTreeNodes = (body: Record<string, unknown>) =>
+  api.post('/files/tree/delete', body).then((r) => r.data);
+
+export const downloadFileTreeNodesZip = (batchNo: string, nodeIds: (number | string)[]) =>
+  api.post(
+    '/files/download-zip-nodes',
+    { batch_no: batchNo, node_ids: nodeIds },
+    { responseType: 'blob' }
+  );
+
 export const downloadBatchZip = (batchNo: string) =>
   api.get(`/batches/${encodeURIComponent(batchNo)}/download-zip`, {
     responseType: 'blob',

@@ -6,7 +6,7 @@ import net from 'node:net';
 import fs from 'node:fs';
 import os from 'node:os';
 
-import { setupUpdater } from './updater';
+import { setupUpdater } from './updater.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

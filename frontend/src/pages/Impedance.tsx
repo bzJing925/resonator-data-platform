@@ -192,7 +192,7 @@ export default function Impedance() {
     setLoadingCurves(true);
     setError(null);
     setCurves([]);
-    const toPlot = Array.from(selected).slice(0, MAX_PLOT);
+    const toPlot = Array.from(selected as Set<string>).slice(0, MAX_PLOT);
     try {
       const results: ({ relpath: string; name: string; freq: number[]; values: number[]; error?: null } | { relpath: string; name: string; error: string; freq?: undefined; values?: undefined })[] = await Promise.all(
         toPlot.map(async (relpath) => {
@@ -202,8 +202,8 @@ export default function Impedance() {
             return {
               relpath,
               name: data.relpath.split('/').pop() || relpath,
-              freq: data.freq_ghz,
-              values: data.values,
+              freq: x,
+              values: y,
               error: null as null,
             };
           } catch (e: any) {
