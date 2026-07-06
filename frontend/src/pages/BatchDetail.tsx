@@ -5,6 +5,7 @@ import FileManager from '../components/FileManager';
 import {
   getBatch,
   getTask,
+  cancelTask,
   listBatchDevices,
   listBatchFiles,
   exportCsv,
@@ -309,6 +310,23 @@ export default function BatchDetail() {
           <span className="dim" style={{ fontSize: 12, marginRight: 8 }}>
             任务进行中 ({taskStatus === 'pending' ? '排队中' : '运行中'})
           </span>
+        )}
+        {isTaskActive && detail?.task_id && (
+          <button
+            className="btn fail"
+            onClick={async () => {
+              if (!window.confirm(`取消任务将删除批次 ${detail.batch_no} 及上传文件，是否继续？`)) return;
+              try {
+                setError(null);
+                await cancelTask(detail.task_id);
+                setTaskStatus('cancelled');
+              } catch (e: any) {
+                setError(formatApiError(e, '取消失败'));
+              }
+            }}
+          >
+            取消任务
+          </button>
         )}
         <button className="btn" onClick={onExportCsv} disabled={exporting} title="导出当前批次全部 devices 为 CSV">
           <I.download size={13} /> {exporting ? '导出中…' : '导出 CSV'}
