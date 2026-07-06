@@ -84,9 +84,11 @@ def cancel_task(task_id: int, db: DbSession) -> TaskDetail:
     except Exception:
         logger.exception("取消任务 %s 时清理或撤销失败", task_id)
         task.error_msg = "取消成功，但文件清理失败"
+        task.progress_msg = "已取消，但文件清理失败"
 
     task.status = "cancelled"
-    task.progress_msg = "已取消并清理文件"
+    if task.progress_msg != "已取消，但文件清理失败":
+        task.progress_msg = "已取消并清理文件"
     task.finished_at = datetime.now(UTC)
     db.commit()
 
