@@ -71,6 +71,9 @@ def cancel_task(task_id: int, db: DbSession) -> TaskDetail:
     db.commit()
 
     settings = get_settings()
+    cleanup_ok = True
+    revoke_ok = True
+    files_deleted = False
     try:
         if settings.is_desktop:
             get_local_queue().request_cancel(task_id)
@@ -78,22 +81,40 @@ def cancel_task(task_id: int, db: DbSession) -> TaskDetail:
             celery_app.control.revoke(
                 task.celery_task_id, terminate=task.status == "running"
             )
-
-        if task.batch_no:
-            delete_batch_and_files(db, task.batch_no)
     except Exception:
-        logger.exception("取消任务 %s 时清理或撤销失败", task_id)
-        task.error_msg = "取消成功，但文件清理失败"
-        task.progress_msg = "已取消，但文件清理失败"
+        logger.exception("取消任务 %s 时撤销 worker 失败", task_id)
+        revoke_ok = False
+
+    try:
+        # 只有原始上传任务才删除批次与文件；重处理任务取消时不应误删已有数据
+        if task.batch_no and task.kind == "upload":
+            delete_batch_and_files(db, task.batch_no)
+            files_deleted = True
+    except Exception:
+        logger.exception("取消任务 %s 时清理文件失败", task_id)
+        cleanup_ok = False
 
     task.status = "cancelled"
-    if task.progress_msg != "已取消，但文件清理失败":
+    task.stage = "failed"
+    task.stage_progress_pct = 0
+    task.progress_pct = 0
+    if not revoke_ok and not cleanup_ok:
+        task.error_msg = "取消成功，但撤销 worker 和文件清理均失败"
+        task.progress_msg = "已取消，但撤销 worker 和文件清理均失败"
+    elif not revoke_ok:
+        task.error_msg = "取消成功，但撤销 worker 失败"
+        task.progress_msg = "已取消，但撤销 worker 失败"
+    elif not cleanup_ok:
+        task.error_msg = "取消成功，但文件清理失败"
+        task.progress_msg = "已取消，但文件清理失败"
+    else:
+        task.error_msg = None
         task.progress_msg = "已取消并清理文件"
     task.finished_at = datetime.now(UTC)
     db.commit()
 
     data = TaskDetail.model_validate(task)
-    data.raw_zip_deleted = True
+    data.raw_zip_deleted = files_deleted
     return data
 
 
@@ -130,7 +151,7 @@ async def _stream_task_events(task_id: int) -> AsyncIterator[dict]:
                 ),
             }
 
-            if task.status in ("success", "failed"):
+            if task.status in ("success", "failed", "cancelled"):
                 event = "done" if task.status == "success" else "error"
                 payload: dict = {
                     "status": task.status,
@@ -227,10 +248,10 @@ async def _stream_task_polling(task_id: int) -> AsyncIterator[dict]:
                     "data": json.dumps({"status": "success", "batch_no": task.batch_no}),
                 }
                 return
-            if task.status == "failed":
+            if task.status in ("failed", "cancelled"):
                 yield {
                     "event": "error",
-                    "data": json.dumps({"status": "failed", "error_msg": task.error_msg}),
+                    "data": json.dumps({"status": task.status, "error_msg": task.error_msg}),
                 }
                 return
 

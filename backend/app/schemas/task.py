@@ -23,6 +23,7 @@ class TaskDetail(BaseModel):
     cancelled_at: datetime | None
     error_msg: str | None
     raw_zip_deleted: bool | None = None
+    kind: str | None = None
 
 
 class TaskListItem(BaseModel):

@@ -154,7 +154,9 @@ class ProgressPublisher:
                 status="cancelled",
                 stage="failed",
                 stage_progress_pct=0,
+                progress_pct=0,
                 progress_msg=error_msg,
+                cancelled_at=datetime.now(UTC),
                 finished_at=datetime.now(UTC),
             )
         )

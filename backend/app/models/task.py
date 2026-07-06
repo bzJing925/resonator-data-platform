@@ -37,6 +37,7 @@ class UploadTask(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     celery_task_id: Mapped[str | None] = mapped_column(Text)
+    kind: Mapped[str] = mapped_column(Text, default="upload", nullable=False)
 
     __table_args__ = (
         CheckConstraint(
@@ -46,6 +47,10 @@ class UploadTask(Base):
         CheckConstraint(
             "stage IN ('extract','deembed','metrics','done','failed')",
             name="ck_uptask_stage",
+        ),
+        CheckConstraint(
+            "kind IN ('upload','reextract','redeembed','recompute')",
+            name="ck_uptask_kind",
         ),
         CheckConstraint(
             "progress_pct BETWEEN 0 AND 100",

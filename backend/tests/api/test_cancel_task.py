@@ -78,3 +78,31 @@ def test_cancel_running_task_revokes_celery(db, client, monkeypatch):
     assert res.status_code == 200
     assert res.json()["status"] == "cancelled"
     mock_revoke.assert_called_once_with("celery-123", terminate=True)
+
+
+def test_cancel_reprocess_does_not_delete_batch(db, client):
+    from app.models import Batch, Mapping, UploadTask
+
+    mapping = Mapping(name="M1", file_path="/tmp/mapping.xlsx")
+    db.add(mapping)
+    db.commit()
+
+    task = UploadTask(batch_no="B.06", status="running", kind="recompute")
+    db.add(task)
+    db.flush()
+    batch = Batch(
+        batch_no="B.06",
+        mapping_id=mapping.id,
+        file_path="/tmp/fake",
+        raw_zip_path="/tmp/fake.zip",
+        task_id=task.id,
+    )
+    db.add(batch)
+    db.commit()
+
+    res = client.post(f"/api/tasks/{task.id}/cancel")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] == "cancelled"
+    assert data["raw_zip_deleted"] is False
+    assert db.scalar(select(Batch).where(Batch.batch_no == "B.06")) is not None

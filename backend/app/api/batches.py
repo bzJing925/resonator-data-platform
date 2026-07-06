@@ -143,6 +143,7 @@ def _start_reprocess(
         raise HTTPException(status_code=409, detail="该批次已有进行中的任务")
 
     task.status = "pending"
+    task.kind = kind
     task.stage = {"reextract": "extract", "redeembed": "deembed", "recompute": "metrics"}[kind]
     task.progress_pct = 0
     task.stage_progress_pct = 0

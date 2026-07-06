@@ -92,6 +92,7 @@ def create_batch_and_dispatch(
         status="pending",
         progress_pct=0,
         progress_msg="排队中",
+        kind="upload",
     )
     db.add(task)
     db.flush()
