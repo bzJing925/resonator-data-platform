@@ -56,6 +56,8 @@ export const listTasks = (params?: Record<string, unknown>) =>
   api.get('/tasks', { params }).then((r: AxiosResponse<Task[] | PagedList<Task>>) => r.data);
 export const getTask = (taskId: number | string) =>
   api.get(`/tasks/${taskId}`).then((r: AxiosResponse<Task>) => r.data);
+export const cancelTask = (taskId: number | string) =>
+  api.post(`/tasks/${taskId}/cancel`).then((r: AxiosResponse<Task>) => r.data);
 
 export const reextractBatch = (batchNo: string) =>
   api.post(`/batches/${encodeURIComponent(batchNo)}/reextract`).then((r) => r.data);

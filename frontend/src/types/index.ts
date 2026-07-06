@@ -77,6 +77,7 @@ export interface Task {
   error_msg?: string;
   started_at?: string;
   finished_at?: string;
+  cancelled_at?: string;
   stage?: string;
   stage_progress_pct?: number;
   raw_zip_deleted?: boolean;
