@@ -53,7 +53,7 @@ POST /api/tasks/{task_id}/cancel
 2. 若 `status` 不在 `('pending', 'running')`，返回 `409 Conflict`，提示“任务已结束，无法取消”。
 3. 记录 `cancelled_at = now()`。
 4. 先停止 worker：
-   - 对 **Celery**：若 `task.celery_task_id` 存在，调用 `celery_app.control.revoke(task.celery_task_id, terminate=True)`；
+   - 对 **Celery**：若 `task.celery_task_id` 存在，调用 `celery_app.control.revoke(task.celery_task_id, terminate=(task.status == "running"))`；
    - 对 **Desktop**：调用 `get_local_queue().request_cancel(task_id)`，从 pending 队列移除或标记 running 任务。
 5. 根据 `task.batch_no` 取 `Batch`：
    - 若存在，删除 batch（级联删 devices / file_nodes）。`batches.task_id` 已设置 `ondelete="SET NULL"`，删除 batch 不会影响 `UploadTask`。
