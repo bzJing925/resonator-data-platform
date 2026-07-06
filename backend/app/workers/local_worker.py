@@ -80,6 +80,10 @@ def local_worker_loop() -> None:
         task = queue.get(timeout=1.0)
         if task is None:
             continue
+        if queue.is_cancelled(task.task_id):
+            logger.info("本地任务 %s 已被取消，跳过", task.task_id)
+            queue.clear_cancel(task.task_id)
+            continue
         logger.info("本地 worker 开始处理任务 %s kind=%s", task.task_id, task.kind)
         if task.kind in ("upload", "reextract"):
             _run_upload_or_reextract(task)

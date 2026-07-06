@@ -50,6 +50,18 @@ def test_cancel_nonexistent_task_returns_404(client):
     assert res.status_code == 404
 
 
+def test_cancel_already_cancelled_is_idempotent(db, client):
+    from app.models import UploadTask
+
+    task = UploadTask(batch_no="B.05", status="cancelled", progress_msg="已取消")
+    db.add(task)
+    db.commit()
+
+    res = client.post(f"/api/tasks/{task.id}/cancel")
+    assert res.status_code == 200
+    assert res.json()["status"] == "cancelled"
+
+
 def test_cancel_running_task_revokes_celery(db, client, monkeypatch):
     from unittest.mock import MagicMock
 

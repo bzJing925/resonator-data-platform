@@ -60,6 +60,10 @@ def cancel_task(task_id: int, db: DbSession) -> TaskDetail:
     task = db.get(UploadTask, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail=f"任务 {task_id} 不存在")
+    if task.status == "cancelled":
+        data = TaskDetail.model_validate(task)
+        data.raw_zip_deleted = True
+        return data
     if task.status not in ("pending", "running"):
         raise HTTPException(status_code=409, detail="任务已结束，无法取消")
 
