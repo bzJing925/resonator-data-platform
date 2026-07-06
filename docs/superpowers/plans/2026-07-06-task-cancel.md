@@ -344,6 +344,12 @@ def delete_batch(batch_no: str, db: DbSession) -> None:
     delete_batch_and_files(db, batch_no)
 ```
 
+同文件中 `_start_reprocess` 在重置任务状态时，顺手处理两点：
+1. `task.stage` 按 `kind` 初始化：`reextract`→`extract`，`redeembed`→`deembed`，`recompute`→`metrics`。
+2. 清空 `task.cancelled_at = None`，避免重新处理的任务仍带有取消标记。
+
+（这些改动在同一文件内，且与取消功能直接相关，故放在本任务中一并完成。）
+
 - [ ] **步骤 3：编写服务测试**
 
 ```python
