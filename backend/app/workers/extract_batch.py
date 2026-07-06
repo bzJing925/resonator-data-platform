@@ -112,6 +112,11 @@ def _extract_with_7z(
         while proc.poll() is None:
             if cancel_check and cancel_check():
                 proc.terminate()
+                try:
+                    proc.wait(timeout=5.0)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
                 raise TaskCancelledError("解压已取消")
             try:
                 while True:
@@ -178,6 +183,11 @@ def _extract_with_unzip(
         while proc.poll() is None:
             if cancel_check and cancel_check():
                 proc.terminate()
+                try:
+                    proc.wait(timeout=5.0)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
                 raise TaskCancelledError("解压已取消")
             if progress_callback:
                 progress_callback(state["pct"], 100)
@@ -588,8 +598,6 @@ def extract_batch_task(
 
 
 def _wafer_from_batch_no(batch_no: str) -> int | None:
-    import re
-
     m = re.search(r"\.(\d+)$", batch_no)
     if m:
         try:
