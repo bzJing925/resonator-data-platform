@@ -58,19 +58,43 @@ def _run_upload_or_reextract(task: LocalTask) -> None:
 
 
 def _run_redeembed(task: LocalTask) -> None:
-    redeembed_batch_task.apply(
-        kwargs={"upload_task_id": task.task_id, "batch_no": task.batch_no}
-    ).get()
+    db = SessionLocal()
+    try:
+        try:
+            redeembed_batch_task.apply(
+                kwargs={"upload_task_id": task.task_id, "batch_no": task.batch_no}
+            ).get()
+        except TaskCancelledError:
+            logger.info("本地重新去嵌任务 %s 被取消", task.task_id)
+            try:
+                publisher = ProgressPublisher(task.task_id)
+                publisher.cancel(db, "已取消并清理文件")
+            except Exception:
+                pass
+    finally:
+        db.close()
 
 
 def _run_recompute(task: LocalTask) -> None:
-    recompute_batch_task.apply(
-        kwargs={
-            "upload_task_id": task.task_id,
-            "batch_no": task.batch_no,
-            "metrics": task.metrics or [],
-        }
-    ).get()
+    db = SessionLocal()
+    try:
+        try:
+            recompute_batch_task.apply(
+                kwargs={
+                    "upload_task_id": task.task_id,
+                    "batch_no": task.batch_no,
+                    "metrics": task.metrics or [],
+                }
+            ).get()
+        except TaskCancelledError:
+            logger.info("本地重新计算任务 %s 被取消", task.task_id)
+            try:
+                publisher = ProgressPublisher(task.task_id)
+                publisher.cancel(db, "已取消并清理文件")
+            except Exception:
+                pass
+    finally:
+        db.close()
 
 
 def local_worker_loop() -> None:

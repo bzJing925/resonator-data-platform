@@ -28,7 +28,9 @@ from app.core.touchstone import detect_snp_type, split_s2p_to_s1p
 from app.db import SessionLocal
 from app.models import Batch, Mapping
 from app.services.file_tree_service import build_file_tree_from_disk
+from app.workers.cancel import TaskCancelledError, is_task_cancelled, raise_if_cancelled
 from app.workers.celery_app import celery_app
+from app.workers.local_queue import get_local_queue
 from app.workers.progress import ProgressPublisher
 
 logger = logging.getLogger(__name__)
@@ -70,6 +72,7 @@ def _extract_with_7z(
     target_dir: Path,
     exe: str,
     progress_callback: Callable[[int, int], None] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> float:
     target_dir.mkdir(parents=True, exist_ok=True)
     total = _zip_uncompressed_size(zip_path)
@@ -107,6 +110,9 @@ def _extract_with_7z(
 
     try:
         while proc.poll() is None:
+            if cancel_check and cancel_check():
+                proc.terminate()
+                raise TaskCancelledError("解压已取消")
             try:
                 while True:
                     line = stdout_q.get_nowait()
@@ -138,6 +144,7 @@ def _extract_with_unzip(
     zip_path: Path,
     target_dir: Path,
     progress_callback: Callable[[int, int], None] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> float:
     target_dir.mkdir(parents=True, exist_ok=True)
     total = _zip_uncompressed_size(zip_path)
@@ -169,6 +176,9 @@ def _extract_with_unzip(
 
     try:
         while proc.poll() is None:
+            if cancel_check and cancel_check():
+                proc.terminate()
+                raise TaskCancelledError("解压已取消")
             if progress_callback:
                 progress_callback(state["pct"], 100)
             time.sleep(0.5)
@@ -191,6 +201,8 @@ def _extract_zip(
     zip_path: Path,
     target_dir: Path,
     progress_callback: Callable[[int, int], None] | None = None,
+    upload_task_id: int | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> tuple[str, float, int, int]:
     """解压 ZIP；返回 (extractor_name, elapsed_seconds, files_count, total_bytes).
 
@@ -199,11 +211,26 @@ def _extract_zip(
     2. 否则使用 Python zipfile（自带 Deflate64 补丁），可提供逐文件进度；
     3. Python 不支持时回退到系统 unzip。
     """
+    if cancel_check is None and upload_task_id is not None:
+
+        def _cancel_check() -> bool:
+            if get_settings().is_desktop:
+                return get_local_queue().is_cancelled(upload_task_id)
+            return is_task_cancelled(upload_task_id)
+
+        cancel_check = _cancel_check
+
     exe7z = _find_7z()
     if exe7z:
         if progress_callback:
             progress_callback(0, 100)
-        elapsed = _extract_with_7z(zip_path, target_dir, exe7z, progress_callback)
+        elapsed = _extract_with_7z(
+            zip_path,
+            target_dir,
+            exe7z,
+            progress_callback,
+            cancel_check=cancel_check,
+        )
         extracted = _count_extracted(target_dir)
         return ("7z", elapsed, extracted, _zip_uncompressed_size(zip_path))
 
@@ -214,6 +241,8 @@ def _extract_zip(
             total = len(members)
             start = time.perf_counter()
             for i, member in enumerate(members, start=1):
+                if upload_task_id is not None:
+                    raise_if_cancelled(upload_task_id)
                 zf.extract(member, target_dir)
                 if progress_callback and total > 0:
                     progress_callback(i, total)
@@ -229,7 +258,12 @@ def _extract_zip(
     if progress_callback:
         progress_callback(0, 100)
     if shutil.which("unzip"):
-        elapsed = _extract_with_unzip(zip_path, target_dir, progress_callback)
+        elapsed = _extract_with_unzip(
+            zip_path,
+            target_dir,
+            progress_callback,
+            cancel_check=cancel_check,
+        )
         extracted = _count_extracted(target_dir)
     else:
         raise RuntimeError("ZIP 压缩方法不受支持，且系统未安装 7z / unzip")
@@ -259,6 +293,7 @@ def _run_deembed_for_batch(
     target_dir: Path,
     method: str,
     progress_callback: Callable[[int, int], None] | None = None,
+    upload_task_id: int | None = None,
 ) -> list[dict[str, Any]]:
     """对 DUT .s2p 批量拆分并做 ShortOpen 去嵌，返回 all_files 条目。"""
     if not dut_s2p:
@@ -307,6 +342,8 @@ def _run_deembed_for_batch(
                 "s_param_relpath": str(s22_de.relative_to(target_dir)),
             }
         )
+        if upload_task_id is not None:
+            raise_if_cancelled(upload_task_id)
     return all_files
 
 
@@ -339,6 +376,7 @@ def extract_batch_task(
         ],
     }
     """
+    raise_if_cancelled(upload_task_id)
     publisher = ProgressPublisher(upload_task_id)
     settings = get_settings()
     db = SessionLocal()
@@ -373,7 +411,10 @@ def extract_batch_task(
             shutil.rmtree(target_dir)
         target_dir.mkdir(parents=True, exist_ok=True)
         extractor, elapsed, extracted_count, raw_bytes = _extract_zip(
-            Path(zip_path), target_dir, progress_callback=_update_extract_pct
+            Path(zip_path),
+            target_dir,
+            progress_callback=_update_extract_pct,
+            upload_task_id=upload_task_id,
         )
         mb = raw_bytes / 1024 / 1024
         speed = mb / elapsed if elapsed > 0 else 0.0
@@ -461,6 +502,7 @@ def extract_batch_task(
                     target_dir,
                     method=deembed_method,
                     progress_callback=_update_deembed_pct,
+                    upload_task_id=upload_task_id,
                 )
             )
         else:

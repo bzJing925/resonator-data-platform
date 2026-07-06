@@ -17,6 +17,7 @@ from app.core.mapping import load_mapping
 from app.core.touchstone import split_s2p_to_s1p
 from app.db import SessionLocal
 from app.models import Batch, Device, Mapping, UploadTask
+from app.workers.cancel import raise_if_cancelled
 from app.workers.celery_app import celery_app
 from app.workers.compute_batch import compute_batch_task
 from app.workers.progress import ProgressPublisher
@@ -88,6 +89,7 @@ def _build_all_files_after_deembed(
     method: str,
     publisher: ProgressPublisher,
     db: Session,
+    upload_task_id: int | None = None,
 ) -> list[dict[str, Any]]:
     all_files: list[dict[str, Any]] = []
     if not dut_s2p:
@@ -136,6 +138,8 @@ def _build_all_files_after_deembed(
                 "s_param_relpath": str(s22_de.relative_to(target_dir)),
             }
         )
+        if upload_task_id is not None:
+            raise_if_cancelled(upload_task_id)
     return all_files
 
 
@@ -148,6 +152,7 @@ def redeembed_batch_task(
     publisher = ProgressPublisher(upload_task_id)
     db = SessionLocal()
     try:
+        raise_if_cancelled(upload_task_id)
         _reset_task(db, upload_task_id)
         publisher.start(db, "开始重新去嵌…")
 
@@ -177,7 +182,14 @@ def redeembed_batch_task(
             raise DeembedError("缺少 OPEN/SHORT 校准件，无法重新去嵌")
 
         all_files = _build_all_files_after_deembed(
-            dut_s2p, cal_open, cal_short, target_dir, batch.deembed_method, publisher, db
+            dut_s2p,
+            cal_open,
+            cal_short,
+            target_dir,
+            batch.deembed_method,
+            publisher,
+            db,
+            upload_task_id,
         )
 
         # 删除旧 devices，重新计算
@@ -222,6 +234,7 @@ def recompute_batch_task(
     publisher = ProgressPublisher(upload_task_id)
     db = SessionLocal()
     try:
+        raise_if_cancelled(upload_task_id)
         metrics = _validate_metrics(metrics)
         _reset_task(db, upload_task_id)
         publisher.start(db, "开始重新计算指标…")
@@ -282,6 +295,7 @@ def recompute_batch_task(
 
             stage_pct = int(100 * i / total)
             if stage_pct != last_pct and (stage_pct - last_pct >= 5 or i % 100 == 0 or i == total):
+                raise_if_cancelled(upload_task_id)
                 overall = 45 + int(55 * i / total)
                 progress_msg = (
                     f"重新计算 {metrics} 中… {i}/{total}，失败 {len(failures)}，跳过 {skipped}"
