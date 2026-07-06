@@ -35,11 +35,12 @@ class UploadTask(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     celery_task_id: Mapped[str | None] = mapped_column(Text)
 
     __table_args__ = (
         CheckConstraint(
-            "status IN ('pending','running','success','failed')",
+            "status IN ('pending','running','success','failed','cancelled')",
             name="ck_uptask_status",
         ),
         CheckConstraint(
