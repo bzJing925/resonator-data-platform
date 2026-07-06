@@ -44,6 +44,7 @@ def clean_tables() -> None:
     CI 应当用独立的临时数据库，无需此变量。
     """
     import os
+
     if os.environ.get("ALN_PROTECT_DB") == "1":
         pytest.skip("ALN_PROTECT_DB=1，跳过会清数据的集成测试")
     with engine.begin() as conn:
@@ -72,9 +73,7 @@ def test_fields_metadata(client: TestClient) -> None:
     assert {"fs_ghz", "fp_ghz", "qs", "qp", "k2eff_pct"} <= numeric_names
 
 
-def test_full_upload_query_flow(
-    client: TestClient, sample_mapping: Path, sample_zip: Path
-) -> None:
+def test_full_upload_query_flow(client: TestClient, sample_mapping: Path, sample_zip: Path) -> None:
     # 1. 上传对照表
     with sample_mapping.open("rb") as f:
         r = client.post(
@@ -216,12 +215,14 @@ def test_upload_cleans_orphan_zip_when_db_commit_fails(
     mapping_id = r.json()["id"]
 
     from app.config import get_settings
+
     uploads_dir = get_settings().uploads_dir
     before_zips = sorted(p for p in uploads_dir.rglob("*.zip") if p.is_file())
 
     # patch Session.commit 在第一次调用就抛 IntegrityError
     from sqlalchemy.exc import IntegrityError
     from sqlalchemy.orm import Session as _Session
+
     orig_commit = _Session.commit
     state = {"calls": 0}
 

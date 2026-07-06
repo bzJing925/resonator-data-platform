@@ -9,8 +9,12 @@ import {
   exportCsv,
   downloadDeviceS1p,
   downloadFilesZip,
+  reextractBatch,
+  redeembedBatch,
+  recomputeBatch,
 } from '../api/endpoints';
 import DeviceModal from '../components/DeviceModal';
+import ReprocessMetricsModal from '../components/ReprocessMetricsModal';
 import useFields, { displayLabel } from '../hooks/useFields';
 import { usePageState } from '../contexts/PageStateContext';
 import type { Batch, Device, FileEntry } from '../types';
@@ -137,6 +141,7 @@ export default function BatchDetail() {
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
   const [filesLoading, setFilesLoading] = useState<boolean>(false);
+  const [showRecomputeModal, setShowRecomputeModal] = useState(false);
   const fieldsState = useFields();
 
   // 计算列头：优先用 useFields 的 label+unit，缺失时回退到 fallback
@@ -269,6 +274,41 @@ export default function BatchDetail() {
         </button>
         <button className="btn" disabled title="敬请期待">
           <I.download size={13} /> 导出 Excel
+        </button>
+        <button
+          className="btn"
+          disabled={detail?.raw_zip_deleted}
+          onClick={async () => {
+            if (!detail) return;
+            try {
+              await reextractBatch(detail.batch_no);
+              setError(null);
+            } catch (e: any) {
+              setError(e.message || '重新解压失败');
+            }
+          }}
+        >
+          重新解压
+        </button>
+        <button
+          className="btn"
+          onClick={async () => {
+            if (!detail) return;
+            try {
+              await redeembedBatch(detail.batch_no);
+              setError(null);
+            } catch (e: any) {
+              setError(e.message || '重新去嵌失败');
+            }
+          }}
+        >
+          重新去嵌
+        </button>
+        <button
+          className="btn"
+          onClick={() => setShowRecomputeModal(true)}
+        >
+          重新计算指标
         </button>
       </div>
 
@@ -410,6 +450,21 @@ export default function BatchDetail() {
       </div>
 
       {activeDevice && <DeviceModal device={activeDevice} onClose={handleCloseDevice} />}
+      {showRecomputeModal && detail && (
+        <ReprocessMetricsModal
+          batchNo={detail.batch_no}
+          onClose={() => setShowRecomputeModal(false)}
+          onSubmit={async (metrics) => {
+            try {
+              await recomputeBatch(detail.batch_no, metrics);
+              setShowRecomputeModal(false);
+              setError(null);
+            } catch (e: any) {
+              setError(e.message || '重新计算失败');
+            }
+          }}
+        />
+      )}
     </>
   );
 }

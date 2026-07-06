@@ -7,6 +7,7 @@ import threading
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 logger = logging.getLogger(__name__)
 
@@ -14,14 +15,16 @@ logger = logging.getLogger(__name__)
 @dataclass
 class LocalTask:
     task_id: int
-    zip_path: Path
-    batch_no: str
-    mapping_id: int
-    f_start_ghz: float | None
-    f_end_ghz: float | None
-    deembed: bool
-    deembed_method: str
-    process_type: str
+    zip_path: Path | None = None
+    batch_no: str | None = None
+    mapping_id: int | None = None
+    f_start_ghz: float | None = None
+    f_end_ghz: float | None = None
+    deembed: bool = False
+    deembed_method: str = "default"
+    process_type: str = "AUTO"
+    kind: Literal["upload", "reextract", "redeembed", "recompute"] = "upload"
+    metrics: list[str] | None = None
 
 
 class LocalTaskQueue:

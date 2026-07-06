@@ -1,12 +1,11 @@
-import { app, ipcMain } from 'electron';
-import { createRequire } from 'node:module';
+import * as electron from 'electron';
 import type { UpdateCheckResult } from 'electron-updater';
+import { autoUpdater } from './updater-loader.cjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 
-const require = createRequire(import.meta.url);
-const { autoUpdater } = require('electron-updater');
+const { app, ipcMain } = electron;
 
 interface UpdateSource {
   type: 'github' | 'static';

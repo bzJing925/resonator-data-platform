@@ -112,9 +112,7 @@ def _modify_header(header: list[str], parameter: str) -> list[str]:
 
     for line in header:
         if line.strip().startswith(("!S2P File:", "!S1P File:")):
-            new_line = line.replace("S2P", "S1P").replace(
-                "S11, S21, S12, S22", parameter
-            )
+            new_line = line.replace("S2P", "S1P").replace("S11, S21, S12, S22", parameter)
             new_header.append(new_line)
             break
 
@@ -142,9 +140,7 @@ def _extract_s11(data_lines: list[str]) -> list[str]:
         if not parts:
             continue  # 空行（常见的末尾换行）跳过
         if len(parts) < 9:
-            raise ValueError(
-                f"S2P 数据行 {lineno} 列数 {len(parts)} < 9，文件可能截断或损坏"
-            )
+            raise ValueError(f"S2P 数据行 {lineno} 列数 {len(parts)} < 9，文件可能截断或损坏")
         out.append(f"{parts[0]} {parts[1]} {parts[2]}\n")
     return out
 
@@ -156,9 +152,7 @@ def _extract_s22(data_lines: list[str]) -> list[str]:
         if not parts:
             continue
         if len(parts) < 9:
-            raise ValueError(
-                f"S2P 数据行 {lineno} 列数 {len(parts)} < 9，文件可能截断或损坏"
-            )
+            raise ValueError(f"S2P 数据行 {lineno} 列数 {len(parts)} < 9，文件可能截断或损坏")
         out.append(f"{parts[0]} {parts[-2]} {parts[-1]}\n")
     return out
 

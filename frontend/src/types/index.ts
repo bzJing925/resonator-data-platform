@@ -64,6 +64,7 @@ export interface Batch {
     fs_ghz_median?: number;
     pass_rate?: number;
   };
+  raw_zip_deleted?: boolean;
 }
 
 export interface Task {
@@ -75,6 +76,9 @@ export interface Task {
   error_msg?: string;
   started_at?: string;
   finished_at?: string;
+  stage?: string;
+  stage_progress_pct?: number;
+  raw_zip_deleted?: boolean;
 }
 
 export interface Device {

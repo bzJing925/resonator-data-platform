@@ -12,7 +12,7 @@ from app.models import Base
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def _ensure_dirs(root: Path) -> None:
@@ -20,7 +20,26 @@ def _ensure_dirs(root: Path) -> None:
         (root / sub).mkdir(parents=True, exist_ok=True)
 
 
+def _schema_version(conn) -> int | None:
+    try:
+        return conn.execute(
+            text("SELECT version FROM _aln_schema_version ORDER BY version DESC LIMIT 1")
+        ).scalar()
+    except Exception:
+        return None
+
+
 def _init_schema(engine) -> None:
+    with engine.connect() as conn:
+        current = _schema_version(conn)
+        # schema 版本不一致时重建表（桌面开发模式数据可重新生成）
+        if current is not None and current != SCHEMA_VERSION:
+            logger.info(
+                "桌面数据库 schema 版本 %s 与当前 %s 不一致，重建表", current, SCHEMA_VERSION
+            )
+            Base.metadata.drop_all(bind=engine)
+            current = None
+
     Base.metadata.create_all(bind=engine)
     with engine.connect() as conn:
         conn.execute(
@@ -33,13 +52,19 @@ def _init_schema(engine) -> None:
                 """
             )
         )
-        conn.execute(
-            text(
-                "INSERT INTO _aln_schema_version (version) VALUES (:v) "
-                "ON CONFLICT(version) DO NOTHING"
-            ),
-            {"v": SCHEMA_VERSION},
-        )
+        if current is None:
+            conn.execute(
+                text("INSERT INTO _aln_schema_version (version) VALUES (:v)"),
+                {"v": SCHEMA_VERSION},
+            )
+        else:
+            conn.execute(
+                text(
+                    "INSERT INTO _aln_schema_version (version) VALUES (:v) "
+                    "ON CONFLICT(version) DO NOTHING"
+                ),
+                {"v": SCHEMA_VERSION},
+            )
         conn.commit()
 
 

@@ -11,7 +11,7 @@
     "build": "vite build && npm run electron:build-main",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "electron:build-main": "tsc -p tsconfig.node.json --outDir electron-dist && node scripts/copy-electron-assets.js",
+    "electron:build-main": "tsc -p tsconfig.node.json --outDir electron-dist && tsc -p tsconfig.preload.json && node scripts/copy-electron-assets.js",
     "electron:dev": "npm run electron:build-main && concurrently \"npm run dev\" \"wait-on http://127.0.0.1:5173 && electron .\"",
     "electron:preview": "npm run build && electron .",
     "electron:pack": "npm run build && electron-builder",

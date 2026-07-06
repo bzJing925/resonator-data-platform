@@ -6,6 +6,7 @@ import asyncio
 import json
 import time
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import redis.asyncio as aioredis
 from fastapi import APIRouter, HTTPException
@@ -15,7 +16,7 @@ from sse_starlette.sse import EventSourceResponse
 from app.api.deps import DbSession
 from app.config import get_settings
 from app.db import get_db
-from app.models import UploadTask
+from app.models import Batch, UploadTask
 from app.schemas.task import TaskDetail, TaskListItem
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -38,7 +39,13 @@ def get_task(task_id: int, db: DbSession) -> TaskDetail:
     task = db.get(UploadTask, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail=f"任务 {task_id} 不存在")
-    return TaskDetail.model_validate(task)
+    batch = db.scalar(select(Batch).where(Batch.batch_no == task.batch_no))
+    raw_zip_deleted = True
+    if batch and batch.raw_zip_path and Path(batch.raw_zip_path).exists():
+        raw_zip_deleted = False
+    data = TaskDetail.model_validate(task)
+    data.raw_zip_deleted = raw_zip_deleted
+    return data
 
 
 async def _stream_task_events(task_id: int) -> AsyncIterator[dict]:

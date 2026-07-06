@@ -73,8 +73,13 @@ def train_epoch(dataloader, recon, sampler, criterion, optimizer, device, target
         fs_true = cond[:, 0]
         fp_true = cond[:, 1]
         p_norm, y_soft, k_pred = sampler(
-            target_z, region_ids, freq=target_freq,
-            fs=fs_true, fp=fp_true, target_k=target_k, use_gumbel=True,
+            target_z,
+            region_ids,
+            freq=target_freq,
+            fs=fs_true,
+            fp=fp_true,
+            target_k=target_k,
+            use_gumbel=True,
         )
 
         sampled_list = []
@@ -93,12 +98,10 @@ def train_epoch(dataloader, recon, sampler, criterion, optimizer, device, target
             sz = target_z[b, idx]
             pad_len = target_k - len(idx)
             if pad_len > 0:
-                sf = torch.cat([
-                    sf, torch.full((pad_len,), target_freq[b, -1].item(), device=device)
-                ])
-                sz = torch.cat([
-                    sz, torch.full((pad_len,), target_z[b, -1].item(), device=device)
-                ])
+                sf = torch.cat(
+                    [sf, torch.full((pad_len,), target_freq[b, -1].item(), device=device)]
+                )
+                sz = torch.cat([sz, torch.full((pad_len,), target_z[b, -1].item(), device=device)])
             sampled_list.append(torch.stack([sf, sz], dim=1))
 
         samples = torch.stack(sampled_list, dim=0)
@@ -108,9 +111,15 @@ def train_epoch(dataloader, recon, sampler, criterion, optimizer, device, target
         z_pred = recon(cond, samples, target_freq, z_baseline=z_baseline, sample_mask=sample_mask)
 
         loss, loss_dict = criterion(
-            z_pred, target_z, region_ids, target_k,
-            freq=target_freq, fs_true=fs_true, fp_true=fp_true,
-            k_actual=k_actual, k_pred=k_pred,
+            z_pred,
+            target_z,
+            region_ids,
+            target_k,
+            freq=target_freq,
+            fs_true=fs_true,
+            fp_true=fp_true,
+            k_actual=k_actual,
+            k_pred=k_pred,
         )
 
         optimizer.zero_grad()
@@ -150,8 +159,13 @@ def validate(dataloader, recon, sampler, criterion, device, target_k):
         fs_true = cond[:, 0]
         fp_true = cond[:, 1]
         p_norm, y_soft, k_pred = sampler(
-            target_z, region_ids, freq=target_freq,
-            fs=fs_true, fp=fp_true, target_k=target_k, use_gumbel=False,
+            target_z,
+            region_ids,
+            freq=target_freq,
+            fs=fs_true,
+            fp=fp_true,
+            target_k=target_k,
+            use_gumbel=False,
         )
 
         sampled_list = []
@@ -170,12 +184,10 @@ def validate(dataloader, recon, sampler, criterion, device, target_k):
             sz = target_z[b, idx]
             pad_len = target_k - len(idx)
             if pad_len > 0:
-                sf = torch.cat([
-                    sf, torch.full((pad_len,), target_freq[b, -1].item(), device=device)
-                ])
-                sz = torch.cat([
-                    sz, torch.full((pad_len,), target_z[b, -1].item(), device=device)
-                ])
+                sf = torch.cat(
+                    [sf, torch.full((pad_len,), target_freq[b, -1].item(), device=device)]
+                )
+                sz = torch.cat([sz, torch.full((pad_len,), target_z[b, -1].item(), device=device)])
             else:
                 sf = sf[:target_k]
                 sz = sz[:target_k]
@@ -188,9 +200,15 @@ def validate(dataloader, recon, sampler, criterion, device, target_k):
         z_pred = recon(cond, samples, target_freq, z_baseline=z_baseline, sample_mask=sample_mask)
 
         loss, loss_dict = criterion(
-            z_pred, target_z, region_ids, target_k,
-            freq=target_freq, fs_true=fs_true, fp_true=fp_true,
-            k_actual=k_actual, k_pred=k_pred,
+            z_pred,
+            target_z,
+            region_ids,
+            target_k,
+            freq=target_freq,
+            fs_true=fs_true,
+            fp_true=fp_true,
+            k_actual=k_actual,
+            k_pred=k_pred,
         )
         total_loss += loss_dict["total"]
         total_recon += loss_dict["recon"]
@@ -221,6 +239,7 @@ def main():
     n_val = max(1, int(len(dataset) * 0.2))
     n_train = len(dataset) - n_val
     from torch.utils.data import random_split
+
     train_set, val_set = random_split(dataset, [n_train, n_val])
     train_loader = DataLoader(
         train_set, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn
@@ -235,17 +254,17 @@ def main():
         n_encoder_layers=config.get("n_encoder_layers", 4),
         n_heads=config.get("n_heads", 4),
     ).to(device)
-    recon.load_state_dict(torch.load(
-        ckpt_dir / "reconstructor.pt", map_location=device, weights_only=True
-    ))
+    recon.load_state_dict(
+        torch.load(ckpt_dir / "reconstructor.pt", map_location=device, weights_only=True)
+    )
     for p in recon.parameters():
         p.requires_grad = False
     recon.eval()
 
     # 加载或初始化 sampler
-    sampler = AdaptiveSampler(
-        n_freq=config.get("n_freq", 1001), tau_init=0.5, tau_min=0.05
-    ).to(device)
+    sampler = AdaptiveSampler(n_freq=config.get("n_freq", 1001), tau_init=0.5, tau_min=0.05).to(
+        device
+    )
     sampler_ckpt = output_dir / "checkpoint.pt"
     state_path = output_dir / "train_state.json"
 
@@ -267,9 +286,9 @@ def main():
         # 从 Phase 1 的 sampler 初始化（如果存在）
         phase1_sampler = ckpt_dir / "sampler.pt"
         if phase1_sampler.exists():
-            sampler.load_state_dict(torch.load(
-                phase1_sampler, map_location=device, weights_only=True
-            ))
+            sampler.load_state_dict(
+                torch.load(phase1_sampler, map_location=device, weights_only=True)
+            )
             print("从 Phase 1 sampler 初始化")
 
     criterion = SparseReconLoss(
@@ -286,9 +305,7 @@ def main():
         train_metrics = train_epoch(
             train_loader, recon, sampler, criterion, optimizer, device, args.target_k
         )
-        val_metrics = validate(
-            val_loader, recon, sampler, criterion, device, args.target_k
-        )
+        val_metrics = validate(val_loader, recon, sampler, criterion, device, args.target_k)
         scheduler.step()
 
         print(
@@ -298,12 +315,14 @@ def main():
             f"val_recon={val_metrics['recon']:.6f}"
         )
 
-        history.append({
-            "epoch": epoch,
-            "train_loss": train_metrics["loss"],
-            "val_loss": val_metrics["loss"],
-            "val_recon": val_metrics["recon"],
-        })
+        history.append(
+            {
+                "epoch": epoch,
+                "train_loss": train_metrics["loss"],
+                "val_loss": val_metrics["loss"],
+                "val_recon": val_metrics["recon"],
+            }
+        )
 
         if val_metrics["recon"] < best_val_recon:
             best_val_recon = val_metrics["recon"]

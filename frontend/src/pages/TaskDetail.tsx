@@ -1,14 +1,17 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import I from '../components/Icons';
-import { getTask } from '../api/endpoints';
+import { getTask, reextractBatch, redeembedBatch, recomputeBatch } from '../api/endpoints';
 import useSSE from '../hooks/useSSE';
 import type { Task } from '../types';
+import StageProgressBars from '../components/StageProgressBars';
+import ReprocessMetricsModal from '../components/ReprocessMetricsModal';
 
 export default function TaskDetail() {
   const { taskId } = useParams<{ taskId: string }>();
   const [task, setTask] = useState<Task | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [showRecomputeModal, setShowRecomputeModal] = useState(false);
   const sse = useSSE(taskId);
 
   useEffect(() => {
@@ -105,6 +108,7 @@ export default function TaskDetail() {
             <div className="mono dim" style={{ fontSize: 12 }}>
               {message || '等待处理中…'}
             </div>
+            <StageProgressBars stage={sse.stage || task?.stage} stageProgress={sse.stageProgress || task?.stage_progress_pct || 0} />
             {(sse.error || task?.error_msg) && (
               <div
                 style={{
@@ -117,6 +121,44 @@ export default function TaskDetail() {
                 }}
               >
                 <I.alert size={12} /> {sse.error || task?.error_msg}
+              </div>
+            )}
+            {(status === 'success' || status === 'failed') && task && (
+              <div style={{ marginTop: 14, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button
+                  className="btn sm"
+                  disabled={task.raw_zip_deleted}
+                  title={task.raw_zip_deleted ? '原始 zip 已清理' : '重新解压并覆盖现有结果'}
+                  onClick={async () => {
+                    try {
+                      await reextractBatch(task.batch_no!);
+                      window.location.reload();
+                    } catch (e: any) {
+                      setError(e.message || '重新解压失败');
+                    }
+                  }}
+                >
+                  重新解压
+                </button>
+                <button
+                  className="btn sm"
+                  onClick={async () => {
+                    try {
+                      await redeembedBatch(task.batch_no!);
+                      window.location.reload();
+                    } catch (e: any) {
+                      setError(e.message || '重新去嵌失败');
+                    }
+                  }}
+                >
+                  重新去嵌
+                </button>
+                <button
+                  className="btn sm"
+                  onClick={() => setShowRecomputeModal(true)}
+                >
+                  重新计算指标
+                </button>
               </div>
             )}
           </div>
@@ -152,6 +194,21 @@ export default function TaskDetail() {
           </div>
         )}
       </div>
+      {showRecomputeModal && (
+        <ReprocessMetricsModal
+          batchNo={task?.batch_no || ''}
+          onClose={() => setShowRecomputeModal(false)}
+          onSubmit={async (metrics) => {
+            try {
+              await recomputeBatch(task!.batch_no!, metrics);
+              setShowRecomputeModal(false);
+              window.location.reload();
+            } catch (e: any) {
+              setError(e.message || '重新计算失败');
+            }
+          }}
+        />
+      )}
     </>
   );
 }

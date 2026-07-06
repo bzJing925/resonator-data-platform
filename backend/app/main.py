@@ -97,7 +97,7 @@ app.add_middleware(GZipMiddleware, minimum_size=1024)
 ROOT_CANDIDATES = [
     Path(__file__).resolve().parent.parent.parent,
     Path(sys.executable).parent,
-    Path(getattr(sys, '_MEIPASS', Path.cwd())),
+    Path(getattr(sys, "_MEIPASS", Path.cwd())),
 ]
 STATIC_DIR = None
 for root in ROOT_CANDIDATES:
@@ -109,6 +109,8 @@ for root in ROOT_CANDIDATES:
 origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
 ]
 if os.environ.get("ALN_DESKTOP") == "1":
     origins.append(f"http://127.0.0.1:{os.environ.get('ALN_BACKEND_PORT', '8000')}")

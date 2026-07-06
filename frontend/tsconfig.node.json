@@ -10,5 +10,5 @@
     "outDir": "electron-dist",
     "target": "ES2020"
   },
-  "include": ["vite.config.ts", "electron/**/*.ts"]
+  "include": ["vite.config.ts", "electron/main.ts", "electron/updater.ts", "electron/updater-loader.d.cts"]
 }

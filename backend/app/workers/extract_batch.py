@@ -7,7 +7,11 @@
 from __future__ import annotations
 
 import logging
+import queue
+import re
 import shutil
+import subprocess
+import threading
 import time
 import zipfile
 from collections.abc import Callable
@@ -39,44 +43,148 @@ def _find_7z() -> str | None:
     return None
 
 
-def _extract_with_7z(zip_path: Path, target_dir: Path, exe: str) -> float:
-    """使用 7z/p7zip 解压；支持 Deflate64 与 ZIP64 大文件。
+_PROGRESS_RE = re.compile(r"\(\s*(\d+)%\)")
 
-    返回解压耗时（秒）。
-    """
-    import subprocess
 
+def _monitor_extracted_size(
+    target_dir: Path,
+    total: int,
+    state: dict[str, Any],
+    stop: threading.Event,
+    interval: float = 0.5,
+) -> None:
+    """后台线程：根据已写入目标目录的字节数估算百分比。"""
+    while not stop.wait(interval):
+        current = sum(p.stat().st_size for p in target_dir.rglob("*") if p.is_file())
+        pct = min(99, int(100 * current / total)) if total > 0 else 0
+        state["pct"] = pct
+
+
+def _read_stream_into_queue(stream, q: queue.Queue[str]) -> None:
+    for line in stream:
+        q.put(line)
+
+
+def _extract_with_7z(
+    zip_path: Path,
+    target_dir: Path,
+    exe: str,
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> float:
     target_dir.mkdir(parents=True, exist_ok=True)
-    start = time.perf_counter()
-    result = subprocess.run(
-        [exe, "x", "-y", "-o" + str(target_dir), str(zip_path)],
-        capture_output=True,
+    total = _zip_uncompressed_size(zip_path)
+    state: dict[str, Any] = {"pct": 0}
+    stop = threading.Event()
+    monitor = threading.Thread(
+        target=_monitor_extracted_size,
+        args=(target_dir, total, state, stop),
+        daemon=True,
     )
-    elapsed = time.perf_counter() - start
-    if result.returncode != 0:
-        err = result.stderr.decode("utf-8", errors="ignore")[:500]
-        raise RuntimeError(f"7z 解压失败 (exit {result.returncode}): {err}")
-    return elapsed
+    monitor.start()
 
-
-def _extract_with_unzip(zip_path: Path, target_dir: Path) -> float:
-    """使用系统 unzip 解压（无法处理 Deflate64 / >4GB 中央目录）。
-
-    返回解压耗时（秒）。
-    """
-    import subprocess
-
-    target_dir.mkdir(parents=True, exist_ok=True)
     start = time.perf_counter()
-    result = subprocess.run(
+    stderr_lines: list[str] = []
+    stdout_q: queue.Queue[str] = queue.Queue()
+
+    proc = subprocess.Popen(
+        [exe, "x", "-y", "-bsp1", "-bb0", "-o" + str(target_dir), str(zip_path)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+
+    def _read_stderr() -> None:
+        for line in proc.stderr or []:
+            stderr_lines.append(line)
+
+    stderr_thread = threading.Thread(target=_read_stderr, daemon=True)
+    stderr_thread.start()
+    stdout_thread = threading.Thread(
+        target=_read_stream_into_queue, args=(proc.stdout, stdout_q), daemon=True
+    )
+    stdout_thread.start()
+
+    try:
+        while proc.poll() is None:
+            try:
+                while True:
+                    line = stdout_q.get_nowait()
+                    m = _PROGRESS_RE.search(line)
+                    if m:
+                        state["pct"] = int(m.group(1))
+            except queue.Empty:
+                pass
+            if progress_callback:
+                progress_callback(state["pct"], 100)
+            time.sleep(0.5)
+        proc.wait()
+    finally:
+        stop.set()
+        monitor.join(timeout=2.0)
+        stdout_thread.join(timeout=2.0)
+        stderr_thread.join(timeout=2.0)
+
+    if proc.returncode != 0:
+        err = "".join(stderr_lines)[-500:]
+        raise RuntimeError(f"7z 解压失败 (exit {proc.returncode}): {err}")
+
+    if progress_callback:
+        progress_callback(100, 100)
+    return time.perf_counter() - start
+
+
+def _extract_with_unzip(
+    zip_path: Path,
+    target_dir: Path,
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> float:
+    target_dir.mkdir(parents=True, exist_ok=True)
+    total = _zip_uncompressed_size(zip_path)
+    state = {"pct": 0}
+    stop = threading.Event()
+    monitor = threading.Thread(
+        target=_monitor_extracted_size,
+        args=(target_dir, total, state, stop),
+        daemon=True,
+    )
+    monitor.start()
+
+    start = time.perf_counter()
+    proc = subprocess.Popen(
         ["unzip", "-q", "-o", str(zip_path), "-d", str(target_dir)],
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
     )
-    elapsed = time.perf_counter() - start
-    if result.returncode != 0:
-        err = result.stderr.decode("utf-8", errors="ignore")[:500]
-        raise RuntimeError(f"unzip 解压失败 (exit {result.returncode}): {err}")
-    return elapsed
+    stderr_lines: list[str] = []
+
+    def _read_stderr() -> None:
+        for line in proc.stderr or []:
+            stderr_lines.append(line)
+
+    stderr_thread = threading.Thread(target=_read_stderr, daemon=True)
+    stderr_thread.start()
+
+    try:
+        while proc.poll() is None:
+            if progress_callback:
+                progress_callback(state["pct"], 100)
+            time.sleep(0.5)
+        proc.wait()
+    finally:
+        stop.set()
+        monitor.join(timeout=2.0)
+        stderr_thread.join(timeout=2.0)
+
+    if proc.returncode != 0:
+        err = "".join(stderr_lines)[-500:]
+        raise RuntimeError(f"unzip 解压失败 (exit {proc.returncode}): {err}")
+
+    if progress_callback:
+        progress_callback(100, 100)
+    return time.perf_counter() - start
 
 
 def _extract_zip(
@@ -94,12 +202,9 @@ def _extract_zip(
     exe7z = _find_7z()
     if exe7z:
         if progress_callback:
-            progress_callback(0, 1)
-        logger.info("使用 7z 解压: %s", exe7z)
-        elapsed = _extract_with_7z(zip_path, target_dir, exe7z)
+            progress_callback(0, 100)
+        elapsed = _extract_with_7z(zip_path, target_dir, exe7z, progress_callback)
         extracted = _count_extracted(target_dir)
-        if progress_callback:
-            progress_callback(1, 1)
         return ("7z", elapsed, extracted, _zip_uncompressed_size(zip_path))
 
     total = 0
@@ -122,15 +227,14 @@ def _extract_zip(
         logger.warning("Python zipfile 不支持该压缩方法，尝试 unzip: %s", exc)
 
     if progress_callback:
-        progress_callback(0, 1)
+        progress_callback(0, 100)
     if shutil.which("unzip"):
-        logger.info("使用 unzip 解压")
-        elapsed = _extract_with_unzip(zip_path, target_dir)
+        elapsed = _extract_with_unzip(zip_path, target_dir, progress_callback)
         extracted = _count_extracted(target_dir)
     else:
         raise RuntimeError("ZIP 压缩方法不受支持，且系统未安装 7z / unzip")
     if progress_callback:
-        progress_callback(1, 1)
+        progress_callback(100, 100)
     return ("unzip", elapsed, extracted, _zip_uncompressed_size(zip_path))
 
 
@@ -154,6 +258,7 @@ def _run_deembed_for_batch(
     cal_short: dict[str, Path],
     target_dir: Path,
     method: str,
+    progress_callback: Callable[[int, int], None] | None = None,
 ) -> list[dict[str, Any]]:
     """对 DUT .s2p 批量拆分并做 ShortOpen 去嵌，返回 all_files 条目。"""
     if not dut_s2p:
@@ -175,7 +280,14 @@ def _run_deembed_for_batch(
         s1p_pairs.append((split.s11_path, split.s22_path))
 
     de_method = DeembedMethod(method) if method else DeembedMethod.DEFAULT
-    de_pairs = _run_deembed(s1p_pairs, cal_open, cal_short, target_dir, method=de_method)
+    de_pairs = _run_deembed(
+        s1p_pairs,
+        cal_open,
+        cal_short,
+        target_dir,
+        method=de_method,
+        progress_callback=progress_callback,
+    )
 
     all_files: list[dict[str, Any]] = []
     for s11_de, s22_de in de_pairs:
@@ -232,13 +344,14 @@ def extract_batch_task(
     db = SessionLocal()
 
     def _update_extract_pct(current: int, total: int) -> None:
-        pct = int(40 * current / total) if total else 0
+        stage_pct = int(100 * current / total) if total else 0
+        overall = int(30 * current / total) if total else 0
         publisher.stage_update(
             db,
             stage="extract",
-            stage_progress_pct=pct,
-            progress_pct=pct,
-            progress_msg=f"解压中… {current}/{total}",
+            stage_progress_pct=stage_pct,
+            progress_pct=overall,
+            progress_msg=f"解压中… {stage_pct}%",
         )
 
     try:
@@ -308,8 +421,8 @@ def extract_batch_task(
         publisher.stage_update(
             db,
             stage="extract",
-            stage_progress_pct=60,
-            progress_pct=15,
+            stage_progress_pct=100,
+            progress_pct=30,
             progress_msg=(
                 f"解压完成，{extractor} 解压 {extracted_count} 个文件，"
                 f"{mb:.1f} MB / {elapsed:.2f}s ({speed:.1f} MB/s)；"
@@ -321,6 +434,25 @@ def extract_batch_task(
         all_files: list[dict[str, Any]] = []
 
         if deembed_enabled and dut_s2p:
+            publisher.stage_update(
+                db,
+                stage="deembed",
+                stage_progress_pct=0,
+                progress_pct=30,
+                progress_msg="开始去嵌…",
+            )
+
+            def _update_deembed_pct(current: int, total: int) -> None:
+                stage_pct = int(100 * current / total) if total else 0
+                overall = 30 + int(15 * current / total) if total else 30
+                publisher.stage_update(
+                    db,
+                    stage="deembed",
+                    stage_progress_pct=stage_pct,
+                    progress_pct=overall,
+                    progress_msg=f"去嵌中… {current}/{total} 对",
+                )
+
             all_files.extend(
                 _run_deembed_for_batch(
                     dut_s2p,
@@ -328,6 +460,7 @@ def extract_batch_task(
                     cal_short,
                     target_dir,
                     method=deembed_method,
+                    progress_callback=_update_deembed_pct,
                 )
             )
         else:
@@ -356,6 +489,14 @@ def extract_batch_task(
         if not all_files:
             raise RuntimeError("ZIP 解压后未发现可处理的 DUT 文件（.s1p 或 .s2p）")
 
+        publisher.stage_update(
+            db,
+            stage="deembed",
+            stage_progress_pct=100,
+            progress_pct=45,
+            progress_msg=f"去嵌完成，共 {len(all_files)} 个待计算项",
+        )
+
         wafer = _wafer_from_batch_no(batch_no)
 
         # 记录解压目录，供 compute_batch 使用
@@ -378,14 +519,6 @@ def extract_batch_task(
                     db.commit()
             except Exception:
                 logger.exception("删除原 zip 失败: %s", zip_path)
-
-        publisher.stage_update(
-            db,
-            stage="extract",
-            stage_progress_pct=100,
-            progress_pct=30,
-            progress_msg=f"文件整理完成，共 {len(all_files)} 个待计算项",
-        )
 
         return {
             "upload_task_id": upload_task_id,

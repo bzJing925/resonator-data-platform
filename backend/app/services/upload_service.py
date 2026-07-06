@@ -11,7 +11,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
-from celery import chain
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 

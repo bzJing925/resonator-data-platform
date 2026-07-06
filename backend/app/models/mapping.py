@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 class Mapping(Base):
     __tablename__ = "mappings"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True)
     name: Mapped[str] = mapped_column(Text, unique=True)
     file_path: Mapped[str] = mapped_column(Text)
     entry_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -44,7 +44,7 @@ class Mapping(Base):
 class MappingEntry(Base):
     __tablename__ = "mapping_entries"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True)
     mapping_id: Mapped[int] = mapped_column(
         ForeignKey("mappings.id", ondelete="CASCADE"), nullable=False
     )

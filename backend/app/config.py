@@ -53,10 +53,10 @@ class Settings(BaseSettings):
     KEEP_RAW_ZIP: bool = False  # 解压分析成功后是否保留原 zip
 
     # 边解压边计算流水线
-    PIPELINE_ENABLED: bool = True          # 是否启用新链路
-    PIPELINE_WORKERS: int = 0              # 0 = os.cpu_count()
-    PIPELINE_SCAN_INTERVAL: float = 1.0    # 文件扫描间隔（秒）
-    PIPELINE_COMPRESS_RAW: bool = True     # 提参后是否 gzip 原始 snp
+    PIPELINE_ENABLED: bool = True  # 是否启用新链路
+    PIPELINE_WORKERS: int = 0  # 0 = os.cpu_count()
+    PIPELINE_SCAN_INTERVAL: float = 1.0  # 文件扫描间隔（秒）
+    PIPELINE_COMPRESS_RAW: bool = True  # 提参后是否 gzip 原始 snp
     PIPELINE_KEEP_DEEMBED_TEMP: bool = False  # 是否保留去嵌中间 *_de.s1p
 
     # 日志

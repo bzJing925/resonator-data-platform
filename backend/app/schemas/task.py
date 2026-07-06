@@ -21,6 +21,7 @@ class TaskDetail(BaseModel):
     started_at: datetime
     finished_at: datetime | None
     error_msg: str | None
+    raw_zip_deleted: bool | None = None
 
 
 class TaskListItem(BaseModel):

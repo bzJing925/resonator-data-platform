@@ -32,14 +32,12 @@ class SpectralVAE(nn.Module):
         # --- Encoder: 1D CNN 下采样 ---
         # 输入 (B, 1, n_freq)
         self.enc_conv = nn.Sequential(
-            nn.Conv1d(1, 16, kernel_size=7, stride=2, padding=3),   # → n_freq//2
+            nn.Conv1d(1, 16, kernel_size=7, stride=2, padding=3),  # → n_freq//2
             nn.BatchNorm1d(16),
             nn.LeakyReLU(0.2, inplace=True),
-
             nn.Conv1d(16, 32, kernel_size=5, stride=2, padding=2),  # → n_freq//4
             nn.BatchNorm1d(32),
             nn.LeakyReLU(0.2, inplace=True),
-
             nn.Conv1d(32, 64, kernel_size=3, stride=2, padding=1),  # → n_freq//8
             nn.BatchNorm1d(64),
             nn.LeakyReLU(0.2, inplace=True),
@@ -78,11 +76,9 @@ class SpectralVAE(nn.Module):
             nn.ConvTranspose1d(self._dec_channels, 32, kernel_size=4, stride=2, padding=1),
             nn.BatchNorm1d(32),
             nn.LeakyReLU(0.2, inplace=True),
-
             nn.ConvTranspose1d(32, 16, kernel_size=4, stride=2, padding=1),
             nn.BatchNorm1d(16),
             nn.LeakyReLU(0.2, inplace=True),
-
             nn.ConvTranspose1d(16, 1, kernel_size=4, stride=2, padding=1),
         )
 
@@ -110,9 +106,7 @@ class SpectralVAE(nn.Module):
         out = self.dec_upsample(h)
         # 长度对齐
         if out.shape[-1] != self._target_len:
-            out = f.interpolate(
-                out, size=self._target_len, mode="linear", align_corners=False
-            )
+            out = f.interpolate(out, size=self._target_len, mode="linear", align_corners=False)
         return out
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -149,12 +143,10 @@ class ResidualNet(nn.Module):
             nn.LayerNorm(32),
             nn.GELU(),
             nn.Dropout(0.1),
-
             nn.Linear(32, 24),
             nn.LayerNorm(24),
             nn.GELU(),
             nn.Dropout(0.1),
-
             nn.Linear(24, latent_dim),
         )
 
@@ -186,11 +178,9 @@ class SmartSampler(nn.Module):
             nn.Conv1d(3, 16, kernel_size=7, padding=3),
             nn.BatchNorm1d(16),
             nn.GELU(),
-
             nn.Conv1d(16, 8, kernel_size=5, padding=2),
             nn.BatchNorm1d(8),
             nn.GELU(),
-
             nn.Conv1d(8, 1, kernel_size=3, padding=1),
             nn.Sigmoid(),
         )

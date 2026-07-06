@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell, Menu } from 'electron';
+import * as electron from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn, ChildProcess } from 'node:child_process';
@@ -6,7 +6,7 @@ import net from 'node:net';
 import fs from 'node:fs';
 import os from 'node:os';
 
-import { setupUpdater } from './updater.js';
+const { app, BrowserWindow, ipcMain, shell, Menu } = electron;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -14,8 +14,8 @@ const __dirname = path.dirname(__filename);
 const isPackaged = app.isPackaged;
 const isDev = !isPackaged;
 
-let mainWindow: BrowserWindow | null = null;
-let splashWindow: BrowserWindow | null = null;
+let mainWindow: electron.BrowserWindow | null = null;
+let splashWindow: electron.BrowserWindow | null = null;
 let backendProcess: ChildProcess | null = null;
 let backendUrl = '';
 let backendReady = false;
@@ -101,6 +101,7 @@ async function startBackend(): Promise<void> {
     ALN_BACKEND_HOST: host,
     ALN_BACKEND_PORT: String(port),
     MPLCONFIGDIR: mplDir,
+    KEEP_RAW_ZIP: 'true',
   };
 
   console.log('[main] 启动后端:', command, args.join(' '), 'on', backendUrl);
@@ -198,7 +199,7 @@ function createMainWindow() {
     title: 'ALN Resonator Data Platform',
     show: false,
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -212,7 +213,7 @@ function createMainWindow() {
     mainWindow.loadFile(indexPath);
   }
 
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+  mainWindow.webContents.setWindowOpenHandler(({ url }: { url: string }) => {
     shell.openExternal(url);
     return { action: 'deny' };
   });
@@ -261,7 +262,18 @@ app.whenReady().then(async () => {
   createSplashWindow();
   createMainWindow();
 
-  setupUpdater();
+  // electron-updater 在开发环境下会 require('electron')，但本地 node_modules 里的 electron
+  // npm 包会把它解析成路径字符串，导致 app 为 undefined。只在打包后启用自动更新。
+  if (app.isPackaged) {
+    const { setupUpdater } = await import('./updater.js');
+    setupUpdater();
+  } else {
+    ipcMain.handle('updater:check', async () => ({
+      version: app.getVersion(),
+      available: false,
+    }));
+    ipcMain.handle('updater:install', () => {});
+  }
 
   startBackend().catch((e) => {
     console.error('[main] 启动后端失败:', e.message);

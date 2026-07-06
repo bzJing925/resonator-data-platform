@@ -37,6 +37,7 @@ def _get_checkpoint_dir(piezo: str) -> Path:
 
 def _init_device() -> torch.device:
     import torch
+
     if torch.backends.mps.is_available():
         return torch.device("mps")
     if torch.cuda.is_available():
@@ -112,6 +113,7 @@ def _s1p_to_z11_db(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
     必须与训练时 dataset.py 中的 s1p_to_z11_db 保持一致（统一 1001 频点）。
     """
     from app.ml.sparse.dataset import s1p_to_z11_db as _dataset_s1p_to_z11
+
     return _dataset_s1p_to_z11(path)
 
 
@@ -161,16 +163,23 @@ def predict_z11_sparse(
         # 2. 提取/准备条件参数
         if cond is None:
             from app.ml.sparse.dataset import extract_five_params
+
             cond = extract_five_params(s1p_path)
 
         import torch
-        cond_vec = torch.tensor(
-            [cond["fs"], cond["fp"], cond["Qs"], cond["Qp"], cond["kt2"]],
-            dtype=torch.float32,
-        ).unsqueeze(0).to(_DEVICE)  # (1, 5)
+
+        cond_vec = (
+            torch.tensor(
+                [cond["fs"], cond["fp"], cond["Qs"], cond["Qp"], cond["kt2"]],
+                dtype=torch.float32,
+            )
+            .unsqueeze(0)
+            .to(_DEVICE)
+        )  # (1, 5)
 
         # 3. 分区
         from app.ml.sparse.region_partition import partition_regions
+
         region_mask = partition_regions(z_db, freq)
         region_ids = np.zeros(len(freq), dtype=np.int64)
         region_ids[region_mask["main"]] = 0
@@ -187,8 +196,13 @@ def predict_z11_sparse(
             fp_t = torch.tensor([cond["fp"]], dtype=torch.float32, device=_DEVICE)
             with torch.no_grad():
                 p_norm, _, k_pred = sampler(
-                    z_t, rid_t, freq=freq_t, fs=fs_t, fp=fp_t,
-                    target_k=target_k, use_gumbel=False,
+                    z_t,
+                    rid_t,
+                    freq=freq_t,
+                    fs=fs_t,
+                    fp=fp_t,
+                    target_k=target_k,
+                    use_gumbel=False,
                 )
                 k_val = int(k_pred[0].item())
                 mask, k_actual = sampler.sample_points(p_norm, k=k_val)
@@ -197,9 +211,14 @@ def predict_z11_sparse(
         else:
             # 固定规则采样
             from app.ml.sparse.dataset import fixed_rule_sample
+
             sf, sz = fixed_rule_sample(
-                freq, z_db, region_mask, target_k,
-                fs=cond["fs"], fp=cond["fp"],
+                freq,
+                z_db,
+                region_mask,
+                target_k,
+                fs=cond["fs"],
+                fp=cond["fp"],
             )
             sample_idx = np.searchsorted(freq, sf)
             sample_idx = np.clip(sample_idx, 0, len(freq) - 1)
@@ -208,9 +227,14 @@ def predict_z11_sparse(
         if len(sample_idx) == 0:
             log.warning(f"采样点为空，回退到固定规则采样: {s1p_path}")
             from app.ml.sparse.dataset import fixed_rule_sample
+
             sf, sz = fixed_rule_sample(
-                freq, z_db, region_mask, target_k if target_k > 0 else 300,
-                fs=cond["fs"], fp=cond["fp"],
+                freq,
+                z_db,
+                region_mask,
+                target_k if target_k > 0 else 300,
+                fs=cond["fs"],
+                fp=cond["fp"],
             )
             sample_idx = np.searchsorted(freq, sf)
             sample_idx = np.clip(sample_idx, 0, len(freq) - 1)
@@ -223,6 +247,7 @@ def predict_z11_sparse(
 
         # 基线插值（cubic spline）
         from app.ml.sparse.dataset import baseline_interpolate
+
         z_baseline_np = baseline_interpolate(freq[sample_idx], z_db[sample_idx], freq)
         z_baseline = torch.from_numpy(z_baseline_np).float().unsqueeze(0).to(_DEVICE)
 
@@ -239,11 +264,13 @@ def predict_z11_sparse(
                 r = "spurious"
             elif region_mask["smooth"][idx]:
                 r = "smooth"
-            sample_points.append({
-                "freq_ghz": float(freq[idx]),
-                "z_db": float(z_db[idx]),
-                "region": r,
-            })
+            sample_points.append(
+                {
+                    "freq_ghz": float(freq[idx]),
+                    "z_db": float(z_db[idx]),
+                    "region": r,
+                }
+            )
 
         return {
             "freq_ghz": freq.tolist(),

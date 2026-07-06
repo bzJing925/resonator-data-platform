@@ -57,6 +57,13 @@ export const listTasks = (params?: Record<string, unknown>) =>
 export const getTask = (taskId: number | string) =>
   api.get(`/tasks/${taskId}`).then((r: AxiosResponse<Task>) => r.data);
 
+export const reextractBatch = (batchNo: string) =>
+  api.post(`/batches/${encodeURIComponent(batchNo)}/reextract`).then((r) => r.data);
+export const redeembedBatch = (batchNo: string) =>
+  api.post(`/batches/${encodeURIComponent(batchNo)}/redeembed`).then((r) => r.data);
+export const recomputeBatch = (batchNo: string, metrics: string[]) =>
+  api.post(`/batches/${encodeURIComponent(batchNo)}/recompute`, { metrics }).then((r) => r.data);
+
 export const queryDevices = (body: Record<string, unknown>) =>
   api.post('/query/devices', body).then((r) => r.data);
 export const queryAggregate = (body: Record<string, unknown>) =>

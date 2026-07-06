@@ -69,11 +69,7 @@ class ProgressPublisher:
             values["progress_pct"] = max(0, min(100, int(progress_pct)))
         if progress_msg is not None:
             values["progress_msg"] = progress_msg
-        db.execute(
-            update(UploadTask)
-            .where(UploadTask.id == self.task_id)
-            .values(**values)
-        )
+        db.execute(update(UploadTask).where(UploadTask.id == self.task_id).values(**values))
         db.commit()
         payload = {
             "task_id": self.task_id,

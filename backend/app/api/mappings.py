@@ -33,8 +33,7 @@ def list_mappings(db: DbSession) -> list[MappingListItem]:
     out: list[MappingListItem] = []
     for m in mappings:
         in_use = (
-            db.scalar(select(func.count()).select_from(Batch).where(Batch.mapping_id == m.id))
-            or 0
+            db.scalar(select(func.count()).select_from(Batch).where(Batch.mapping_id == m.id)) or 0
         )
         out.append(
             MappingListItem(
@@ -92,9 +91,7 @@ def upload_mapping(
         try:
             entries = load_mapping(saved_path)
         except Exception as exc:
-            raise HTTPException(
-                status_code=400, detail=f"对照表解析失败: {exc!s}"
-            ) from exc
+            raise HTTPException(status_code=400, detail=f"对照表解析失败: {exc!s}") from exc
 
         db.bulk_insert_mappings(
             MappingEntry,
@@ -146,11 +143,14 @@ def list_mapping_entries(
     if mapping is None:
         raise HTTPException(status_code=404, detail=f"对照表 {mapping_id} 不存在")
 
-    total = db.scalar(
-        select(func.count())
-        .select_from(MappingEntry)
-        .where(MappingEntry.mapping_id == mapping_id)
-    ) or 0
+    total = (
+        db.scalar(
+            select(func.count())
+            .select_from(MappingEntry)
+            .where(MappingEntry.mapping_id == mapping_id)
+        )
+        or 0
+    )
     stmt = (
         select(MappingEntry)
         .where(MappingEntry.mapping_id == mapping_id)

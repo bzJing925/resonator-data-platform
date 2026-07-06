@@ -31,9 +31,7 @@ def main() -> None:
     try:
         # 1. 删除已处理批次保留的 raw zip
         if not settings.KEEP_RAW_ZIP:
-            batches = db.scalars(
-                select(Batch).where(Batch.raw_zip_path.is_not(None))
-            ).all()
+            batches = db.scalars(select(Batch).where(Batch.raw_zip_path.is_not(None))).all()
             for batch in batches:
                 p = Path(batch.raw_zip_path)
                 if p.exists():
@@ -47,9 +45,7 @@ def main() -> None:
 
         # 2. 删除 uploads 中的孤儿 zip
         referenced = {
-            Path(b.raw_zip_path)
-            for b in db.scalars(select(Batch)).all()
-            if b.raw_zip_path
+            Path(b.raw_zip_path) for b in db.scalars(select(Batch)).all() if b.raw_zip_path
         }
         for p in settings.uploads_dir.rglob("*.zip"):
             if p not in referenced:

@@ -69,7 +69,7 @@ def compute_batch_task(self: Task, extract_result: dict[str, Any]) -> dict[str, 
             db,
             stage="metrics",
             stage_progress_pct=0,
-            progress_pct=30,
+            progress_pct=45,
             progress_msg="开始指标计算…",
         )
 
@@ -159,7 +159,7 @@ def compute_batch_task(self: Task, extract_result: dict[str, Any]) -> dict[str, 
                 if stage_pct != last_pct and (
                     stage_pct - last_pct >= 5 or i % 100 == 0 or i == total
                 ):
-                    overall = 30 + int(65 * i / total)
+                    overall = 45 + int(55 * i / total)
                     publisher.stage_update(
                         db,
                         stage="metrics",
@@ -254,7 +254,7 @@ def _extract_parallel(
             if stage_pct != last_pct and (
                 stage_pct - last_pct >= 5 or processed % 200 == 0 or processed == total
             ):
-                overall = 30 + int(65 * stage_pct / 100)
+                overall = 45 + int(55 * stage_pct / 100)
                 publisher.stage_update(
                     db,
                     stage="metrics",

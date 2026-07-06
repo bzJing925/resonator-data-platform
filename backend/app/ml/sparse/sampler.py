@@ -75,9 +75,9 @@ class AdaptiveSampler(nn.Module):
 
     def _apply_region_prior(
         self,
-        p_raw: torch.Tensor,       # (B, N)
+        p_raw: torch.Tensor,  # (B, N)
         region_ids: torch.Tensor,  # (B, N)
-        freq: torch.Tensor,        # (B, N) or (N,)
+        freq: torch.Tensor,  # (B, N) or (N,)
         fs: torch.Tensor | None = None,  # (B,)
         fp: torch.Tensor | None = None,  # (B,)
     ) -> torch.Tensor:
@@ -99,7 +99,7 @@ class AdaptiveSampler(nn.Module):
                 bw = (fp - fs).clamp(min=1e-6).unsqueeze(1)  # (b, 1)
                 d_fs = torch.abs(freq - fs.unsqueeze(1)) / (bw * 0.3)
                 d_fp = torch.abs(freq - fp.unsqueeze(1)) / (bw * 0.3)
-                gaussian = torch.exp(-torch.minimum(d_fs, d_fp) ** 2)  # (b, n)
+                gaussian = torch.exp(-(torch.minimum(d_fs, d_fp) ** 2))  # (b, n)
                 # 只在主模区应用高斯加权
                 p_weighted = p_weighted + main_mask * gaussian * 2.0
 
@@ -107,9 +107,9 @@ class AdaptiveSampler(nn.Module):
 
     def forward(
         self,
-        z_db: torch.Tensor,       # (B, N)
+        z_db: torch.Tensor,  # (B, N)
         region_ids: torch.Tensor,  # (B, N) int64
-        freq: torch.Tensor,        # (B, N) or (N,)
+        freq: torch.Tensor,  # (B, N) or (N,)
         fs: torch.Tensor | None = None,  # (B,)
         fp: torch.Tensor | None = None,  # (B,)
         target_k: int | None = None,
@@ -171,7 +171,7 @@ class AdaptiveSampler(nn.Module):
 
     def sample_points(
         self,
-        p_norm: torch.Tensor,    # (B, N)
+        p_norm: torch.Tensor,  # (B, N)
         k: int | None = None,
     ) -> tuple[torch.Tensor, int]:
         """推理时用的确定性采样（无 Gumbel 噪声，直接 top-k）。
