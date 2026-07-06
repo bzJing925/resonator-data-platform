@@ -6,6 +6,7 @@ import logging
 import traceback
 
 from app.db import SessionLocal
+from app.workers.cancel import TaskCancelledError
 from app.workers.compute_batch import compute_batch_task
 from app.workers.extract_batch import extract_batch_task
 from app.workers.local_queue import LocalTask, get_local_queue
@@ -38,6 +39,13 @@ def _run_upload_or_reextract(task: LocalTask) -> None:
             batch_id=compute_result.get("batch_id"),
             device_count=compute_result.get("device_count", 0),
         )
+    except TaskCancelledError:
+        logger.info("本地任务 %s 被取消", task.task_id)
+        try:
+            publisher = ProgressPublisher(task.task_id)
+            publisher.cancel(db, "已取消并清理文件")
+        except Exception:
+            pass
     except Exception as exc:
         logger.exception("本地任务 %s 失败", task.task_id)
         try:

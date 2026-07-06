@@ -52,18 +52,18 @@ POST /api/tasks/{task_id}/cancel
 1. 取 `UploadTask`，不存在返回 `404`。
 2. 若 `status` 不在 `('pending', 'running')`，返回 `409 Conflict`，提示“任务已结束，无法取消”。
 3. 记录 `cancelled_at = now()`。
-4. 根据 `task.batch_no` 取 `Batch`：
-   - 若存在，先 `batch.task_id = NULL`（切断与上传任务的外键/逻辑关联，避免删 batch 时触发级联把 task 也删掉），然后删除 batch（级联删 devices / file_nodes）。
+4. 先停止 worker：
+   - 对 **Celery**：若 `task.celery_task_id` 存在，调用 `celery_app.control.revoke(task.celery_task_id, terminate=True)`；
+   - 对 **Desktop**：调用 `get_local_queue().request_cancel(task_id)`，从 pending 队列移除或标记 running 任务。
+5. 根据 `task.batch_no` 取 `Batch`：
+   - 若存在，删除 batch（级联删 devices / file_nodes）。`batches.task_id` 已设置 `ondelete="SET NULL"`，删除 batch 不会影响 `UploadTask`。
    - 删除 `settings.files_dir / batch_no`（解压目录）。
    - 删除 `batch.raw_zip_path`（原始 zip）。
-5. 对 **Celery**：若 `task.celery_task_id` 存在：
-   - `pending` 任务调用 `AsyncResult.revoke(terminate=False)`；
-   - `running` 任务调用 `revoke(terminate=True)`（兜底，防止子进程卡住）。
-6. 对 **Desktop**：
-   - 若任务还在本地队列 pending，从队列移除；
-   - 若任务正在运行，通过共享的取消集合通知 worker 退出。
-7. 更新 `UploadTask.status = 'cancelled'`，`progress_msg = '已取消并清理文件'`，`finished_at = now()`。
-8. 返回 `TaskDetail`。
+6. 若清理或撤销 worker 时发生异常，记录日志并将简要信息写入 `UploadTask.error_msg`，但仍把任务标为 cancelled。
+7. 更新 `UploadTask.status = 'cancelled'`，`progress_msg = '已取消并清理文件'`（若清理失败则使用更合适的消息），`finished_at = now()`。
+8. 返回 `TaskDetail`，并设置 `raw_zip_deleted = True`。
+
+> 注意：实际实现中先通知 worker 停止，再删除文件，以减小 running 任务在文件被删后继续写入的 race。
 
 ### Worker 协作退出
 

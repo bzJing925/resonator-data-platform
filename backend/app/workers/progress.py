@@ -146,6 +146,30 @@ class ProgressPublisher:
             }
         )
 
+    def cancel(self, db: Session, error_msg: str = "已取消") -> None:
+        db.execute(
+            update(UploadTask)
+            .where(UploadTask.id == self.task_id)
+            .values(
+                status="cancelled",
+                stage="failed",
+                stage_progress_pct=0,
+                progress_msg=error_msg,
+                finished_at=datetime.now(UTC),
+            )
+        )
+        db.commit()
+        self._publish(
+            {
+                "task_id": self.task_id,
+                "status": "cancelled",
+                "stage": "failed",
+                "stage_progress_pct": 0,
+                "progress_msg": error_msg,
+                "event": "error",
+            }
+        )
+
     def start(self, db: Session, msg: str = "任务开始") -> None:
         if self._is_cancelled(db):
             return

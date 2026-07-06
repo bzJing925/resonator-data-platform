@@ -435,33 +435,33 @@ def cancel_task(task_id: int, db: DbSession) -> TaskDetail:
     task.cancelled_at = datetime.now(UTC)
     db.commit()
 
-    # 清理数据库与文件
-    if task.batch_no:
-        delete_batch_and_files(db, task.batch_no)
-
-    # 通知 worker
     settings = get_settings()
-    if settings.is_desktop:
-        queue = get_local_queue()
-        removed = queue.request_cancel(task_id)
-        if not removed and task.celery_task_id:
-            # 已在运行，request_cancel 已标记 cancelled_ids
-            pass
-    else:
-        if task.celery_task_id:
-            AsyncResult(task.celery_task_id).revoke(
-                terminate=task.status == "running"
+    try:
+        # 先通知 worker 停止，再删文件，减小 running 任务继续写入已删目录的 race
+        if settings.is_desktop:
+            get_local_queue().request_cancel(task_id)
+        elif task.celery_task_id:
+            celery_app.control.revoke(
+                task.celery_task_id, terminate=task.status == "running"
             )
+
+        if task.batch_no:
+            delete_batch_and_files(db, task.batch_no)
+    except Exception:
+        logger.exception("取消任务 %s 时清理或撤销失败", task_id)
+        task.error_msg = "取消成功，但文件清理失败"
 
     task.status = "cancelled"
     task.progress_msg = "已取消并清理文件"
     task.finished_at = datetime.now(UTC)
     db.commit()
 
-    return TaskDetail.model_validate(task)
+    data = TaskDetail.model_validate(task)
+    data.raw_zip_deleted = True
+    return data
 ```
 
-注意：若 `delete_batch_and_files` 会 `db.commit()`，需要确保 `task` 对象仍然有效。可以在调用前 `db.flush()` 或让服务函数接受 `batch_no` 并在内部自行 commit。当前实现可接受，因为 `delete_batch_and_files` commit 后 task 仍是 attached 的；再修改 status 并 commit 即可。
+> 实现提示：`progress.py` 各发布方法会检查 `cancelled_at`，被取消的任务不会再被覆盖成 `running`/`success`/`failed`。
 
 - [ ] **步骤 2：编写 API 测试**
 

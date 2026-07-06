@@ -48,3 +48,21 @@ def test_cancel_finished_task_returns_409(db, client):
 def test_cancel_nonexistent_task_returns_404(client):
     res = client.post("/api/tasks/999999/cancel")
     assert res.status_code == 404
+
+
+def test_cancel_running_task_revokes_celery(db, client, monkeypatch):
+    from unittest.mock import MagicMock
+
+    from app.models import UploadTask
+
+    task = UploadTask(batch_no="B.04", status="running", celery_task_id="celery-123")
+    db.add(task)
+    db.commit()
+
+    mock_revoke = MagicMock()
+    monkeypatch.setattr("app.api.tasks.celery_app.control", MagicMock(revoke=mock_revoke))
+
+    res = client.post(f"/api/tasks/{task.id}/cancel")
+    assert res.status_code == 200
+    assert res.json()["status"] == "cancelled"
+    mock_revoke.assert_called_once_with("celery-123", terminate=True)
