@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import zipstream
 from fastapi import APIRouter, HTTPException, Query, Response, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 
 from app.api.deps import DEVICE_COLUMNS, DbSession
 from app.config import get_settings
@@ -23,6 +22,7 @@ from app.schemas.batch import (
     ReprocessResponse,
 )
 from app.services.batch_stats_service import get_batch_stats
+from app.services.cleanup_service import delete_batch_and_files
 from app.workers.dispatch import dispatch_reprocess_task
 
 router = APIRouter(prefix="/batches", tags=["batches"])
@@ -127,8 +127,10 @@ def _start_reprocess(
     if batch is None:
         raise HTTPException(status_code=404, detail=f"批次 {batch_no} 不存在")
 
+    raw_zip = Path(batch.raw_zip_path) if batch.raw_zip_path else None
+
     if kind == "reextract":
-        if not batch.raw_zip_path or not Path(batch.raw_zip_path).exists():
+        if raw_zip is None or not raw_zip.exists():
             raise HTTPException(
                 status_code=400,
                 detail="原始数据包已清理，无法重新解压",
@@ -141,11 +143,12 @@ def _start_reprocess(
         raise HTTPException(status_code=409, detail="该批次已有进行中的任务")
 
     task.status = "pending"
-    task.stage = "extract"
+    task.stage = {"reextract": "extract", "redeembed": "deembed", "recompute": "metrics"}[kind]
     task.progress_pct = 0
     task.stage_progress_pct = 0
     task.progress_msg = "排队中"
     task.error_msg = None
+    task.cancelled_at = None
     task.finished_at = None
     db.commit()
 
@@ -154,7 +157,7 @@ def _start_reprocess(
         batch_no=batch.batch_no,
         mapping_id=batch.mapping_id,
         kind=kind,
-        zip_path=Path(batch.raw_zip_path) if batch.raw_zip_path else None,
+        zip_path=raw_zip,
         f_start_ghz=batch.f_start_ghz,
         f_end_ghz=batch.f_end_ghz,
         deembed=batch.deembedded,
@@ -175,27 +178,8 @@ def _start_reprocess(
 
 @router.delete("/{batch_no}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_batch(batch_no: str, db: DbSession) -> None:
-    batch = db.scalar(select(Batch).where(Batch.batch_no == batch_no))
-    if batch is None:
+    if not delete_batch_and_files(db, batch_no):
         raise HTTPException(status_code=404, detail=f"批次 {batch_no} 不存在")
-
-    settings = get_settings()
-    files_dir = settings.files_dir / batch_no
-    zip_path = Path(batch.file_path) if batch.file_path else None
-
-    db.execute(delete(Batch).where(Batch.id == batch.id))
-    db.commit()
-
-    if files_dir.exists():
-        try:
-            shutil.rmtree(files_dir)
-        except Exception:
-            pass
-    if zip_path and zip_path.exists():
-        try:
-            zip_path.unlink()
-        except Exception:
-            pass
 
 
 @router.post("/{batch_no}/reextract", response_model=ReprocessResponse)
