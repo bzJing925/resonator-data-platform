@@ -12,8 +12,6 @@ def test_validate_metrics():
 
 
 def test_validate_metrics_rejects_unknown():
-    import pytest
-
     with pytest.raises(ValueError):
         _validate_metrics(["qs", "foo"])
 

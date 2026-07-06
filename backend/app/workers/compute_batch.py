@@ -19,7 +19,7 @@ from app.core.mapping import load_mapping
 from app.db import SessionLocal
 from app.models import Batch, Device, Mapping
 from app.services.device_ingest import bulk_insert_devices
-from app.workers.cancel import raise_if_cancelled
+from app.workers.cancel import TaskCancelledError, raise_if_cancelled
 from app.workers.celery_app import celery_app
 from app.workers.progress import ProgressPublisher
 
@@ -130,6 +130,8 @@ def compute_batch_task(self: Task, extract_result: dict[str, Any]) -> dict[str, 
                     max_workers=parallel_workers,
                     upload_task_id=upload_task_id,
                 )
+            except TaskCancelledError:
+                raise
             except Exception:
                 logger.exception("多进程提参失败，回退到单线程")
                 use_parallel = False

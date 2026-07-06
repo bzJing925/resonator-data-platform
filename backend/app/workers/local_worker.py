@@ -43,7 +43,7 @@ def _run_upload_or_reextract(task: LocalTask) -> None:
         logger.info("本地任务 %s 被取消", task.task_id)
         try:
             publisher = ProgressPublisher(task.task_id)
-            publisher.cancel(db, "已取消并清理文件")
+            publisher.cancel(db, "已取消")
         except Exception:
             pass
     except Exception as exc:
@@ -68,7 +68,14 @@ def _run_redeembed(task: LocalTask) -> None:
             logger.info("本地重新去嵌任务 %s 被取消", task.task_id)
             try:
                 publisher = ProgressPublisher(task.task_id)
-                publisher.cancel(db, "已取消并清理文件")
+                publisher.cancel(db, "已取消")
+            except Exception:
+                pass
+        except Exception as exc:
+            logger.exception("本地重新去嵌任务 %s 失败", task.task_id)
+            try:
+                publisher = ProgressPublisher(task.task_id)
+                publisher.fail(db, f"{exc}\n{traceback.format_exc()}")
             except Exception:
                 pass
     finally:
@@ -90,7 +97,14 @@ def _run_recompute(task: LocalTask) -> None:
             logger.info("本地重新计算任务 %s 被取消", task.task_id)
             try:
                 publisher = ProgressPublisher(task.task_id)
-                publisher.cancel(db, "已取消并清理文件")
+                publisher.cancel(db, "已取消")
+            except Exception:
+                pass
+        except Exception as exc:
+            logger.exception("本地重新计算任务 %s 失败", task.task_id)
+            try:
+                publisher = ProgressPublisher(task.task_id)
+                publisher.fail(db, f"{exc}\n{traceback.format_exc()}")
             except Exception:
                 pass
     finally:
