@@ -1,5 +1,5 @@
 import React, { memo, useCallback, useEffect, useMemo, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import I from '../components/Icons';
 import FileManager from '../components/FileManager';
 import {
@@ -134,6 +134,7 @@ const BATCH_DETAIL_INITIAL_STATE = {
 
 export default function BatchDetail() {
   const { batchNo } = useParams<{ batchNo: string }>();
+  const navigate = useNavigate();
   const [state, setState] = usePageState('batchDetail', BATCH_DETAIL_INITIAL_STATE);
   const { page, waferFilter, pfFilter } = state;
   const setPage = useCallback((v: number | ((prev: number) => number)) => setState((s) => ({ ...s, page: typeof v === 'function' ? v(s.page) : v })), [setState]);
@@ -319,7 +320,7 @@ export default function BatchDetail() {
               try {
                 setError(null);
                 await cancelTask(detail.task_id);
-                setTaskStatus('cancelled');
+                navigate('/batches');
               } catch (e: any) {
                 setError(formatApiError(e, '取消失败'));
               }

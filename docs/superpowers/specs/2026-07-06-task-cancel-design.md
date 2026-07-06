@@ -37,7 +37,14 @@ ALTER TABLE upload_tasks ADD COLUMN cancelled_at TIMESTAMPTZ;
 status IN ('pending','running','success','failed','cancelled')
 ```
 
-> 新增 migration：`backend/alembic/versions/2026_07_06_xxxxxx_add_cancelled_status.py`
+同时新增 `kind` 列用于区分原始上传与重处理任务：
+
+```sql
+ALTER TABLE upload_tasks ADD COLUMN kind TEXT NOT NULL DEFAULT 'upload';
+-- check constraint: kind IN ('upload','reextract','redeembed','recompute')
+```
+
+> 新增 migration：`backend/alembic/versions/2026_07_06_xxxxxx_add_cancelled_status.py` 与 `2026_07_06_xxxxxx_add_task_kind.py`
 
 ### 后端 API
 
@@ -56,12 +63,11 @@ POST /api/tasks/{task_id}/cancel
    - 对 **Celery**：若 `task.celery_task_id` 存在，调用 `celery_app.control.revoke(task.celery_task_id, terminate=(task.status == "running"))`；
    - 对 **Desktop**：调用 `get_local_queue().request_cancel(task_id)`，从 pending 队列移除或标记 running 任务。
 5. 根据 `task.batch_no` 取 `Batch`：
-   - 若存在，删除 batch（级联删 devices / file_nodes）。`batches.task_id` 已设置 `ondelete="SET NULL"`，删除 batch 不会影响 `UploadTask`。
-   - 删除 `settings.files_dir / batch_no`（解压目录）。
-   - 删除 `batch.raw_zip_path`（原始 zip）。
+   - **仅当 `task.kind == 'upload'` 时**才删除 batch（级联删 devices / file_nodes）、解压目录和原始 zip。重处理任务（`reextract`/`redeembed`/`recompute`）取消时不应删除已有批次数据。
+   - `batches.task_id` 已设置 `ondelete="SET NULL"`，删除 batch 不会影响 `UploadTask`。
 6. 若清理或撤销 worker 时发生异常，记录日志并将简要信息写入 `UploadTask.error_msg`，但仍把任务标为 cancelled。
 7. 更新 `UploadTask.status = 'cancelled'`，`progress_msg = '已取消并清理文件'`（若清理失败则使用更合适的消息），`finished_at = now()`。
-8. 返回 `TaskDetail`，并设置 `raw_zip_deleted = True`。
+8. 返回 `TaskDetail`：对 upload 任务设置 `raw_zip_deleted = True`；对重处理任务设置 `raw_zip_deleted = False`（未尝试删除原 zip）。
 
 > 注意：实际实现中先通知 worker 停止，再删除文件，以减小 running 任务在文件被删后继续写入的 race。
 

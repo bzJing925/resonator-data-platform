@@ -81,7 +81,7 @@ export default function TaskDetail() {
                 className={`badge ${
                   status === 'success'
                     ? 'done'
-                    : status === 'failed' || status === 'error' || status === 'cancelled'
+                    : status === 'failed' || status === 'error'
                     ? 'err'
                     : status === 'running'
                     ? 'run'
