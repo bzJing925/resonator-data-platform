@@ -5,13 +5,81 @@
 
 from __future__ import annotations
 
-import os
-import tempfile
 from pathlib import Path
 
-# 必须在任何测试导入 app.main（从而触发 Settings 加载）之前设置环境变量。
-_temp_root = tempfile.mkdtemp(prefix="aln_test_data_")
-os.environ["DATA_ROOT"] = _temp_root
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
-for _sub in ("uploads", "files", "mappings", "exports", "logs"):
-    Path(_temp_root, _sub).mkdir(parents=True, exist_ok=True)
+
+@pytest.fixture
+def settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """构造测试用 Settings 并替换 app.config.get_settings。"""
+    from app.config import Settings
+
+    test_settings = Settings(
+        DATA_ROOT=tmp_path / "data",
+        WATCH_ENABLED=False,
+        ALN_DESKTOP_MODE=False,
+    )
+    monkeypatch.setattr("app.config.get_settings", lambda: test_settings)
+    monkeypatch.setattr("app.api.tasks.get_settings", lambda: test_settings)
+    monkeypatch.setattr("app.services.cleanup_service.get_settings", lambda: test_settings)
+    return test_settings
+
+
+@pytest.fixture
+def engine(settings):
+    """每个测试独立的内存 SQLite 引擎（StaticPool 支持多线程访问）。"""
+    from app.models.base import Base
+
+    test_engine = create_engine(
+        "sqlite://",
+        future=True,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(bind=test_engine)
+    try:
+        yield test_engine
+    finally:
+        Base.metadata.drop_all(bind=test_engine)
+
+
+@pytest.fixture
+def db(engine) -> Session:
+    """基于同一引擎的测试会话。"""
+    session_local = sessionmaker(
+        bind=engine, autoflush=False, autocommit=False, future=True
+    )
+    session = session_local()
+    try:
+        yield session
+    finally:
+        session.close()
+
+
+@pytest.fixture
+def client(engine) -> TestClient:
+    """FastAPI TestClient，每个请求从同一引擎新建会话。"""
+    from app.db import get_db
+    from app.main import app
+
+    def _override_get_db():
+        session_local = sessionmaker(
+            bind=engine, autoflush=False, autocommit=False, future=True
+        )
+        session = session_local()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    app.dependency_overrides[get_db] = _override_get_db
+    try:
+        with TestClient(app) as test_client:
+            yield test_client
+    finally:
+        app.dependency_overrides.clear()

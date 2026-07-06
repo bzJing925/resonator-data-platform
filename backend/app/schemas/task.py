@@ -20,6 +20,7 @@ class TaskDetail(BaseModel):
     progress_msg: str | None
     started_at: datetime
     finished_at: datetime | None
+    cancelled_at: datetime | None
     error_msg: str | None
     raw_zip_deleted: bool | None = None
 

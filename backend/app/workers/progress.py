@@ -33,7 +33,13 @@ class ProgressPublisher:
             # Redis 故障不应影响主流程
             pass
 
+    def _is_cancelled(self, db: Session) -> bool:
+        task = db.get(UploadTask, self.task_id)
+        return task is not None and task.cancelled_at is not None
+
     def update(self, db: Session, progress_pct: int, progress_msg: str) -> None:
+        if self._is_cancelled(db):
+            return
         progress_pct = max(0, min(100, int(progress_pct)))
         db.execute(
             update(UploadTask)
@@ -59,6 +65,8 @@ class ProgressPublisher:
         progress_msg: str | None = None,
     ) -> None:
         """更新当前阶段进度，并可同步更新总体进度。"""
+        if self._is_cancelled(db):
+            return
         stage_progress_pct = max(0, min(100, int(stage_progress_pct)))
         values: dict[str, Any] = {
             "stage": stage,
@@ -83,6 +91,8 @@ class ProgressPublisher:
         self._publish(payload)
 
     def done(self, db: Session, batch_id: int, device_count: int) -> None:
+        if self._is_cancelled(db):
+            return
         db.execute(
             update(UploadTask)
             .where(UploadTask.id == self.task_id)
@@ -111,6 +121,8 @@ class ProgressPublisher:
         )
 
     def fail(self, db: Session, error_msg: str) -> None:
+        if self._is_cancelled(db):
+            return
         db.execute(
             update(UploadTask)
             .where(UploadTask.id == self.task_id)
@@ -135,6 +147,8 @@ class ProgressPublisher:
         )
 
     def start(self, db: Session, msg: str = "任务开始") -> None:
+        if self._is_cancelled(db):
+            return
         db.execute(
             update(UploadTask)
             .where(UploadTask.id == self.task_id)

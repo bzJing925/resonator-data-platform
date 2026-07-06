@@ -1,11 +1,13 @@
-"""任务接口：详情 / 列表 / SSE 流。"""
+"""任务接口：详情 / 列表 / SSE 流 / 取消。"""
 
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from pathlib import Path
 
 import redis.asyncio as aioredis
@@ -18,6 +20,11 @@ from app.config import get_settings
 from app.db import get_db
 from app.models import Batch, UploadTask
 from app.schemas.task import TaskDetail, TaskListItem
+from app.services.cleanup_service import delete_batch_and_files
+from app.workers.celery_app import celery_app
+from app.workers.local_queue import get_local_queue
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -45,6 +52,42 @@ def get_task(task_id: int, db: DbSession) -> TaskDetail:
         raw_zip_deleted = False
     data = TaskDetail.model_validate(task)
     data.raw_zip_deleted = raw_zip_deleted
+    return data
+
+
+@router.post("/{task_id}/cancel", response_model=TaskDetail)
+def cancel_task(task_id: int, db: DbSession) -> TaskDetail:
+    task = db.get(UploadTask, task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"任务 {task_id} 不存在")
+    if task.status not in ("pending", "running"):
+        raise HTTPException(status_code=409, detail="任务已结束，无法取消")
+
+    task.cancelled_at = datetime.now(UTC)
+    db.commit()
+
+    settings = get_settings()
+    try:
+        if settings.is_desktop:
+            get_local_queue().request_cancel(task_id)
+        elif task.celery_task_id:
+            celery_app.control.revoke(
+                task.celery_task_id, terminate=task.status == "running"
+            )
+
+        if task.batch_no:
+            delete_batch_and_files(db, task.batch_no)
+    except Exception:
+        logger.exception("取消任务 %s 时清理或撤销失败", task_id)
+        task.error_msg = "取消成功，但文件清理失败"
+
+    task.status = "cancelled"
+    task.progress_msg = "已取消并清理文件"
+    task.finished_at = datetime.now(UTC)
+    db.commit()
+
+    data = TaskDetail.model_validate(task)
+    data.raw_zip_deleted = True
     return data
 
 
