@@ -65,6 +65,7 @@ export interface Batch {
     pass_rate?: number;
   };
   raw_zip_deleted?: boolean;
+  task_id?: number | string;
 }
 
 export interface Task {

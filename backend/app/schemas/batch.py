@@ -57,5 +57,6 @@ class BatchDetail(BaseModel):
     file_path: str
     uploaded_at: datetime
     uploaded_by: str
+    task_id: int | None
     wafers: list[int]
     stats: BatchStats

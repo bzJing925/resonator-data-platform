@@ -108,6 +108,7 @@ def get_batch(batch_no: str, db: DbSession) -> BatchDetail:
         file_path=batch.file_path,
         uploaded_at=batch.uploaded_at,
         uploaded_by=batch.uploaded_by,
+        task_id=batch.task_id,
         wafers=wafers,
         stats=BatchStats(**stats),
     )

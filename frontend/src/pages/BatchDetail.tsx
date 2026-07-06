@@ -4,6 +4,7 @@ import I from '../components/Icons';
 import FileManager from '../components/FileManager';
 import {
   getBatch,
+  getTask,
   listBatchDevices,
   listBatchFiles,
   exportCsv,
@@ -106,6 +107,12 @@ function downloadBlob(blob: Blob, filename: string) {
   window.URL.revokeObjectURL(url);
 }
 
+function formatApiError(e: any, fallback: string): string {
+  const detail = e?.response?.data?.detail;
+  if (typeof detail === 'string' && detail.length > 0) return detail;
+  return e?.message || fallback;
+}
+
 // 完整导出字段（覆盖 Device 表所有列 + virtual batch_no）
 const EXPORT_FIELDS = [
   'id', 'batch_no',
@@ -136,6 +143,7 @@ export default function BatchDetail() {
   const [devices, setDevices] = useState<{ items: Device[]; total: number }>({ items: [], total: 0 });
   const [size] = useState<number>(50);
   const [error, setError] = useState<string | null>(null);
+  const [taskStatus, setTaskStatus] = useState<string | null>(null);
   const [activeDevice, setActiveDevice] = useState<Device | null>(null);
   const [exporting, setExporting] = useState<boolean>(false);
   const [files, setFiles] = useState<FileEntry[]>([]);
@@ -170,6 +178,32 @@ export default function BatchDetail() {
       .catch((e: Error) => { if (!cancelled) setError(e.message); });
     return () => { cancelled = true; };
   }, [batchNo]);
+
+  // 轮询批次关联任务状态，进行中时禁用重处理按钮
+  useEffect(() => {
+    if (!detail?.task_id) return;
+    let cancelled = false;
+    let timer: number | undefined;
+
+    const fetchStatus = async () => {
+      try {
+        const t = await getTask(detail.task_id as number | string);
+        if (cancelled) return;
+        setTaskStatus(t.status || null);
+        if (t.status === 'pending' || t.status === 'running') {
+          timer = window.setTimeout(fetchStatus, 2000);
+        }
+      } catch {
+        // 任务查询失败不阻断页面
+      }
+    };
+
+    fetchStatus();
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [detail?.task_id]);
 
   useEffect(() => {
     if (!batchNo) return;
@@ -259,6 +293,8 @@ export default function BatchDetail() {
     }
   }, [batchNo]);
 
+  const isTaskActive = taskStatus === 'pending' || taskStatus === 'running';
+
   return (
     <>
       <div className="toolbar">
@@ -269,6 +305,11 @@ export default function BatchDetail() {
           <span style={{ color: 'var(--fg-4)' }}>›</span> <b>{batchNo}</b>
         </span>
         <div className="spacer" />
+        {isTaskActive && (
+          <span className="dim" style={{ fontSize: 12, marginRight: 8 }}>
+            任务进行中 ({taskStatus === 'pending' ? '排队中' : '运行中'})
+          </span>
+        )}
         <button className="btn" onClick={onExportCsv} disabled={exporting} title="导出当前批次全部 devices 为 CSV">
           <I.download size={13} /> {exporting ? '导出中…' : '导出 CSV'}
         </button>
@@ -277,14 +318,15 @@ export default function BatchDetail() {
         </button>
         <button
           className="btn"
-          disabled={detail?.raw_zip_deleted}
+          disabled={!detail || detail.raw_zip_deleted || isTaskActive}
           onClick={async () => {
             if (!detail) return;
             try {
-              await reextractBatch(detail.batch_no);
               setError(null);
+              await reextractBatch(detail.batch_no);
+              setTaskStatus('pending');
             } catch (e: any) {
-              setError(e.message || '重新解压失败');
+              setError(formatApiError(e, '重新解压失败'));
             }
           }}
         >
@@ -292,13 +334,15 @@ export default function BatchDetail() {
         </button>
         <button
           className="btn"
+          disabled={isTaskActive}
           onClick={async () => {
             if (!detail) return;
             try {
-              await redeembedBatch(detail.batch_no);
               setError(null);
+              await redeembedBatch(detail.batch_no);
+              setTaskStatus('pending');
             } catch (e: any) {
-              setError(e.message || '重新去嵌失败');
+              setError(formatApiError(e, '重新去嵌失败'));
             }
           }}
         >
@@ -306,6 +350,7 @@ export default function BatchDetail() {
         </button>
         <button
           className="btn"
+          disabled={isTaskActive}
           onClick={() => setShowRecomputeModal(true)}
         >
           重新计算指标
@@ -456,11 +501,12 @@ export default function BatchDetail() {
           onClose={() => setShowRecomputeModal(false)}
           onSubmit={async (metrics) => {
             try {
+              setError(null);
               await recomputeBatch(detail.batch_no, metrics);
               setShowRecomputeModal(false);
-              setError(null);
+              setTaskStatus('pending');
             } catch (e: any) {
-              setError(e.message || '重新计算失败');
+              setError(formatApiError(e, '重新计算失败'));
             }
           }}
         />
