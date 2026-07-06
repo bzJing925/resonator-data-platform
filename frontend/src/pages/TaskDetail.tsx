@@ -1,11 +1,16 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import I from '../components/Icons';
-import { getTask, reextractBatch, redeembedBatch, recomputeBatch } from '../api/endpoints';
+import { getTask, cancelTask, reextractBatch, redeembedBatch, recomputeBatch } from '../api/endpoints';
 import useSSE from '../hooks/useSSE';
 import type { Task } from '../types';
 import StageProgressBars from '../components/StageProgressBars';
 import ReprocessMetricsModal from '../components/ReprocessMetricsModal';
+
+function formatApiError(e: any, fallback: string): string {
+  const detail = e?.response?.data?.detail;
+  return typeof detail === 'string' && detail.length > 0 ? detail : e?.message || fallback;
+}
 
 export default function TaskDetail() {
   const { taskId } = useParams<{ taskId: string }>();
@@ -42,6 +47,24 @@ export default function TaskDetail() {
             <I.batches size={13} /> 批次详情
           </Link>
         )}
+        {(status === 'pending' || status === 'running') && taskId && (
+          <button
+            className="btn fail"
+            onClick={async () => {
+              if (!window.confirm(`取消任务将删除批次 ${task?.batch_no || ''} 及上传文件，是否继续？`)) return;
+              try {
+                setError(null);
+                await cancelTask(taskId);
+                const updated = await getTask(taskId);
+                setTask(updated);
+              } catch (e: any) {
+                setError(formatApiError(e, '取消失败'));
+              }
+            }}
+          >
+            取消任务
+          </button>
+        )}
       </div>
       <div style={{ flex: 1, overflow: 'auto', padding: 14 }}>
         {error && (
@@ -58,7 +81,7 @@ export default function TaskDetail() {
                 className={`badge ${
                   status === 'success'
                     ? 'done'
-                    : status === 'failed' || status === 'error'
+                    : status === 'failed' || status === 'error' || status === 'cancelled'
                     ? 'err'
                     : status === 'running'
                     ? 'run'
@@ -71,6 +94,7 @@ export default function TaskDetail() {
                   success: '成功',
                   failed: '失败',
                   error: '错误',
+                  cancelled: '已取消',
                 }[status || 'pending']}
               </span>
             </div>
@@ -92,7 +116,7 @@ export default function TaskDetail() {
                     width: `${progress}%`,
                     height: '100%',
                     background:
-                      status === 'failed' || status === 'error'
+                      status === 'failed' || status === 'error' || status === 'cancelled'
                         ? 'var(--fail)'
                         : status === 'success'
                         ? 'var(--pass)'
@@ -134,7 +158,7 @@ export default function TaskDetail() {
                       await reextractBatch(task.batch_no!);
                       window.location.reload();
                     } catch (e: any) {
-                      setError(e.message || '重新解压失败');
+                      setError(formatApiError(e, '重新解压失败'));
                     }
                   }}
                 >
@@ -147,7 +171,7 @@ export default function TaskDetail() {
                       await redeembedBatch(task.batch_no!);
                       window.location.reload();
                     } catch (e: any) {
-                      setError(e.message || '重新去嵌失败');
+                      setError(formatApiError(e, '重新去嵌失败'));
                     }
                   }}
                 >
@@ -204,7 +228,7 @@ export default function TaskDetail() {
               setShowRecomputeModal(false);
               window.location.reload();
             } catch (e: any) {
-              setError(e.message || '重新计算失败');
+              setError(formatApiError(e, '重新计算失败'));
             }
           }}
         />
