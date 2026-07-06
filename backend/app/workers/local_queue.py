@@ -30,6 +30,7 @@ class LocalTask:
 class LocalTaskQueue:
     def __init__(self) -> None:
         self._pending: deque[LocalTask] = deque()
+        self._cancelled_ids: set[int] = set()
         self._lock = threading.Lock()
         self._shutdown = threading.Event()
         self._worker: threading.Thread | None = None
@@ -54,6 +55,26 @@ class LocalTaskQueue:
     def list_pending(self) -> list[LocalTask]:
         with self._lock:
             return list(self._pending)
+
+    def request_cancel(self, task_id: int) -> bool:
+        """请求取消任务。若任务仍在待处理队列中则移除，并标记为已请求取消。"""
+        with self._lock:
+            removed = False
+            for i, task in enumerate(self._pending):
+                if task.task_id == task_id:
+                    del self._pending[i]
+                    removed = True
+                    break
+            self._cancelled_ids.add(task_id)
+            return removed
+
+    def is_cancelled(self, task_id: int) -> bool:
+        with self._lock:
+            return task_id in self._cancelled_ids
+
+    def clear_cancel(self, task_id: int) -> None:
+        with self._lock:
+            self._cancelled_ids.discard(task_id)
 
     def shutdown(self) -> None:
         self._shutdown.set()

@@ -81,4 +81,5 @@ def local_worker_loop() -> None:
             _run_recompute(task)
         else:
             logger.error("未知本地任务类型: %s", task.kind)
+        queue.clear_cancel(task.task_id)
     logger.info("本地 worker 退出")
