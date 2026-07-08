@@ -134,6 +134,7 @@ class FileCurveResponse(BaseModel):
     batch_no: str
     relpath: str
     param: str
+    port: str = "S11"
     freq_ghz: list[float]
     values: list[float]
     values_re: list[float] | None = None

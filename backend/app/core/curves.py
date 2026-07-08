@@ -11,6 +11,7 @@ import numpy as np
 import skrf
 
 CurveParam = Literal["s11_db", "s11_phase", "s11_re_im", "z_mag_db", "z_phase"]
+Port = Literal["S11", "S22"]
 PARAM_CHOICES: tuple[str, ...] = (
     "s11_db",
     "s11_phase",
@@ -23,7 +24,7 @@ PARAM_CHOICES: tuple[str, ...] = (
 def compute_sparam_curve(
     net: skrf.Network,
     param: CurveParam,
-    port: Literal["S11", "S22"] = "S11",
+    port: Port = "S11",
 ) -> dict[str, Any]:
     """根据 skrf.Network 计算指定曲线。
 

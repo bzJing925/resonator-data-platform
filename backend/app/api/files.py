@@ -20,7 +20,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 
 from app.api.deps import DEVICE_COLUMNS, DbSession
-from app.core.curves import PARAM_CHOICES, compute_sparam_curve
+from app.core.curves import PARAM_CHOICES, Port, compute_sparam_curve
 from app.core.extract import ExtractError
 from app.core.touchstone import split_s2p_to_s1p
 from app.models import Batch, Device, FileNode
@@ -291,6 +291,7 @@ def get_file_curve(
     batch_no: Annotated[str, Query(...)],
     relpath: Annotated[str, Query(...)],
     param: Annotated[str, Query()] = "z_mag_db",
+    port: Annotated[Port, Query()] = "S11",
 ) -> FileCurveResponse:
     """直接从批次解压目录读取指定文件的 S 参数 / 阻抗曲线（无需先入库）。"""
     if param not in PARAM_CHOICES:
@@ -309,7 +310,7 @@ def get_file_curve(
         raise HTTPException(status_code=500, detail=f"读取 S 参数文件失败: {exc}") from exc
 
     try:
-        curve = compute_sparam_curve(net, param)  # type: ignore[arg-type]
+        curve = compute_sparam_curve(net, param, port)  # type: ignore[arg-type]
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -317,6 +318,7 @@ def get_file_curve(
         batch_no=batch_no,
         relpath=relpath,
         param=param,
+        port=port,
         freq_ghz=curve["freq_ghz"],
         values=curve.get("values", []),
         values_re=curve.get("values_re"),
