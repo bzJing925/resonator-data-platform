@@ -27,6 +27,7 @@ interface DeviceRowProps {
   fmtCell: (d: Device, c: ColumnDef) => React.ReactNode;
   onRowClick: (d: Device) => void;
   onDownload: (d: Device) => void;
+  originalSpan?: OriginalCellInfo;
 }
 
 interface ColumnDef {
@@ -38,11 +39,46 @@ interface ColumnDef {
   render?: (d: Device) => React.ReactNode;
 }
 
-const DeviceRow = memo(function DeviceRow({ device, columns, fmtCell, onRowClick, onDownload }: DeviceRowProps) {
+interface OriginalCellInfo {
+  rowSpan: number;
+  showCell: boolean;
+}
+
+function computeOriginalSpans(items: Device[]): Map<number | string, OriginalCellInfo> {
+  const spans = new Map<number | string, OriginalCellInfo>();
+  if (items.length === 0) return spans;
+
+  let currentName = items[0].original_filename;
+  let startIndex = 0;
+
+  for (let i = 1; i <= items.length; i++) {
+    const name = i < items.length ? items[i].original_filename : null;
+    if (name !== currentName) {
+      const span = i - startIndex;
+      for (let j = startIndex; j < i; j++) {
+        const device = items[j];
+        if (device.id != null) {
+          spans.set(device.id, { rowSpan: span, showCell: j === startIndex });
+        }
+      }
+      if (i < items.length) {
+        currentName = name;
+        startIndex = i;
+      }
+    }
+  }
+  return spans;
+}
+
+const DeviceRow = memo(function DeviceRow({ device, columns, fmtCell, onRowClick, onDownload, originalSpan }: DeviceRowProps) {
   const d = device;
   return (
     <tr style={{ cursor: 'pointer' }} onClick={() => onRowClick(d)}>
+      {(!originalSpan || originalSpan.showCell) && (
+        <td rowSpan={originalSpan?.rowSpan}>{d.original_filename || '—'}</td>
+      )}
       <td className="mono">{d.id || '—'}</td>
+      <td>{d.s_param_port || '—'}</td>
       {columns.map((c) => (
         <td key={c.key} className={c.type === 'num' ? 'num mono' : ''}>{fmtCell(d, c)}</td>
       ))}
@@ -67,8 +103,7 @@ const DeviceRow = memo(function DeviceRow({ device, columns, fmtCell, onRowClick
 // digits: 数值精度
 const COLUMN_DEFS: ColumnDef[] = [
   // 标识
-  { key: 'original_filename', fallback: '原始文件名', type: 'text' },
-  { key: 'mark', fallback: '标记 Mark', type: 'text' },
+  { key: 'mark', fallback: '代号', type: 'text' },
   { key: 'wafer', fallback: '晶圆 Wafer', type: 'text', render: (d) => (d.wafer != null ? `W${d.wafer}` : '—') },
   { key: 'coord', fallback: '坐标 Coord', type: 'text' },
   { key: 'x', fallback: 'X', type: 'num', digits: 0 },
@@ -233,6 +268,12 @@ export default function BatchDetail() {
   }, [batchNo, page, size, waferFilter, pfFilter]);
 
   const items = devices.items || [];
+
+  const sortedItems = useMemo(() => {
+    return [...items].sort((a, b) => (a.original_filename || '').localeCompare(b.original_filename || ''));
+  }, [items]);
+
+  const originalSpans = useMemo(() => computeOriginalSpans(sortedItems), [sortedItems]);
 
   const handleRowClick = useCallback((d: Device) => setActiveDevice(d), []);
   const handleCloseDevice = useCallback(() => setActiveDevice(null), []);
@@ -471,7 +512,9 @@ export default function BatchDetail() {
             <table className="dtable dtable-wide">
               <thead>
                 <tr>
+                  <th>原始文件名</th>
                   <th>器件 ID</th>
+                  <th>端口</th>
                   {columns.map((c) => (
                     <th key={c.key} className={c.type === 'num' ? 'num' : ''}>{c.header}</th>
                   ))}
@@ -481,12 +524,12 @@ export default function BatchDetail() {
               <tbody>
                 {items.length === 0 && (
                   <tr>
-                    <td colSpan={columns.length + 2} className="dim" style={{ textAlign: 'center', padding: 24 }}>
+                    <td colSpan={columns.length + 4} className="dim" style={{ textAlign: 'center', padding: 24 }}>
                       暂无器件
                     </td>
                   </tr>
                 )}
-                {items.map((d) => (
+                {sortedItems.map((d) => (
                   <DeviceRow
                     key={d.id || `${d.wafer}-${d.coord}`}
                     device={d}
@@ -494,6 +537,7 @@ export default function BatchDetail() {
                     fmtCell={fmtCell}
                     onRowClick={handleRowClick}
                     onDownload={handleDownloadS1p}
+                    originalSpan={d.id != null ? originalSpans.get(d.id) : undefined}
                   />
                 ))}
               </tbody>
