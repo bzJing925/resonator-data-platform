@@ -6,6 +6,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.core.curves import Port
+
 
 class BatchFileItem(BaseModel):
     """批次内一个已解压 .s1p 文件的列表项。"""
@@ -134,7 +136,7 @@ class FileCurveResponse(BaseModel):
     batch_no: str
     relpath: str
     param: str
-    port: str = "S11"
+    port: Port = "S11"
     freq_ghz: list[float]
     values: list[float]
     values_re: list[float] | None = None

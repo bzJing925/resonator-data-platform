@@ -42,7 +42,7 @@ def compute_sparam_curve(
         if net.s.shape[1] < 2:
             raise ValueError("S22 需要 2 端口网络")
         s = net.s[:, 1, 1]
-        z0 = net.z0[1, 1]
+        z0 = net.z0[0, 1]
     else:
         raise ValueError(f"不支持的端口: {port}")
 
