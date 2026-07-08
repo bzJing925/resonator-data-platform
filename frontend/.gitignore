@@ -1,4 +1,6 @@
 node_modules
 dist
+electron-dist
+*.tsbuildinfo
 .vite
 *.log

@@ -65,9 +65,7 @@ def create_upload(
         )
 
     is_snp = (
-        fname_lower.endswith(".s1p")
-        or fname_lower.endswith(".s2p")
-        or fname_lower.endswith(".snp")
+        fname_lower.endswith(".s1p") or fname_lower.endswith(".s2p") or fname_lower.endswith(".snp")
     )
     batch_no = Path(file.filename).stem
     if not batch_no:
@@ -185,9 +183,7 @@ def create_upload(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except TaskDispatchError as exc:
         saved_path.unlink(missing_ok=True)
-        raise HTTPException(
-            status_code=503, detail=f"任务队列不可用: {exc}"
-        ) from exc
+        raise HTTPException(status_code=503, detail=f"任务队列不可用: {exc}") from exc
     except Exception as exc:
         saved_path.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail=f"创建批次失败: {exc!s}") from exc

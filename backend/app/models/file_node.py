@@ -36,7 +36,7 @@ class FileNode(Base, TimestampMixin):
 
     __tablename__ = "file_nodes"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True)
     batch_id: Mapped[int] = mapped_column(
         ForeignKey("batches.id", ondelete="CASCADE"), nullable=False
     )

@@ -19,6 +19,7 @@ from app.core.mapping import load_mapping
 from app.db import SessionLocal
 from app.models import Batch, Device, Mapping
 from app.services.device_ingest import bulk_insert_devices
+from app.workers.cancel import TaskCancelledError, raise_if_cancelled
 from app.workers.celery_app import celery_app
 from app.workers.progress import ProgressPublisher
 
@@ -65,11 +66,12 @@ def compute_batch_task(self: Task, extract_result: dict[str, Any]) -> dict[str, 
     db = SessionLocal()
 
     try:
+        raise_if_cancelled(upload_task_id)
         publisher.stage_update(
             db,
             stage="metrics",
             stage_progress_pct=0,
-            progress_pct=30,
+            progress_pct=45,
             progress_msg="开始指标计算…",
         )
 
@@ -126,7 +128,10 @@ def compute_batch_task(self: Task, extract_result: dict[str, Any]) -> dict[str, 
                     publisher=publisher,
                     db=db,
                     max_workers=parallel_workers,
+                    upload_task_id=upload_task_id,
                 )
+            except TaskCancelledError:
+                raise
             except Exception:
                 logger.exception("多进程提参失败，回退到单线程")
                 use_parallel = False
@@ -159,7 +164,8 @@ def compute_batch_task(self: Task, extract_result: dict[str, Any]) -> dict[str, 
                 if stage_pct != last_pct and (
                     stage_pct - last_pct >= 5 or i % 100 == 0 or i == total
                 ):
-                    overall = 30 + int(65 * i / total)
+                    raise_if_cancelled(upload_task_id)
+                    overall = 45 + int(55 * i / total)
                     publisher.stage_update(
                         db,
                         stage="metrics",
@@ -228,6 +234,7 @@ def _extract_parallel(
     publisher: ProgressPublisher,
     db: Session,
     max_workers: int,
+    upload_task_id: int,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """多进程并行提取参数。"""
     from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -254,7 +261,8 @@ def _extract_parallel(
             if stage_pct != last_pct and (
                 stage_pct - last_pct >= 5 or processed % 200 == 0 or processed == total
             ):
-                overall = 30 + int(65 * stage_pct / 100)
+                raise_if_cancelled(upload_task_id)
+                overall = 45 + int(55 * stage_pct / 100)
                 publisher.stage_update(
                     db,
                     stage="metrics",

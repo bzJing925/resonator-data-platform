@@ -72,8 +72,8 @@ def main() -> None:
         latent_dim=args.latent_dim,
     )
     dt = time.perf_counter() - t0
-    print(f"  加载 {len(dataset)} 个 s1p 文件: {dt*1000:.1f} ms")
-    print(f"  平均每文件: {dt/len(dataset)*1000:.2f} ms")
+    print(f"  加载 {len(dataset)} 个 s1p 文件: {dt * 1000:.1f} ms")
+    print(f"  平均每文件: {dt / len(dataset) * 1000:.2f} ms")
 
     # ------------------------------------------------------------------
     # 2. 加载模型
@@ -122,9 +122,9 @@ def main() -> None:
             dz = residual_net(params)
             _ = vae.decode(z_bases[bid] + dz)
     dt = time.perf_counter() - t0
-    print(f"  {n_test} 次单条推理: {dt*1000:.1f} ms")
-    print(f"  单次平均: {dt/n_test*1000:.3f} ms")
-    print(f"  吞吐量: {n_test/dt:.0f} spectra/s")
+    print(f"  {n_test} 次单条推理: {dt * 1000:.1f} ms")
+    print(f"  单次平均: {dt / n_test * 1000:.3f} ms")
+    print(f"  吞吐量: {n_test / dt:.0f} spectra/s")
 
     # ------------------------------------------------------------------
     # 4. 推理速度（批量）
@@ -150,7 +150,7 @@ def main() -> None:
                 dz = residual_net(params_batch)
                 _ = vae.decode(z_base_batch + dz)
         dt = time.perf_counter() - t0
-        print(f"  batch={bs}: {dt/20*1000:.2f} ms/batch, {bs/(dt/20):.0f} spectra/s")
+        print(f"  batch={bs}: {dt / 20 * 1000:.2f} ms/batch, {bs / (dt / 20):.0f} spectra/s")
 
     # ------------------------------------------------------------------
     # 5. 全量重建误差分布
@@ -212,6 +212,7 @@ def main() -> None:
     print("\n【5. 绘图速度（matplotlib）】")
     try:
         import matplotlib
+
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
 
@@ -232,8 +233,8 @@ def main() -> None:
         plt.savefig("/tmp/bench_plot.png")
         plt.close()
         dt = time.perf_counter() - t0
-        print(f"  4 张对比图渲染: {dt*1000:.1f} ms")
-        print(f"  单图平均: {dt/4*1000:.1f} ms")
+        print(f"  4 张对比图渲染: {dt * 1000:.1f} ms")
+        print(f"  单图平均: {dt / 4 * 1000:.1f} ms")
     except ImportError:
         print("  matplotlib 未安装，跳过绘图测试")
 

@@ -30,9 +30,7 @@ _AREA_UM2_MAP = {
 # 文件名正则
 # S22_3_A1-1_X0Y0N20_Fail_de.s1p
 # 或 S22_3_A1-1_X0Y0N20_Pass.s1p
-_FILENAME_RE = re.compile(
-    r"^S22_3_([A-Z])(\d+)-(\d+)_X(\d+)Y(\d+)N\d+_(\w+)(?:_(de))?\.s1p$"
-)
+_FILENAME_RE = re.compile(r"^S22_3_([A-Z])(\d+)-(\d+)_X(\d+)Y(\d+)N\d+_(\w+)(?:_(de))?\.s1p$")
 
 
 def parse_filename_params(filename: str) -> dict[str, object]:

@@ -43,11 +43,11 @@ class SparseReconLoss(nn.Module):
 
     def forward(
         self,
-        z_pred: torch.Tensor,      # (B, N)
-        z_true: torch.Tensor,      # (B, N)
+        z_pred: torch.Tensor,  # (B, N)
+        z_true: torch.Tensor,  # (B, N)
         region_ids: torch.Tensor,  # (B, N) 0=main, 1=spur, 2=smooth
         target_k: int,
-        freq: torch.Tensor,        # (B, N) or (N,)
+        freq: torch.Tensor,  # (B, N) or (N,)
         fs_true: torch.Tensor | None = None,
         fp_true: torch.Tensor | None = None,
         k_actual: torch.Tensor | None = None,
@@ -61,8 +61,8 @@ class SparseReconLoss(nn.Module):
 
         # 1. 区域加权重建损失
         w = torch.ones_like(z_pred)
-        w[region_ids == 0] = self.main_weight   # 主模区
-        w[region_ids == 1] = self.spur_weight   # 杂模区
+        w[region_ids == 0] = self.main_weight  # 主模区
+        w[region_ids == 1] = self.spur_weight  # 杂模区
         # 平滑区保持 1.0
 
         diff_sq = (z_pred - z_true) ** 2
@@ -80,9 +80,9 @@ class SparseReconLoss(nn.Module):
                 dz_pred[:, 1:-1] = (z_pred[:, 2:] - z_pred[:, :-2]) / 2.0
                 dz_true[:, 1:-1] = (z_true[:, 2:] - z_true[:, :-2]) / 2.0
                 # 只在主模区匹配梯度
-                peak_loss = (
-                    main_mask * (dz_pred - dz_true) ** 2
-                ).sum() / main_mask.sum().clamp(min=1)
+                peak_loss = (main_mask * (dz_pred - dz_true) ** 2).sum() / main_mask.sum().clamp(
+                    min=1
+                )
 
         # 3. 频谱平滑性
         smooth_loss = torch.mean((z_pred[:, 2:] - 2 * z_pred[:, 1:-1] + z_pred[:, :-2]) ** 2)

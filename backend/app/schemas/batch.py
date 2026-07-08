@@ -4,9 +4,22 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.schemas.common import PaginatedResponse
+
+
+class RecomputeRequest(BaseModel):
+    metrics: list[str] = Field(
+        default=["qs", "qp", "kt2", "qbode"],
+        min_length=1,
+    )
+
+
+class ReprocessResponse(BaseModel):
+    task_id: str
+    batch_no: str
+    stream_url: str
 
 
 class BatchListItem(BaseModel):
@@ -44,5 +57,6 @@ class BatchDetail(BaseModel):
     file_path: str
     uploaded_at: datetime
     uploaded_by: str
+    task_id: int | None
     wafers: list[int]
     stats: BatchStats
