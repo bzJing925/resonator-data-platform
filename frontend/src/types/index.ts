@@ -121,6 +121,7 @@ export interface Device {
   zs2_ohm?: number;
   deembedded?: boolean;
   s_param_path?: string;
+  s_param_port?: string;
   [key: string]: unknown;
 }
 

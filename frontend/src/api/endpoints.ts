@@ -24,12 +24,12 @@ export const listBatchFiles = (batchNo: string, includeSnp = false) =>
 export const computeFile = (body: Record<string, unknown>) =>
   api.post('/files/compute', body).then((r) => r.data);
 
-export const getFileCurve = (batchNo: string, relpath: string, param = 'z_mag_db') =>
+export const getFileCurve = (batchNo: string, relpath: string, param = 'z_mag_db', port = 'S11') =>
   api
     .get('/files/curve', {
-      params: { batch_no: batchNo, relpath, param },
+      params: { batch_no: batchNo, relpath, param, port },
     })
-    .then((r: AxiosResponse<{ relpath: string; freq_ghz: number[]; values: number[] }>) => r.data);
+    .then((r: AxiosResponse<{ relpath: string; port: string; freq_ghz: number[]; values: number[] }>) => r.data);
 
 export const listMappings = () => api.get('/mappings').then((r: AxiosResponse<Mapping[] | PagedList<Mapping>>) => r.data);
 export const createMapping = (formData: FormData) =>
