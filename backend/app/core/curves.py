@@ -20,7 +20,11 @@ PARAM_CHOICES: tuple[str, ...] = (
 )
 
 
-def compute_sparam_curve(net: skrf.Network, param: CurveParam) -> dict[str, Any]:
+def compute_sparam_curve(
+    net: skrf.Network,
+    param: CurveParam,
+    port: Literal["S11", "S22"] = "S11",
+) -> dict[str, Any]:
     """根据 skrf.Network 计算指定曲线。
 
     返回 dict 包含：
@@ -29,7 +33,17 @@ def compute_sparam_curve(net: skrf.Network, param: CurveParam) -> dict[str, Any]
     - s11_re_im：values_re, values_im
     """
     freq_ghz = (net.f / 1e9).tolist()
-    s = net.s[:, 0, 0]
+
+    if port == "S11":
+        s = net.s[:, 0, 0]
+        z0 = net.z0[0, 0]
+    elif port == "S22":
+        if net.s.shape[1] < 2:
+            raise ValueError("S22 需要 2 端口网络")
+        s = net.s[:, 1, 1]
+        z0 = net.z0[1, 1]
+    else:
+        raise ValueError(f"不支持的端口: {port}")
 
     if param == "s11_db":
         values = (20 * np.log10(np.maximum(np.abs(s), 1e-12))).tolist()
@@ -46,7 +60,6 @@ def compute_sparam_curve(net: skrf.Network, param: CurveParam) -> dict[str, Any]
             "values_im": np.imag(s).tolist(),
         }
 
-    z0 = net.z0[0, 0]
     z = z0 * (1 + s) / (1 - s)
 
     if param == "z_mag_db":
