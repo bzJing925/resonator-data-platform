@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
@@ -20,6 +21,8 @@ from app.workers.dispatch import dispatch_batch_task
 
 logger = logging.getLogger(__name__)
 
+_DUP_SUFFIX_RE = re.compile(r"^(?P<base>.+)-(?P<suffix>\d+)$")
+
 
 class MappingNotFoundError(Exception):
     """请求的对照表 ID 不存在。"""
@@ -27,6 +30,36 @@ class MappingNotFoundError(Exception):
 
 class TaskDispatchError(Exception):
     """Celery 任务投递失败（如 broker 不可达）。"""
+
+
+def _split_batch_no(batch_no: str) -> tuple[str, int]:
+    """拆分 batch_no 为 base 和末尾数字后缀。
+
+    - ``#17`` -> ("#17", 0)
+    - ``#17-1`` -> ("#17", 1)
+    - ``#17-abc`` -> ("#17-abc", 0)
+    """
+    m = _DUP_SUFFIX_RE.match(batch_no)
+    if m is None:
+        return batch_no, 0
+    return m.group("base"), int(m.group("suffix"))
+
+
+def _generate_unique_batch_no(db: Session, batch_no: str) -> str:
+    """当 batch_no 已存在时，自动追加递增数字后缀生成唯一名称。"""
+    existing = db.scalar(select(Batch).where(Batch.batch_no == batch_no))
+    if existing is None:
+        return batch_no
+
+    base, current_suffix = _split_batch_no(batch_no)
+    suffix = current_suffix
+    candidate = batch_no
+    while existing is not None:
+        suffix += 1
+        candidate = f"{base}-{suffix}"
+        existing = db.scalar(select(Batch).where(Batch.batch_no == candidate))
+    logger.info("batch_no %s 已存在，自动重命名为 %s", batch_no, candidate)
+    return candidate
 
 
 def _dispatch_chain(
@@ -76,19 +109,17 @@ def create_batch_and_dispatch(
 ) -> UploadTask | None:
     """创建 UploadTask + Batch 并投递处理链。
 
-    若 batch_no 已存在，返回 None（调用方应视为重复并跳过/报错）。
+    若 batch_no 已存在，会自动追加递增数字后缀生成唯一名称。
+    返回 None 仅表示发生意外的内部失败（调用方应视为错误）。
     """
-    existing = db.scalar(select(Batch).where(Batch.batch_no == batch_no))
-    if existing is not None:
-        logger.warning("批次 %s 已存在，跳过重复 %s", batch_no, source)
-        return None
-
     mapping = db.get(Mapping, mapping_id)
     if mapping is None:
         raise MappingNotFoundError(f"对照表 {mapping_id} 不存在")
 
+    unique_batch_no = _generate_unique_batch_no(db, batch_no)
+
     task = UploadTask(
-        batch_no=batch_no,
+        batch_no=unique_batch_no,
         status="pending",
         progress_pct=0,
         progress_msg="排队中",
@@ -98,7 +129,7 @@ def create_batch_and_dispatch(
     db.flush()
 
     batch = Batch(
-        batch_no=batch_no,
+        batch_no=unique_batch_no,
         mapping_id=mapping_id,
         f_start_ghz=f_start_ghz,
         f_end_ghz=f_end_ghz,
@@ -120,7 +151,7 @@ def create_batch_and_dispatch(
         celery_task_id = _dispatch_chain(
             task,
             zip_path,
-            batch_no,
+            unique_batch_no,
             mapping_id,
             f_start_ghz=f_start_ghz,
             f_end_ghz=f_end_ghz,

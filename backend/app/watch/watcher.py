@@ -83,12 +83,11 @@ async def _process_zip(watch_zip: Path) -> None:
             process_type="AUTO",
         )
         if task is None:
-            logger.info("批次 %s 已存在，跳过 %s", batch_no, watch_zip.name)
-            # 重复文件：删除从 watch 移出来的副本
+            logger.error("create_batch_and_dispatch 返回 None: %s", watch_zip.name)
             saved_path.unlink(missing_ok=True)
             return
 
-        logger.info("已自动创建批次 %s，任务 id=%s", batch_no, task.id)
+        logger.info("已自动创建批次 %s，任务 id=%s", task.batch_no, task.id)
     finally:
         db.close()
 
