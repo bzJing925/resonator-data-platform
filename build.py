@@ -24,6 +24,12 @@ ROOT = Path(__file__).resolve().parent
 FRONTEND = ROOT / "frontend"
 BACKEND = ROOT / "backend"
 
+# 优先使用 backend/.venv 的 Python 跑 PyInstaller，避免使用系统 Python 导致依赖缺失。
+if sys.platform == "win32":
+    VENV_PYTHON = BACKEND / ".venv" / "Scripts" / "python.exe"
+else:
+    VENV_PYTHON = BACKEND / ".venv" / "bin" / "python"
+
 # 国内镜像加速 Electron 二进制下载
 os.environ.setdefault("ELECTRON_MIRROR", "https://npmmirror.com/mirrors/electron/")
 os.environ.setdefault("ELECTRON_BUILDER_BINARIES_MIRROR", "https://npmmirror.com/mirrors/electron-builder-binaries/")
@@ -51,7 +57,7 @@ def main():
         print("=" * 60)
         print("Step 2: PyInstaller 打包后端")
         print("=" * 60)
-        run([sys.executable, "build_backend.py"], cwd=BACKEND)
+        run([str(VENV_PYTHON), "build_backend.py"], cwd=BACKEND)
     else:
         print("跳过后端打包（--skip-backend）")
 
