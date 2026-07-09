@@ -60,6 +60,51 @@ function formatNum(v, digits) {
   return Number(v).toFixed(digits);
 }
 
+type Port = 'S11' | 'S22';
+
+function filePorts(f: FileEntry, processType?: string): Port[] {
+  const lowerName = f.name.toLowerCase();
+  if (lowerName.endsWith('.s2p')) return ['S11', 'S22'];
+  if (lowerName.endsWith('.snp')) {
+    const pt = (processType || '').toUpperCase();
+    if (pt === 'S2P' || pt === 'BOTH') return ['S11', 'S22'];
+  }
+  return ['S11'];
+}
+
+function PortCheckbox({ port, checked, onChange }: { port: Port; checked: boolean; onChange: () => void }) {
+  const label = port === 'S11' ? 'Z11' : 'Z22';
+  return (
+    <label
+      style={{
+        position: 'relative',
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        minWidth: 40,
+        padding: '2px 6px',
+        fontSize: 10,
+        fontWeight: checked ? 700 : 500,
+        borderRadius: 4,
+        cursor: 'pointer',
+        userSelect: 'none',
+        background: '#ffffff',
+        color: '#111827',
+        border: '1px solid #111827',
+        boxShadow: checked ? 'inset 0 0 0 1px #111827' : 'none',
+      }}
+    >
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={onChange}
+        style={{ position: 'absolute', opacity: 0, width: 0, height: 0, pointerEvents: 'none' }}
+      />
+      {label}
+    </label>
+  );
+}
+
 const IMPEDANCE_INITIAL_STATE = {
   batchNo: '',
   folder: '',
@@ -102,6 +147,8 @@ export default function Impedance() {
   const [error, setError] = useState<string | null>(null);
   const [metricsMap, setMetricsMap] = useState<Map<string, any>>(new Map());
   const [loadingMetrics, setLoadingMetrics] = useState<boolean>(false);
+
+  const batch = useMemo(() => batches.find((b) => b.batch_no === batchNo), [batches, batchNo]);
 
   useEffect(() => {
     listBatches({ size: 200 })
@@ -163,23 +210,26 @@ export default function Impedance() {
     return filtered.slice(start, start + PAGE_SIZE);
   }, [filtered, page]);
 
-  const toggleFile = (relpath) => {
+  const togglePort = (relpath: string, port: Port) => {
+    const key = `${relpath}#${port}`;
     setSelected((prev) => {
       const next = new Set(prev);
-      if (next.has(relpath)) next.delete(relpath);
-      else next.add(relpath);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   };
 
   const togglePage = () => {
-    const pageRelpaths = pageFiles.map((f) => f.relpath);
-    const allChecked = pageRelpaths.every((r) => selected.has(r));
+    const pagePortKeys = pageFiles.flatMap((f) =>
+      filePorts(f, batch?.process_type).map((port) => `${f.relpath}#${port}`)
+    );
+    const allChecked = pagePortKeys.length > 0 && pagePortKeys.every((key) => selected.has(key));
     setSelected((prev) => {
       const next = new Set(prev);
-      for (const r of pageRelpaths) {
-        if (allChecked) next.delete(r);
-        else next.add(r);
+      for (const key of pagePortKeys) {
+        if (allChecked) next.delete(key);
+        else next.add(key);
       }
       return next;
     });
@@ -194,24 +244,30 @@ export default function Impedance() {
     setCurves([]);
     const toPlot = Array.from(selected as Set<string>).slice(0, MAX_PLOT);
     try {
-      const results: ({ relpath: string; name: string; freq: number[]; values: number[]; error?: null } | { relpath: string; name: string; error: string; freq?: undefined; values?: undefined })[] = await Promise.all(
-        toPlot.map(async (relpath) => {
+      const results: ({ key: string; relpath: string; name: string; freq: number[]; values: number[]; error?: null } | { key: string; relpath: string; name: string; error: string; freq?: undefined; values?: undefined })[] = await Promise.all(
+        toPlot.map(async (key) => {
+          const [relpath, port] = key.split('#') as [string, Port];
           try {
-            const data = await getFileCurve(batchNo, relpath, 'z_mag_db');
+            const data = await getFileCurve(batchNo, relpath, 'z_mag_db', port);
             const { x, y } = decimate(data.freq_ghz, data.values, MAX_POINTS_PER_CURVE);
+            const filename = data.relpath.split('/').pop() || relpath;
+            const suffix = port === 'S11' ? 'Z11' : 'Z22';
             return {
+              key,
               relpath,
-              name: data.relpath.split('/').pop() || relpath,
+              name: `${filename} (${suffix})`,
               freq: x,
               values: y,
               error: null as null,
             };
           } catch (e: any) {
-            return { relpath, name: relpath.split('/').pop() || relpath, error: e.message || String(e) };
+            const filename = relpath.split('/').pop() || relpath;
+            const suffix = port === 'S11' ? 'Z11' : 'Z22';
+            return { key, relpath, name: `${filename} (${suffix})`, error: e.message || String(e) };
           }
         })
       );
-      setCurves(results.filter((r): r is { relpath: string; name: string; freq: number[]; values: number[] } => !r.error && !!r.freq.length));
+      setCurves(results.filter((r): r is { key: string; relpath: string; name: string; freq: number[]; values: number[] } => !r.error && !!r.freq.length));
       const errCount = results.filter((r) => r.error).length;
       if (errCount) setError(`${errCount} 条曲线加载失败`);
     } catch (e: any) {
@@ -264,23 +320,32 @@ export default function Impedance() {
     return out;
   }, [curves, showMean]);
 
+  const selectedRelpaths = useMemo(() => {
+    const set = new Set<string>();
+    selected.forEach((key) => {
+      const [relpath] = key.split('#');
+      set.add(relpath);
+    });
+    return set;
+  }, [selected]);
+
   const selectedMetrics = useMemo(() => {
     const out = [];
-    selected.forEach((relpath) => {
+    selectedRelpaths.forEach((relpath) => {
       const m = metricsMap.get(relpath);
       if (m) out.push(m);
     });
     return out;
-  }, [selected, metricsMap]);
+  }, [selectedRelpaths, metricsMap]);
 
   const selectedUncomputedCount = useMemo(() => {
     let count = 0;
-    selected.forEach((relpath) => {
+    selectedRelpaths.forEach((relpath) => {
       const f = files.find((file) => file.relpath === relpath);
       if (f && !f.computed) count += 1;
     });
     return count;
-  }, [selected, files]);
+  }, [selectedRelpaths, files]);
 
   const metricStats = useMemo(() => {
     if (selectedMetrics.length === 0) return null;
@@ -294,6 +359,10 @@ export default function Impedance() {
       return { ...f, min, max, avg, count: nums.length };
     });
   }, [selectedMetrics]);
+
+  const pageAllChecked = pageFiles.length > 0 && pageFiles.every((f) =>
+    filePorts(f, batch?.process_type).every((port) => selected.has(`${f.relpath}#${port}`))
+  );
 
   return (
     <>
@@ -361,7 +430,7 @@ export default function Impedance() {
             <div style={{ display: 'flex', flexDirection: 'column', borderRight: '1px solid var(--border)', minHeight: 0 }}>
               <div style={{ padding: '8px 10px', borderBottom: '1px solid var(--border)', background: 'var(--bg-panel-2)', display: 'flex', alignItems: 'center', gap: 8 }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--fg-2)', cursor: 'pointer' }}>
-                  <input type="checkbox" checked={pageFiles.length > 0 && pageFiles.every((f) => selected.has(f.relpath))} onChange={togglePage} />
+                  <input type="checkbox" checked={pageAllChecked} onChange={togglePage} />
                   全选本页
                 </label>
                 <span className="mono dim" style={{ fontSize: 11, marginLeft: 'auto' }}>
@@ -374,9 +443,9 @@ export default function Impedance() {
                   <div className="dim" style={{ padding: 20, textAlign: 'center' }}>无文件</div>
                 )}
                 {pageFiles.map((f) => {
-                  const checked = selected.has(f.relpath);
+                  const ports = filePorts(f, batch?.process_type);
                   return (
-                    <label
+                    <div
                       key={f.relpath}
                       title={f.relpath}
                       style={{
@@ -385,17 +454,20 @@ export default function Impedance() {
                         gap: 8,
                         padding: '5px 10px',
                         fontSize: 11.5,
-                        cursor: 'pointer',
-                        background: checked ? 'var(--primary-soft)' : 'transparent',
-                        color: checked ? 'var(--primary)' : 'var(--fg-2)',
+                        background: 'transparent',
+                        color: 'var(--fg-2)',
                       }}
                     >
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() => toggleFile(f.relpath)}
-                        style={{ flexShrink: 0 }}
-                      />
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+                        {ports.map((port) => (
+                          <PortCheckbox
+                            key={port}
+                            port={port}
+                            checked={selected.has(`${f.relpath}#${port}`)}
+                            onChange={() => togglePort(f.relpath, port)}
+                          />
+                        ))}
+                      </div>
                       <span className="mono" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {f.name}
                       </span>
@@ -404,7 +476,7 @@ export default function Impedance() {
                       ) : (
                         <span className="badge" style={{ fontSize: 9, marginLeft: 'auto', flexShrink: 0, background: 'var(--bg-3)', color: 'var(--fg-3)' }}>未计算</span>
                       )}
-                    </label>
+                    </div>
                   );
                 })}
               </div>
@@ -457,10 +529,10 @@ export default function Impedance() {
               </div>
               <div style={{ flex: 1, overflow: 'auto', padding: '8px 10px' }}>
                 {loadingMetrics && <div className="dim" style={{ fontSize: 11, padding: 8 }}>加载指标…</div>}
-                {!loadingMetrics && selected.size === 0 && (
+                {!loadingMetrics && selectedRelpaths.size === 0 && (
                   <div className="dim" style={{ fontSize: 11, padding: 8 }}>选择文件以查看指标</div>
                 )}
-                {!loadingMetrics && selected.size > 0 && selectedMetrics.length === 0 && (
+                {!loadingMetrics && selectedRelpaths.size > 0 && selectedMetrics.length === 0 && (
                   <div className="dim" style={{ fontSize: 11, padding: 8 }}>选中文件均未计算指标</div>
                 )}
                 {!loadingMetrics && metricStats && metricStats.map((s) => (

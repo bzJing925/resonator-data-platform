@@ -390,7 +390,8 @@ export function LineChart({ x, y, xLabel, yLabel, name, color, markers = [], ser
     return {
       ...baseLayout,
       showlegend: !!showLegend,
-      legend: { orientation: 'h', y: 1.08, x: 0 },
+      legend: { orientation: 'h', y: 1.12, x: 0, xanchor: 'left', yanchor: 'bottom' },
+      margin: { ...baseLayout.margin, t: 44 },
       xaxis: { ...baseLayout.xaxis, title: xLabel || 'x', type: xIsCategory ? 'category' : undefined },
       yaxis: { ...baseLayout.yaxis, title: yLabel || 'y' },
       shapes: [...markerShapes, ...extraShapes],
