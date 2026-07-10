@@ -26,7 +26,10 @@ BACKEND = ROOT / "backend"
 
 # 国内镜像加速 Electron 二进制下载
 os.environ.setdefault("ELECTRON_MIRROR", "https://npmmirror.com/mirrors/electron/")
-os.environ.setdefault("ELECTRON_BUILDER_BINARIES_MIRROR", "https://npmmirror.com/mirrors/electron-builder-binaries/")
+os.environ.setdefault(
+    "ELECTRON_BUILDER_BINARIES_MIRROR",
+    "https://npmmirror.com/mirrors/electron-builder-binaries/",
+)
 
 
 def run(cmd, cwd=None, env=None):
@@ -36,8 +39,15 @@ def run(cmd, cwd=None, env=None):
 
 def main():
     parser = argparse.ArgumentParser(description="Build ALN desktop app")
-    parser.add_argument("--skip-backend", action="store_true", help="Skip PyInstaller backend build")
-    parser.add_argument("--target", choices=["win", "mac", "linux"], default=None, help="Target platform")
+    parser.add_argument(
+        "--skip-backend", action="store_true", help="Skip PyInstaller backend build"
+    )
+    parser.add_argument(
+        "--target",
+        choices=["win", "mac", "linux"],
+        default=None,
+        help="Target platform",
+    )
     args = parser.parse_args()
 
     # 1. 构建前端
