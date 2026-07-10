@@ -69,10 +69,10 @@ const SECTION_ORDER = ['categorical', 'process', 'geometric', 'numeric'];
 // continuous.
 const CATEGORICAL_SECTIONS = new Set(['categorical', 'process']);
 
-// Core axis field lists. Keep these intentionally short so the chart panel
-// stays usable; append here when a new field should become user-selectable.
+// Device structure parameters derived from the mapping (对照表).
+// These are the only fields users may select as the X axis in Explore.
 const X_AXIS_FIELD_NAMES = [
-  'eg', 'fl', 'ag', 'batch_no', 'wafer', 'pf', 'x', 'y', 'fs_ghz',
+  'eg', 'fl', 'ag', 'pf', 'area_um2', 'area_n',
 ];
 const Y_AXIS_FIELD_NAMES = [
   'fs_ghz', 'fp_ghz', 'qs', 'qp', 'k2eff_pct', 'zs_ohm', 'zp_ohm', 'dbqs', 'dbqp',
