@@ -4,20 +4,11 @@
 
 ### 开发模式
 
-需要 Node.js + Python 环境。
+需要 Node.js + Python 环境，并先安装好前端依赖（`cd frontend && npm install`）。
 
 ```bash
-# 1. 安装前端依赖
-cd frontend
-npm install
-
-# 2. 安装后端依赖（桌面版用 SQLite，无需 Docker）
-cd ../backend
-uv sync
-
-# 3. 启动桌面版（Electron 会自动拉起后端）
-cd ../frontend
-npm run electron:dev
+cd /.../aln-data-master
+./scripts/dev-desktop.sh
 ```
 
 ### 构建安装包
