@@ -1,6 +1,6 @@
 # 谐振器代理模型（Surrogate Model）设计规格
 
-日期：2026-07-20
+日期：2026-07-20（v2：同步 aln-data2 后修订 §5，提取流程复用 `nn_export` / `sparse_sampler` 构件）
 状态：已评审（头脑风暴阶段确认）
 
 ## 1. 背景与目标
@@ -20,6 +20,7 @@
 | 交付形态 | 先离线验证再定 UI 集成 |
 | 架构 | 方案 A：两阶段级联（Stage 1 代理模型 + Stage 2 稀疏重建） |
 | Stage 1 结构 | 基准锚定残差：eg=0/fl=0 单元为基准，网络只学残差 |
+| 训练数据提取 | 复用 aln-data2 的 `nn_export` / `sparse_sampler` 构件；新增确定性位置规则、清洗、基准表、划分（v2） |
 | 成功标准 | 全谱 RMSE ≤ 0.5 dB（test 网格单元） |
 
 ## 3. 数据现状（已核实）
@@ -50,21 +51,26 @@
                  → Stage 2（reconstructor）→ 1001 点 Z11(dB)
 ```
 
-新代码：`backend/app/ml/surrogate/`（sampling / baseline / dataset / model / infer，纯函数模块）+ 上述脚本。遵循现有 `backend/app/ml/sparse/` 模式；魔数进 `AlgorithmConfig`。
+新代码：`backend/app/ml/surrogate/`（baseline / dataset / model / infer，纯函数模块）+ 上述脚本；确定性位置规则作为新函数加入 `app/core/sparse_sampler.py`（提取与推理共用）。遵循现有 `backend/app/ml/sparse/` 模式；魔数进 `AlgorithmConfig`。
 
 ## 5. 训练数据提取
 
 ### 5.1 提取流程
 
-`extract_surrogate_dataset.py`（SQLAlchemy，sqlite/PG 通吃；DB URL 与 DATA_ROOT 参数化，默认桌面版路径）：
+`extract_surrogate_dataset.py`（离线脚本，直接调用服务层函数，不走 HTTP；DB URL 与 DATA_ROOT 参数化，默认桌面版路径 `~/.aln-data/`）：
 
-1. 查询 `devices ⋈ batches`：`batch_no='#2'`，`eg/fl/area_um2/s_param_path` 非空 → 38,400 条
-2. 每条器件：
-   - 输入：`(eg, fl, area_um2)`
-   - 读 `files/#2/<s_param_path>`（.s2p），按 `s_param_port` 取端口，复用 `app.ml.sparse.dataset.s2p_to_z_samples` 转 Z11(dB)，插值 1001 点
-   - 标签：DB 列取 7 个性能参数
-   - 稀疏采样：§5.3 确定性规则生成 K=256 个位置，取 z 值
-3. 落地：`dataset.npz`（float32，约 400MB）+ `meta.json`（归一化统计、基准表、划分清单）
+**复用 aln-data2 已有构件**（`app/services/nn_export.py` + `app/core/sparse_sampler.py`）：
+
+- 查询：`build_nn_export_stmt`（`devices ⋈ batches`，标量列齐全：eg/fl/ag、7 性能参数、s_param_path/port、batch_no），filters 指定 `batch_no='#2'` + `eg/fl/area_um2` 非空
+- 读谱：`read_z_mag_db(path, port, target_n_freq=1001)` —— 按 `s_param_port` 取 S11/S22 端口转 |Z| dB 并插值，S1P/S2P 通吃
+- 行迭代参考：`iter_nn_export_rows` 的流式模式
+
+**新增逻辑**（nn_export 未覆盖的）：
+
+1. §5.2 数据清洗（nn_export 不做离群过滤）
+2. §5.3 确定性稀疏位置规则（替代 nn_export 的内容依赖随机采样，见下）
+3. §5.4 基准表、§5.5 网格单元划分
+4. 落地为 `dataset.npz`（float32，约 400MB）+ `meta.json`（归一化统计、基准表、划分清单）—— 不用 nn-csv 宽表（38,400 × 2617 列 CSV 体积与解析开销大，npz 更适合训练）
 
 ### 5.2 数据清洗（新增）
 
@@ -85,6 +91,12 @@
 | 远带 | 其余频段 | 15% |
 
 各区内在频率轴格点上均匀取点；fs 贴近频段边缘时截断并把配额让给相邻区域。
+
+**与现有 `fixed_rule_sample` 的关系**（为什么不能直接复用）：
+
+- `fixed_rule_sample` 的区域划分 `partition_regions(z_db, freq)` **依赖真值频谱内容**（主模/杂模/平滑分区），而推理时 Stage 1 没有真值谱，位置规则必须只由 fs/fp 决定
+- 其主模区内用 `np.random.choice` **随机加权**采样，同一器件两次提取点不同；训练（真值谱随机采样）与推理（预测 fs/fp 确定性位置）分布不一致，会给 Stage 2 引入额外偏移
+- 因此新增 `deterministic_sample_positions(freq_axis, fs, fp, k)` 放进 `app/core/sparse_sampler.py`，提取管线与推理链路共用同一实现；`fixed_rule_sample` 保留给现有 nn-csv 导出与旧 reconstructor 流程
 
 ### 5.4 基准表
 
@@ -124,7 +136,7 @@
 - 现有 checkpoint：`checkpoints/sparse/308nm/`（target_k=300，结构兼容）
 - 三步走：
   1. **零样本诊断**：308nm checkpoint 直接在我们的真值稀疏点上评估，判断其训练频段是否匹配批次 #2
-  2. **Step A**：真值稀疏点微调（适配 K=256 与确定性位置分布）
+  2. **Step A**：真值稀疏点微调（适配 K=256 与确定性位置分布）—— 微调数据同样用 §5.3 的确定性位置规则生成（而非 nn_export 的随机采样），保证与推理输入分布一致
   3. **Step B**：输入换成 Stage 1 预测点继续微调（Stage 1 冻结），消除级联分布偏移
 - 若第 1 步分布差异太大：从头训练 Stage 2（复用 `train_sparse_reconstructor.py` 流程换数据集）
 
