@@ -677,6 +677,17 @@ textarea {
   position: relative;
   min-height: 0;
 }
+
+/* 避免 Plotly 的 hover label 遮挡曲线点击事件 */
+.js-plotly-plot .hovertext,
+.js-plotly-plot .hoverlayer {
+  pointer-events: none !important;
+}
+
+/* 增大 Plotly 点的点击响应范围，同时保持视觉大小 */
+.js-plotly-plot .scatter .point {
+  pointer-events: all;
+}
 .stat-strip {
   display: grid;
   grid-template-columns: repeat(6, 1fr);

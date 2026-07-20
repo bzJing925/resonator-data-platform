@@ -11,6 +11,10 @@ export const getBatch = (batchNo: string) =>
   api.get(`/batches/${encodeURIComponent(batchNo)}`).then((r: AxiosResponse<Batch>) => r.data);
 export const deleteBatch = (batchNo: string) =>
   api.delete(`/batches/${encodeURIComponent(batchNo)}`).then((r) => r.data);
+export const renameBatch = (batchNo: string, newBatchNo: string) =>
+  api
+    .post(`/batches/${encodeURIComponent(batchNo)}/rename`, { new_batch_no: newBatchNo })
+    .then((r) => r.data as { batch_no: string });
 export const listBatchDevices = (batchNo: string, params?: Record<string, unknown>) =>
   api
     .get(`/batches/${encodeURIComponent(batchNo)}/devices`, { params })
@@ -134,6 +138,8 @@ export const downloadDeviceS1p = (id: number | string) =>
   });
 
 export const exportCsv = (body: Record<string, unknown>) => api.post('/export/csv', body, { responseType: 'blob' });
+export const exportNnCsv = (body: Record<string, unknown>, timeoutMs: number = 0) =>
+  api.post('/export/nn-csv', body, { responseType: 'blob', timeout: timeoutMs });
 export const exportXlsx = (body: Record<string, unknown>) => api.post('/export/xlsx', body).then((r) => r.data);
 export const downloadExport = (id: number | string) => api.get(`/exports/${id}`, { responseType: 'blob' });
 

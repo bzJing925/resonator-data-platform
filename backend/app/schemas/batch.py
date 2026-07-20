@@ -16,6 +16,19 @@ class RecomputeRequest(BaseModel):
     )
 
 
+class BatchRenameRequest(BaseModel):
+    new_batch_no: str = Field(
+        ...,
+        min_length=1,
+        max_length=128,
+        description="新的批次号",
+    )
+
+
+class BatchRenameResponse(BaseModel):
+    batch_no: str = Field(..., description="重命名后的批次号")
+
+
 class ReprocessResponse(BaseModel):
     task_id: str
     batch_no: str

@@ -337,7 +337,7 @@ export function ViolinPlot({ rows, xKey, yKey, colorKey, xLabel, yLabel, colorIs
 /* ------------------------------------------------------------------
  *  LineChart — basic single/multi-series line.
  * ------------------------------------------------------------------ */
-export function LineChart({ x, y, xLabel, yLabel, name, color, markers = [], series, showLegend, xIsCategory, extraShapes = [] }: {
+export function LineChart({ x, y, xLabel, yLabel, name, color, markers = [], series, showLegend, xIsCategory, extraShapes = [], onSeriesClick, onLegendSelect }: {
   x?: number[];
   y?: number[];
   xLabel?: string;
@@ -345,10 +345,12 @@ export function LineChart({ x, y, xLabel, yLabel, name, color, markers = [], ser
   name?: string;
   color?: string;
   markers?: { x: number; label?: string; color?: string }[];
-  series?: { x?: number[]; y: number[]; name?: string; color?: string; width?: number; opacity?: number; mode?: string; dash?: string }[];
+  series?: { x?: number[]; y: number[]; name?: string; color?: string; width?: number; opacity?: number; visible?: boolean | 'legendonly'; mode?: string; dash?: string; customdata?: string[] }[];
   showLegend?: boolean;
   xIsCategory?: boolean;
   extraShapes?: unknown[];
+  onSeriesClick?: (key: string) => void;
+  onLegendSelect?: (key: string) => void;
 }) {
   const traces = useMemo(() => {
     if (series && series.length) {
@@ -364,8 +366,16 @@ export function LineChart({ x, y, xLabel, yLabel, name, color, markers = [], ser
           width: s.width != null ? s.width : 1.4,
           dash: s.dash || 'solid',
         },
-        marker: { color: s.color || PALETTE[i % PALETTE.length], size: 5 },
+        marker: {
+          color: s.color || PALETTE[i % PALETTE.length],
+          size: onSeriesClick || onLegendSelect ? 8 : 5,
+          opacity: 0.85,
+        },
         opacity: s.opacity != null ? s.opacity : 1,
+        visible: s.visible != null ? s.visible : true,
+        customdata: s.customdata,
+        // 把曲线 key 放到 trace meta，图例点击时反查
+        meta: s.customdata && s.customdata.length ? { key: s.customdata[0] } : undefined,
       }));
     }
     return [{
@@ -376,7 +386,7 @@ export function LineChart({ x, y, xLabel, yLabel, name, color, markers = [], ser
       name: name || 'trace',
       line: { color: color || PALETTE[0], width: 1.4 },
     }];
-  }, [series, x, y, name, color]);
+  }, [series, x, y, name, color, onSeriesClick, onLegendSelect]);
 
   const layout = useMemo(() => {
     const markerShapes = markers.map((m) => ({
@@ -392,12 +402,38 @@ export function LineChart({ x, y, xLabel, yLabel, name, color, markers = [], ser
       showlegend: !!showLegend,
       legend: { orientation: 'h', y: 1.12, x: 0, xanchor: 'left', yanchor: 'bottom' },
       margin: { ...baseLayout.margin, t: 44 },
+      hoverdistance: 30,
       xaxis: { ...baseLayout.xaxis, title: xLabel || 'x', type: xIsCategory ? 'category' : undefined },
       yaxis: { ...baseLayout.yaxis, title: yLabel || 'y' },
       shapes: [...markerShapes, ...extraShapes],
       annotations,
     };
   }, [xLabel, yLabel, showLegend, xIsCategory, markers, extraShapes]);
+
+  const handleClick = useCallback((e) => {
+    if (!onSeriesClick || !e.points || !e.points[0]) return;
+    const key = e.points[0].customdata;
+    if (typeof key === 'string') onSeriesClick(key);
+  }, [onSeriesClick]);
+
+  const handleLegendClick = useCallback((e) => {
+    if (!onLegendSelect) return;
+    // 优先从 customdata 第一格取曲线 key；meta 作为兜底
+    const key = e.data[e.curveNumber]?.customdata?.[0] ?? e.data[e.curveNumber]?.meta?.key;
+    if (typeof key === 'string') onLegendSelect(key);
+    // 返回 false 阻止 Plotly 默认的“点击图例隐藏曲线”行为
+    return false;
+  }, [onLegendSelect]);
+
+  const handleLegendDoubleClick = useCallback((e: any) => {
+    // 双击图例也当作选中/高亮，和单击保持一致
+    if (onLegendSelect) {
+      const key = e.data[e.curveNumber]?.customdata?.[0] ?? e.data[e.curveNumber]?.meta?.key;
+      if (typeof key === 'string') onLegendSelect(key);
+    }
+    // 禁用默认的“双击图例只保留一条”行为
+    return false;
+  }, [onLegendSelect]);
 
   return (
     <PlotAny
@@ -407,6 +443,9 @@ export function LineChart({ x, y, xLabel, yLabel, name, color, markers = [], ser
       config={baseConfig}
       style={{ width: '100%', height: '100%' }}
       useResizeHandler
+      onClick={handleClick}
+      onLegendClick={handleLegendClick}
+      onLegendDoubleClick={handleLegendDoubleClick}
     />
   );
 }
