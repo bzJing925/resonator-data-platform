@@ -12,6 +12,7 @@ import numpy as np
 import skrf as rf
 from numpy.typing import NDArray
 
+from app.config import AlgorithmConfig
 from app.ml.sparse.region_partition import partition_regions
 
 __all__ = [
@@ -258,20 +259,20 @@ def deterministic_sample_positions(
     freq_ghz: NDArray[np.float64],
     fs: float,
     fp: float,
-    k: int = 256,
-    dense_ratio: float = 0.60,
-    transition_ratio: float = 0.25,
-    dense_half_bw: float = 0.5,
-    transition_half_bw: float = 1.5,
+    k: int = AlgorithmConfig.surr_k,
+    dense_ratio: float = AlgorithmConfig.surr_dense_ratio,
+    transition_ratio: float = AlgorithmConfig.surr_transition_ratio,
+    dense_half_bw: float = AlgorithmConfig.surr_dense_half_bw,
+    transition_half_bw: float = AlgorithmConfig.surr_transition_half_bw,
 ) -> NDArray[np.int64]:
     """确定性稀疏采样位置（规格 §5.3）。
 
     只依赖 fs/fp 与频率轴，不看频谱内容，保证训练/推理一致。
-    返回 1001 网格上的升序索引数组。
+    返回 freq_ghz 网格上的升序索引。
 
     区域划分（Δ = fp - fs）：
         密集区  [fs-0.5Δ, fp+0.5Δ]   配额 k×dense_ratio
-        过渡带  两侧各延伸至 ±1.5Δ    配额 k×transition_ratio（左右均分，奇数给右）
+        过渡带  两侧各延伸至 ±1.5Δ    配额 k×transition_ratio（左右两带拼接后整体均匀取样）
         远带    其余                  剩余配额
     区域格点不足配额时，缺口按 密集→过渡→远带 顺序让渡。
     fs/fp 非法（fs<=0 或 fp<=fs）退化为全轴均匀取点。
