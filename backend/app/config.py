@@ -181,19 +181,19 @@ class AlgorithmConfig:
         )
     )
 
-    # --- 代理模型（surrogate）---
-    SURR_N_FREQ: int = 1001  # 统一频点数
-    SURR_K: int = 256  # 稀疏采样点数
-    SURR_DENSE_RATIO: float = 0.60  # 谐振密集区配额
-    SURR_TRANSITION_RATIO: float = 0.25  # 过渡带配额（远带 = 1 - 前两者）
-    SURR_DENSE_HALF_BW: float = 0.5  # 密集区半宽 = 该值 × (fp - fs)
-    SURR_TRANSITION_HALF_BW: float = 1.5  # 过渡带外沿 = 该值 × (fp - fs)
-    SURR_CLEAN_FS_TOL_MHZ: float = 100.0  # 单元内 fs/fp 离群阈值
-    SURR_CLEAN_TREND_SIGMA: float = 3.0  # 跨单元趋势面离群阈值（σ 倍数）
-    SURR_VAL_CELLS: int = 48  # val 网格单元数
-    SURR_TEST_CELLS: int = 48  # test 网格单元数
-    SURR_SPLIT_SEED: int = 42  # 划分随机种子
-    SURR_PARAM_COLS: tuple = (  # 7 个性能参数列（顺序固定，全流程一致）
+    # ── 代理模型（surrogate）──────────────────────────────────
+    surr_n_freq: int = 1001  # 统一频点数
+    surr_k: int = 256  # 稀疏采样点数
+    surr_dense_ratio: float = 0.60  # 谐振密集区配额
+    surr_transition_ratio: float = 0.25  # 过渡带配额（远带 = 1 - 前两者）
+    surr_dense_half_bw: float = 0.5  # 密集区半宽 = 该值 × (fp - fs)
+    surr_transition_half_bw: float = 1.5  # 过渡带外沿 = 该值 × (fp - fs)
+    surr_clean_fs_tol_mhz: float = 100.0  # 单元内 fs/fp 离群阈值（MHz；比较时 ÷1000 换算为 GHz）
+    surr_clean_trend_sigma: float = 3.0  # 跨单元趋势面离群阈值（σ 倍数）
+    surr_val_cells: int = 48  # val 网格单元数
+    surr_test_cells: int = 48  # test 网格单元数
+    surr_split_seed: int = 42  # 划分随机种子
+    surr_param_cols: tuple[str, ...] = (  # 7 个性能参数列（顺序固定，全流程一致）
         "fs_ghz", "fp_ghz", "k2eff_pct", "qs", "qp", "qs_bodeq", "qp_bodeq",
     )
 
