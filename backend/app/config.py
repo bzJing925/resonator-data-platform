@@ -196,6 +196,10 @@ class AlgorithmConfig:
     surr_param_cols: tuple[str, ...] = (  # 7 个性能参数列（顺序固定，全流程一致）
         "fs_ghz", "fp_ghz", "k2eff_pct", "qs", "qp", "qs_bodeq", "qp_bodeq",
     )
+    surr_per_cell_max: int = 5  # 每结构组合抽样上限（|fs-中位数| 升序取前 N）
+    surr_default_ag: float = 1.0  # AG 占位默认值（μm；数据全空时的常量输入）
+    surr_val_groups: int = 29  # val 物理器件组数
+    surr_test_groups: int = 29  # test 物理器件组数
 
 
 @lru_cache
