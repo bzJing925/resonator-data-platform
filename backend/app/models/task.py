@@ -49,7 +49,7 @@ class UploadTask(Base):
             name="ck_uptask_stage",
         ),
         CheckConstraint(
-            "kind IN ('upload','reextract','redeembed','recompute')",
+            "kind IN ('upload','reextract','redeembed','recompute','remap')",
             name="ck_uptask_kind",
         ),
         CheckConstraint(

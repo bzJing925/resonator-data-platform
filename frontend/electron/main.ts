@@ -70,6 +70,38 @@ function notifyBackendState(state: 'starting' | 'ready' | 'error') {
   }
 }
 
+/**
+ * 清理残留的 aln-backend 进程（上次崩溃/强退遗留）。
+ * 仅打包模式生效：开发模式的后端是 `python -m uvicorn`，不能按进程名误杀。
+ * 命令退出码非 0（如无匹配进程）属正常，不视为错误。
+ */
+function killStaleBackendProcesses(): Promise<void> {
+  if (!isPackaged) return Promise.resolve();
+
+  const command = process.platform === 'win32' ? 'taskkill' : 'pkill';
+  const args =
+    process.platform === 'win32' ? ['/f', '/im', 'aln-backend.exe'] : ['-9', 'aln-backend'];
+
+  return new Promise((resolve) => {
+    let child: ChildProcess;
+    try {
+      child = spawn(command, args, { windowsHide: true });
+    } catch (e) {
+      console.warn('[main] 清理残留后端进程失败（忽略）:', e);
+      resolve();
+      return;
+    }
+    child.on('error', (err) => {
+      console.warn('[main] 清理残留后端进程失败（忽略）:', err.message);
+      resolve();
+    });
+    child.on('exit', (code) => {
+      if (code === 0) console.log('[main] 已清理残留后端进程');
+      resolve();
+    });
+  });
+}
+
 function waitForBackend(url: string, maxAttempts = 300, intervalMs = 200): Promise<void> {
   return new Promise((resolve, reject) => {
     let attempts = 0;
@@ -94,6 +126,10 @@ function waitForBackend(url: string, maxAttempts = 300, intervalMs = 200): Promi
 }
 
 async function startBackend(): Promise<void> {
+  // 上次崩溃/强退可能留下残留 aln-backend 进程，占着 SQLite 文件锁，
+  // 不清理会导致新后端启动即 "database is locked"、/api/health 连接被拒绝。
+  await killStaleBackendProcesses();
+
   const port = await findFreePort();
   const host = '127.0.0.1';
   backendUrl = `http://${host}:${port}`;

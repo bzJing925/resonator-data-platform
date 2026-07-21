@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Generator
 from typing import Any
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import get_settings
@@ -61,11 +61,28 @@ def _patch_psycopg_server_version() -> None:
 
 _patch_psycopg_server_version()
 
+
+def _set_sqlite_pragmas(dbapi_conn, _connection_record) -> None:
+    """桌面版 SQLite 连接钩子：WAL + synchronous=NORMAL。
+
+    桌面模式下 API 与本地任务线程并发读写同一 SQLite 文件，默认 rollback
+    journal 在写事务期间会锁全库，极易抛出 ``database is locked`` 把后端打挂。
+    WAL 允许读写并发，NORMAL 在 WAL 下兼顾安全与性能。
+    """
+    cursor = dbapi_conn.cursor()
+    try:
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+    finally:
+        cursor.close()
+
+
 _settings = get_settings()
 
 _engine_kwargs: dict[str, Any] = {"pool_pre_ping": True, "future": True}
 if _settings.resolved_database_url.startswith("sqlite"):
-    _engine_kwargs["connect_args"] = {"check_same_thread": False}
+    # timeout=30s：写锁等待上限从默认 5s 提高，配合 WAL 进一步降低锁冲突报错概率。
+    _engine_kwargs["connect_args"] = {"check_same_thread": False, "timeout": 30.0}
 else:
     # 当 PostgreSQL server_encoding 为 SQL_ASCII 时，psycopg 可能把 TEXT 列以 bytes
     # 返回。通过连接参数强制 client_encoding=utf8，确保字符串列正常解码。
@@ -78,6 +95,8 @@ else:
     _engine_kwargs["connect_args"] = {"options": "-c client_encoding=utf8"}
 
 engine = create_engine(_settings.resolved_database_url, **_engine_kwargs)
+if _settings.resolved_database_url.startswith("sqlite"):
+    event.listen(engine, "connect", _set_sqlite_pragmas)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 
 
