@@ -92,7 +92,7 @@ export default function Process() {
           {steps.map((s) => (
             <button
               key={s.key}
-              className={`btn ghost sm${active === s.key ? ' primary' : ''}`}
+              className={active === s.key ? 'btn sm primary' : 'btn sm ghost'}
               onClick={() => setActive(s.key)}
             >
               {s.label} ({s.row_count})
