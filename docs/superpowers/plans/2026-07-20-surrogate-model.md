@@ -951,7 +951,7 @@ from pathlib import Path
 import numpy as np
 from numpy.typing import NDArray
 
-from app.config import AlgorithmConfig as AC
+from app.config import AlgorithmConfig
 from app.core.sparse_sampler import deterministic_sample_positions, read_z_mag_db
 
 def build_device_record(
@@ -1321,7 +1321,7 @@ from pathlib import Path
 import numpy as np
 from sqlalchemy import create_engine, select
 
-from app.config import AlgorithmConfig as AC
+from app.config import AlgorithmConfig
 from app.core.sparse_sampler import read_z_mag_db
 from app.ml.surrogate.baseline import BaselineTable
 from app.ml.surrogate.extract import (
@@ -1338,7 +1338,7 @@ from app.models import Batch, Device, MappingEntry
 
 log = logging.getLogger("extract_surrogate")
 
-_PARAM_COLS = list(AC.surr_param_cols)
+_PARAM_COLS = list(AlgorithmConfig.surr_param_cols)
 
 
 def _fetch_rows(db_url: str, batch_no: str) -> list[dict]:
@@ -1407,7 +1407,7 @@ def main() -> None:
     # 多进程构建记录（build_device_record 为顶层函数，可 pickle）
     records: list[dict] = []
     with ProcessPoolExecutor(max_workers=args.workers) as exe:
-        futs = [exe.submit(build_device_record, row, files_dir, freq_axis, AC.surr_k)
+        futs = [exe.submit(build_device_record, row, files_dir, freq_axis, AlgorithmConfig.surr_k)
                 for row in rows]
         for i, fut in enumerate(as_completed(futs), 1):
             rec = fut.result()
@@ -1436,7 +1436,7 @@ def main() -> None:
     groups = sorted({_group_tuple(r) for r in kept})
     splits = split_groups(groups)
     stats = compute_norm_stats(kept, splits)
-    assemble_npz(selected, groups, splits, stats, dropped, args.out, freq_axis, AC.surr_k)
+    assemble_npz(selected, groups, splits, stats, dropped, args.out, freq_axis, AlgorithmConfig.surr_k)
     n_train = sum(1 for g in groups if splits[g] == "train")
     log.info("完成: %d 物理组（train %d / val %d / test %d）→ %s",
              len(groups), n_train, AlgorithmConfig.surr_val_groups, AlgorithmConfig.surr_test_groups, args.out)
@@ -2073,7 +2073,7 @@ import joblib
 import numpy as np
 from sklearn.ensemble import ExtraTreesRegressor
 
-from app.config import AlgorithmConfig as AC
+from app.config import AlgorithmConfig
 
 _PARAM_COLS = list(AlgorithmConfig.surr_param_cols)
 
@@ -2447,7 +2447,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from app.config import AlgorithmConfig as AC
+from app.config import AlgorithmConfig
 from app.core.sparse_sampler import baseline_interpolate, deterministic_sample_positions
 from app.ml.sparse.reconstructor import SparseReconstructor
 from app.ml.surrogate.baseline import BaselineTable
@@ -2687,7 +2687,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from app.config import AlgorithmConfig as AC
+from app.config import AlgorithmConfig
 from app.core.sparse_sampler import deterministic_sample_positions
 from app.ml.surrogate.baseline import BaselineTable
 from app.ml.surrogate.infer import SurrogatePredictor
