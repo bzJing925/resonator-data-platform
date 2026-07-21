@@ -187,3 +187,22 @@ export interface StatsResponse {
   tasks_running?: number;
   tasks_pending?: number;
 }
+
+export interface ProcessFieldMeta {
+  name: string;
+  label: string;
+  unit?: string | null;
+  kind: 'numeric' | 'text';
+}
+
+export interface ProcessStep {
+  key: string;
+  label: string;
+  row_count: number;
+}
+
+export interface ProcessStepData {
+  fields: ProcessFieldMeta[];
+  rows: Record<string, string | number | null>[];
+}
+

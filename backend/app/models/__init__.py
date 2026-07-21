@@ -8,6 +8,7 @@ from app.models.batch import Batch
 from app.models.device import Device
 from app.models.file_node import FileNode
 from app.models.mapping import Mapping, MappingEntry
+from app.models.process import ProcessAlnDepRun, ProcessIcpEtchRun, ProcessMoDepRun
 from app.models.task import UploadTask
 
 __all__ = [
@@ -18,5 +19,8 @@ __all__ = [
     "FileNode",
     "Mapping",
     "MappingEntry",
+    "ProcessAlnDepRun",
+    "ProcessIcpEtchRun",
+    "ProcessMoDepRun",
     "UploadTask",
 ]

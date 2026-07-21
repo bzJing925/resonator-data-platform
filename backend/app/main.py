@@ -27,7 +27,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import batches, devices, export, files, mappings, query, system, tasks, upload
+from app.api import batches, devices, export, files, mappings, process, query, system, tasks, upload
 from app.config import get_settings
 
 settings = get_settings()
@@ -135,6 +135,7 @@ app.include_router(query.router, prefix="/api")
 app.include_router(devices.router, prefix="/api")
 app.include_router(files.router, prefix="/api")
 app.include_router(export.router, prefix="/api")
+app.include_router(process.router, prefix="/api")
 
 # 静态文件服务 + SPA fallback
 if STATIC_DIR:
