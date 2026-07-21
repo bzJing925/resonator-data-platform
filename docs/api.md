@@ -37,6 +37,8 @@
 | 导出 | GET | `/api/exports/{id}` | 下载导出文件 |
 | 系统 | GET | `/api/health` | 健康检查 |
 | 系统 | GET | `/api/stats` | 系统总览（批次/器件/磁盘） |
+| 工艺 | GET | `/api/process/steps` | 工序列表（key/中文名/行数） |
+| 工艺 | GET | `/api/process/{step}` | 某工序全部行（字段元数据 + 数据） |
 
 ---
 
@@ -400,7 +402,41 @@ full_freq_0, full_z_0, ..., full_freq_N-1, full_z_N-1
 
 ---
 
-## 9. 系统
+## 9. 工艺参数
+
+独立数据域（与 devices/batches 无关联），只读。数据由 `backend/scripts/import_process_excel.py` 一次性导入，前端 `/process` 页面全量取数后客户端筛选/排序/导出。
+
+### GET `/api/process/steps`
+
+```json
+[
+  {"key": "icp_etch", "label": "ICP 刻蚀", "row_count": 42},
+  {"key": "mo_dep", "label": "Mo 生长", "row_count": 71},
+  {"key": "aln_dep", "label": "AlN 生长", "row_count": 156}
+]
+```
+
+### GET `/api/process/{step}`
+
+`step ∈ icp_etch | mo_dep | aln_dep`。返回字段元数据（中文标签/单位/类型）与全部行（按 id 升序，无分页——单表最多几百行）：
+
+```json
+{
+  "fields": [
+    {"name": "run_no", "label": "编号", "unit": null, "kind": "text"},
+    {"name": "ar_flow_sccm", "label": "Ar 流量", "unit": "sccm", "kind": "numeric"}
+  ],
+  "rows": [
+    {"run_no": "F0426B16", "ar_flow_sccm": 10.0}
+  ]
+}
+```
+
+- 未知 step → `404 {"detail": "未知工序: xxx"}`
+
+---
+
+## 10. 系统
 
 ### GET `/api/health`
 
@@ -424,7 +460,7 @@ full_freq_0, full_z_0, ..., full_freq_N-1, full_z_N-1
 
 ---
 
-## 10. 错误码约定
+## 11. 错误码约定
 
 | 状态码 | 场景 |
 |---|---|
@@ -443,7 +479,7 @@ full_freq_0, full_z_0, ..., full_freq_N-1, full_z_N-1
 
 ---
 
-## 11. 待确认
+## 12. 待确认
 
 1. 大文件上传：直接走 `multipart/form-data`（依赖 nginx `client_max_body_size`），还是引入 tus 协议？取决于客户网络情况。
 2. 是否支持上传**未压缩的文件夹**？需要前端先打成 zip。建议：**仅接受 zip**，前端用 JSZip 在浏览器侧打包。

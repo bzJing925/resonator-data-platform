@@ -8,6 +8,13 @@
 
 ## 0. 变更记录
 
+### v0.3 — 2026-07-20
+
+- 新增工艺参数数据域：`process_icp_etch_runs` / `process_mo_dep_runs` / `process_aln_dep_runs` 三表。
+- 独立数据域：**不与 devices/batches 关联**（工艺表晶圆号与测试批次号无程序可判定的对应关系）。
+- 数据来源：`副本SICM_AlN_DT.xlsx`，由 `backend/scripts/import_process_excel.py` 一次性导入。
+- 详见 `docs/superpowers/specs/2026-07-20-process-params-design.md`。
+
 ### v0.2 — 2026-05-09
 
 - 用户决策：mBVD 等效电路参数（C0/Cm/Lm/Rm/R0/Rs 共 6 列）全部废弃，不再入库。
@@ -29,6 +36,9 @@
 | `mapping_entries` | 对照表内容（每行一个代号） | 几千 |
 | `devices` | 谐振器器件参数行（核心表） | 50 万 → 数百万 |
 | `upload_tasks` | 上传/处理任务进度（Celery） | 与批次同量级 |
+| `process_icp_etch_runs` | ICP 刻蚀工艺记录（独立数据域） | 几十 |
+| `process_mo_dep_runs` | Mo 生长工艺记录（独立数据域） | 几十 |
+| `process_aln_dep_runs` | AlN/AlScN 生长工艺记录（独立数据域） | 一两百 |
 
 ### 1.2 ER 图（mermaid）
 
@@ -481,6 +491,49 @@ class UploadTask(Base):
 ```
 
 > 注意：`batches.task_id` 与 `upload_tasks.id` 互相引用，迁移时先建 `upload_tasks`，再建 `batches`，外键 `ON DELETE SET NULL` 避免循环约束。
+
+---
+
+### 2.6 工艺参数表（`process_*_runs`，独立数据域）
+
+来源：客户工艺表格 `副本SICM_AlN_DT.xlsx`（4 个 sheet），`backend/scripts/import_process_excel.py` 一次性导入。**不与 devices/batches 关联**，仅用于独立浏览/筛选/导出。迁移：`2026_07_20_120000_add_process_tables.py`。
+
+共同约定：主键 `id`（bigint identity），`created_at` / `updated_at`（timestamptz，TimestampMixin），数值列全部 `float` 可空，脏单元格（`??`、`na`、`#VALUE!` 等）导入时置 NULL；百分比格式单元格 ×100 存 `_pct` 列；合并单元格的组级统计（如 WtW 均匀性）只保留在锚点行。
+
+**`process_icp_etch_runs`**（SPM2 ICP Etch sheet，3 个表头块合并）：
+
+| 列 | 类型 | 说明 |
+|---|---|---|
+| `block_index` | smallint NOT NULL | 表头块序号 1/2/3 |
+| `run_no` | text NOT NULL | 晶圆号（如 F0425LW1） |
+| `etch_time_sec` | float | 刻蚀时间 |
+| `etch_rate_nm_min` | float | 刻蚀速率 |
+| `thk_a` | float | 厚度（**埃**，注意非 nm） |
+| `wiw_1sig_pct` / `wtw_1sig_pct` | float | 片内/片间均匀性（%） |
+| `comments` | text | 备注 |
+
+**`process_mo_dep_runs`**（SPM3 Mo sheet）：
+
+| 列 | 说明 |
+|---|---|
+| `run_no` / `group_label` | 晶圆号 / 实验组标签（DOE5、TEST6 等，可空） |
+| `ar_flow_sccm`、`dc_power_kw`、`dep_time_sec`、`dep_rate_nm_min` | 工艺条件 |
+| `thk_nm`、`wiw_1sig_pct`、`wtw_1sig_pct` | 厚度与均匀性 |
+| `stress_avg_mpa`、`stress_wiw_range_mpa`、`stress_wtw_range_mpa` | 应力 |
+| `rs_ohm_sq`、`resistivity_uohm_cm`、`rs_uni_pct` | 电学 |
+| `roughness_ra_nm`、`xrd_rc_fwhm_deg`、`comments` | 粗糙度 / XRD / 备注 |
+
+**`process_aln_dep_runs`**（SPM4 AlScN(30AT) + AlSc 两 sheet 合并）：
+
+| 列 | 说明 |
+|---|---|
+| `source_sheet` | `'SPM4 AlScN(30AT)'` 或 `'AlSc'`（区分两种材料） |
+| `recipe_id` | Recipe ID（仅 AlSc sheet 有） |
+| `run_no` / `group_label` | 晶圆号或实验名 / 实验组（仅 SPM4 有） |
+| `n2_flow_sccm`、`ar_flow_sccm`、`dc_power_kw`、`dep_time_sec`、`dep_rate_nm_min` | 工艺条件 |
+| `thk_nm`、`wiw_1sig_pct`、`wtw_1sig_pct` | 厚度与均匀性 |
+| `stress_avg_mpa`、`stress_wiw_range_mpa`、`stress_wtw_range_mpa` | 应力 |
+| `refractive_index`、`roughness_ra_nm`、`aog_per_um2`、`xrd_rc_fwhm_deg`、`comments` | 光学 / 粗糙度 / AOG / XRD / 备注 |
 
 ---
 
