@@ -10,7 +10,7 @@
 
 **约定：**
 - 所有 Python 命令在 `backend/` 下以 `uv run` 执行；pytest 路径相对 `backend/`。
-- 核心算法常数全部进 `backend/app/config.py` 的 `AlgorithmConfig`（任务 1 定义，后文引用如 `SURR_K`）。
+- 核心算法常数全部进 `backend/app/config.py` 的 `AlgorithmConfig`（任务 1 定义，后文引用如 `surr_K`）。
 - torch 只出现在 `dataset.py` / `model.py` / `infer.py` 与训练脚本；`extract.py` / `baseline.py` / `sparse_sampler.py` 保持 torch-free。
 - 提交信息遵循仓库中文 conventional commits 风格。
 
@@ -106,25 +106,25 @@ git commit -m "chore: backend 增加 scikit-learn（代理模型 B3 基线）"
 
 ```python
     # --- 代理模型（surrogate）---
-    SURR_N_FREQ: int = 1001  # 统一频点数
-    SURR_K: int = 256  # 稀疏采样点数
-    SURR_DENSE_RATIO: float = 0.60  # 谐振密集区配额
-    SURR_TRANSITION_RATIO: float = 0.25  # 过渡带配额（远带 = 1 - 前两者）
-    SURR_DENSE_HALF_BW: float = 0.5  # 密集区半宽 = 该值 × (fp - fs)
-    SURR_TRANSITION_HALF_BW: float = 1.5  # 过渡带外沿 = 该值 × (fp - fs)
-    SURR_CLEAN_FS_TOL_MHZ: float = 100.0  # 单元内 fs/fp 离群阈值
-    SURR_CLEAN_TREND_SIGMA: float = 3.0  # 跨单元趋势面离群阈值（σ 倍数）
-    SURR_VAL_CELLS: int = 48  # val 网格单元数
-    SURR_TEST_CELLS: int = 48  # test 网格单元数
-    SURR_SPLIT_SEED: int = 42  # 划分随机种子
-    SURR_PARAM_COLS: tuple = (  # 7 个性能参数列（顺序固定，全流程一致）
+    surr_N_FREQ: int = 1001  # 统一频点数
+    surr_K: int = 256  # 稀疏采样点数
+    surr_DENSE_RATIO: float = 0.60  # 谐振密集区配额
+    surr_TRANSITION_RATIO: float = 0.25  # 过渡带配额（远带 = 1 - 前两者）
+    surr_DENSE_HALF_BW: float = 0.5  # 密集区半宽 = 该值 × (fp - fs)
+    surr_TRANSITION_HALF_BW: float = 1.5  # 过渡带外沿 = 该值 × (fp - fs)
+    surr_CLEAN_FS_TOL_MHZ: float = 100.0  # 单元内 fs/fp 离群阈值
+    surr_CLEAN_TREND_SIGMA: float = 3.0  # 跨单元趋势面离群阈值（σ 倍数）
+    surr_VAL_CELLS: int = 48  # val 网格单元数
+    surr_TEST_CELLS: int = 48  # test 网格单元数
+    surr_SPLIT_SEED: int = 42  # 划分随机种子
+    surr_PARAM_COLS: tuple = (  # 7 个性能参数列（顺序固定，全流程一致）
         "fs_ghz", "fp_ghz", "k2eff_pct", "qs", "qp", "qs_bodeq", "qp_bodeq",
     )
 ```
 
 - [ ] **步骤 2：验证可导入**
 
-运行：`uv run python -c "from app.config import AlgorithmConfig as A; print(A.SURR_K, A.SURR_PARAM_COLS)"`
+运行：`uv run python -c "from app.config import AlgorithmConfig as A; print(A.surr_K, A.surr_PARAM_COLS)"`
 预期：`256 ('fs_ghz', 'fp_ghz', 'k2eff_pct', 'qs', 'qp', 'qs_bodeq', 'qp_bodeq')`
 
 - [ ] **步骤 3：Commit**
@@ -670,7 +670,7 @@ def build_device_record(
     device_row: dict,
     files_dir: str | Path,
     freq_axis: NDArray[np.float64],
-    k: int = ACFG.SURR_K,
+    k: int = ACFG.surr_K,
 ) -> dict | None:
     """单器件 → 记录 dict；文件缺失/读取失败返回 None。
 
@@ -703,10 +703,10 @@ def build_device_record(
     fp = float(device_row.get("fp_ghz") or 0.0)
     pos = deterministic_sample_positions(
         freq_axis, fs, fp, k=k,
-        dense_ratio=ACFG.SURR_DENSE_RATIO, transition_ratio=ACFG.SURR_TRANSITION_RATIO,
-        dense_half_bw=ACFG.SURR_DENSE_HALF_BW, transition_half_bw=ACFG.SURR_TRANSITION_HALF_BW,
+        dense_ratio=ACFG.surr_DENSE_RATIO, transition_ratio=ACFG.surr_TRANSITION_RATIO,
+        dense_half_bw=ACFG.surr_DENSE_HALF_BW, transition_half_bw=ACFG.surr_TRANSITION_HALF_BW,
     )
-    params = np.array([float(device_row.get(c) or 0.0) for c in ACFG.SURR_PARAM_COLS])
+    params = np.array([float(device_row.get(c) or 0.0) for c in ACFG.surr_PARAM_COLS])
     eg = float(device_row.get("eg") or 0.0)
     fl = float(device_row.get("fl") or 0.0)
     area = int(device_row.get("area_um2") or 0)
@@ -725,8 +725,8 @@ def build_device_record(
 
 def clean_records(
     records: list[dict],
-    fs_tol_mhz: float = ACFG.SURR_CLEAN_FS_TOL_MHZ,
-    trend_sigma: float = ACFG.SURR_CLEAN_TREND_SIGMA,
+    fs_tol_mhz: float = ACFG.surr_CLEAN_FS_TOL_MHZ,
+    trend_sigma: float = ACFG.surr_CLEAN_TREND_SIGMA,
 ) -> tuple[list[dict], list[dict]]:
     """两级清洗（规格 §5.2）。返回 (kept, dropped)，dropped 元素含 reason 字段。"""
     dropped: list[dict] = []
@@ -783,9 +783,9 @@ def clean_records(
 
 def split_cells(
     cells: list[tuple[float, float, int]],
-    val_n: int = ACFG.SURR_VAL_CELLS,
-    test_n: int = ACFG.SURR_TEST_CELLS,
-    seed: int = ACFG.SURR_SPLIT_SEED,
+    val_n: int = ACFG.surr_VAL_CELLS,
+    test_n: int = ACFG.surr_TEST_CELLS,
+    seed: int = ACFG.surr_SPLIT_SEED,
 ) -> dict[tuple[float, float, int], str]:
     """网格单元划分：eg=0/fl=0 基准格固定 train，其余随机分 val/test（规格 §5.5）。"""
     baseline = {c for c in cells if c[0] == 0.0 and c[1] == 0.0}
@@ -957,10 +957,10 @@ def assemble_npz(
             for d in dropped
         ],
         "config": {
-            "fs_tol_mhz": ACFG.SURR_CLEAN_FS_TOL_MHZ,
-            "trend_sigma": ACFG.SURR_CLEAN_TREND_SIGMA,
-            "dense_ratio": ACFG.SURR_DENSE_RATIO,
-            "transition_ratio": ACFG.SURR_TRANSITION_RATIO,
+            "fs_tol_mhz": ACFG.surr_CLEAN_FS_TOL_MHZ,
+            "trend_sigma": ACFG.surr_CLEAN_TREND_SIGMA,
+            "dense_ratio": ACFG.surr_DENSE_RATIO,
+            "transition_ratio": ACFG.surr_TRANSITION_RATIO,
         },
     }
     (out / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1009,7 +1009,7 @@ from app.ml.surrogate.extract import (
 from app.models import Batch, Device
 
 log = logging.getLogger("extract_surrogate")
-_PARAM_COLS = list(AC.SURR_PARAM_COLS)
+_PARAM_COLS = list(AC.surr_PARAM_COLS)
 ACFG = AC  # 常量类，类属性访问
 
 
@@ -1063,7 +1063,7 @@ def main() -> None:
         p = files_dir / str(row["batch_no"]) / str(row["s_param_path"])
         if p.exists():
             freq, _ = read_z_mag_db(p, port=row.get("s_param_port") or "S11",
-                                    target_n_freq=ACFG.SURR_N_FREQ)
+                                    target_n_freq=ACFG.surr_N_FREQ)
             first = freq
             break
     if first is None:
@@ -1074,7 +1074,7 @@ def main() -> None:
     # 多进程构建记录（build_device_record 为顶层函数，可 pickle）
     records: list[dict] = []
     with ProcessPoolExecutor(max_workers=args.workers) as exe:
-        futs = [exe.submit(build_device_record, row, files_dir, freq_axis, AC.SURR_K) for row in rows]
+        futs = [exe.submit(build_device_record, row, files_dir, freq_axis, AC.surr_K) for row in rows]
         for i, fut in enumerate(as_completed(futs), 1):
             rec = fut.result()
             if rec is not None:
@@ -1098,10 +1098,10 @@ def main() -> None:
     cells = sorted({(r["eg"], r["fl"], r["area_um2"]) for r in kept})
     splits = split_cells(cells)
     stats = compute_norm_stats(kept, splits)
-    assemble_npz(kept, cells, splits, stats, dropped, args.out, freq_axis, ACFG.SURR_K)
+    assemble_npz(kept, cells, splits, stats, dropped, args.out, freq_axis, ACFG.surr_K)
     n_train = sum(1 for c in cells if splits[c] == "train")
     log.info("完成: %d 格（train %d / val %d / test %d）→ %s",
-             len(cells), n_train, ACFG.SURR_VAL_CELLS, ACFG.SURR_TEST_CELLS, args.out)
+             len(cells), n_train, ACFG.surr_VAL_CELLS, ACFG.surr_TEST_CELLS, args.out)
 
 
 if __name__ == "__main__":
@@ -1727,7 +1727,7 @@ from sklearn.ensemble import ExtraTreesRegressor
 from app.config import AlgorithmConfig as AC
 
 ACFG = AC
-_PARAM_COLS = list(ACFG.SURR_PARAM_COLS)
+_PARAM_COLS = list(ACFG.surr_PARAM_COLS)
 
 
 def _load_split(data_dir: str, split: str) -> tuple[np.ndarray, np.ndarray]:
@@ -2104,7 +2104,7 @@ from app.ml.surrogate.baseline import BaselineTable
 from app.ml.surrogate.model import BaselineResidualMLP
 
 ACFG = AC
-_PARAM_COLS = list(ACFG.SURR_PARAM_COLS)
+_PARAM_COLS = list(ACFG.surr_PARAM_COLS)
 _COND_IDX = [0, 1, 3, 4, 2]  # [fs, fp, Qs, Qp, kt2]
 
 
@@ -2166,8 +2166,8 @@ class SurrogatePredictor:
         # 预测 fs/fp → 采样位置 → sparse_base（dB → 归一化）
         pos = deterministic_sample_positions(
             self.freq, fs, fp, k=self.k,
-            dense_ratio=ACFG.SURR_DENSE_RATIO, transition_ratio=ACFG.SURR_TRANSITION_RATIO,
-            dense_half_bw=ACFG.SURR_DENSE_HALF_BW, transition_half_bw=ACFG.SURR_TRANSITION_HALF_BW,
+            dense_ratio=ACFG.surr_DENSE_RATIO, transition_ratio=ACFG.surr_TRANSITION_RATIO,
+            dense_half_bw=ACFG.surr_DENSE_HALF_BW, transition_half_bw=ACFG.surr_TRANSITION_HALF_BW,
         )
         sparse_base_db = z_base_full[pos] if len(z_base_full) == len(self.freq) else np.interp(
             pos / (len(self.freq) - 1), np.linspace(0, 1, len(z_base_full)), z_base_full
@@ -2342,7 +2342,7 @@ from app.ml.surrogate.baseline import BaselineTable
 from app.ml.surrogate.infer import SurrogatePredictor
 
 ACFG = AC
-_PARAM_COLS = list(ACFG.SURR_PARAM_COLS)
+_PARAM_COLS = list(ACFG.surr_PARAM_COLS)
 
 
 def _region_masks(freq: np.ndarray, fs: float, fp: float) -> dict[str, np.ndarray]:
@@ -2642,4 +2642,4 @@ git commit -m "docs: 代理模型实测结果（任务 14 评估数字）"
 **已知取舍：**
 - 相位通道（§5.1 预留）只做存储（任务 5 的 build_device_record），不进训练 ✓ 符合规格
 - 多进程提取直接用 `build_device_record` 提交 ProcessPoolExecutor（顶层函数可 pickle）
-- `AlgorithmConfig` 常量一律类属性访问（`AC.SURR_K`），与现有代码风格一致
+- `AlgorithmConfig` 常量一律类属性访问（`AC.surr_K`），与现有代码风格一致
