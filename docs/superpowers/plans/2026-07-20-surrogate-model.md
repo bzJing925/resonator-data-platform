@@ -954,14 +954,11 @@ from numpy.typing import NDArray
 from app.config import AlgorithmConfig as AC
 from app.core.sparse_sampler import deterministic_sample_positions, read_z_mag_db
 
-ACFG = AC  # AlgorithmConfig 为常量类，直接用类属性访问（与现有代码一致）
-
-
 def build_device_record(
     device_row: dict,
     files_dir: str | Path,
     freq_axis: NDArray[np.float64],
-    k: int = ACFG.surr_k,
+    k: int = AlgorithmConfig.surr_k,
 ) -> dict | None:
     """单器件 → 记录 dict；文件缺失/读取失败返回 None。
 
@@ -993,14 +990,14 @@ def build_device_record(
     fs = float(device_row.get("fs_ghz") or 0.0)
     fp = float(device_row.get("fp_ghz") or 0.0)
     pos = deterministic_sample_positions(freq_axis, fs, fp, k=k)
-    params = np.array([float(device_row.get(c) or 0.0) for c in ACFG.surr_param_cols])
+    params = np.array([float(device_row.get(c) or 0.0) for c in AlgorithmConfig.surr_param_cols])
     eg = float(device_row.get("eg") or 0.0)
     fl = float(device_row.get("fl") or 0.0)
     area = int(device_row.get("area_um2") or 0)
     pf = int(device_row.get("has_pf") or 0)
     return {
         "device_id": int(device_row.get("id") or 0),
-        "eg": eg, "fl": fl, "ag": ACFG.surr_default_ag, "area_um2": area,
+        "eg": eg, "fl": fl, "ag": AlgorithmConfig.surr_default_ag, "area_um2": area,
         "has_pf": pf, "mark": str(device_row.get("mark") or ""),
         "cell_key": f"{eg}|{fl}|{area}|{pf}",
         "params": params,
@@ -1014,28 +1011,24 @@ def build_device_record(
 
 def clean_records(
     records: list[dict],
-    fs_tol_mhz: float = ACFG.surr_clean_fs_tol_mhz,
-    trend_sigma: float = ACFG.surr_clean_trend_sigma,
+    fs_tol_mhz: float = AlgorithmConfig.surr_clean_fs_tol_mhz,
+    trend_sigma: float = AlgorithmConfig.surr_clean_trend_sigma,
 ) -> tuple[list[dict], list[dict]]:
-    """两级清洗（规格 §5.2）。返回 (kept, dropped)，dropped 元素含 reason 字段。"""
-    dropped: list[dict] = []
+    """两级清洗（规格 §5.2）。返回 (kept, dropped)，dropped 元素含 reason 字段。
 
-    # 第 0 级：物理非法
-    legal = []
-    for r in records:
-        fs, fp, qs, qp = r["params"][0], r["params"][1], r["params"][3], r["params"][4]
-        if qs <= 0 or qp <= 0 or fp <= fs:
-            dropped.append({**r, "reason": "physical"})
-        else:
-            legal.append(r)
+    判定顺序：单元内 fs/fp 离群 → 跨单元趋势面 → 物理非法（qs/qp<=0 或 fp<=fs）。
+    物理非法放最后：同时违反多项的记录按更具体的原因（cell_outlier/trend_outlier）
+    归类；物理非法记录仍参与单元中位数与趋势面拟合（中位数/最小二乘对其鲁棒）。
+    """
+    dropped: list[dict] = []
 
     # 第 1 级：单元内 fs/fp 中位数 ± tol（单元 = eg|fl|area|pf）
     by_cell: dict[str, list[dict]] = {}
-    for r in legal:
+    for r in records:
         by_cell.setdefault(r["cell_key"], []).append(r)
     tol_ghz = fs_tol_mhz / 1000.0
     in_cell: list[dict] = []
-    for key, group in by_cell.items():
+    for group in by_cell.values():
         fs_med = float(np.median([g["params"][0] for g in group]))
         fp_med = float(np.median([g["params"][1] for g in group]))
         for g in group:
@@ -1049,31 +1042,44 @@ def clean_records(
     for r in in_cell:
         by_area_pf.setdefault((r["area_um2"], r["has_pf"]), {}).setdefault(
             r["cell_key"], []).append(r)
-    kept: list[dict] = []
+    in_trend: list[dict] = []
     for (_area, _pf), cells in by_area_pf.items():
         keys = sorted(cells)
         if len(keys) < 4:  # 格太少无法拟合趋势面，全部保留
             for key in keys:
-                kept.extend(cells[key])
+                in_trend.extend(cells[key])
             continue
         design = np.array([[1.0, *map(float, key.split("|")[:2])] for key in keys])
+        bad: set[str] = set()  # fs/fp 任一维超阈值即整格剔除（并集，判定一次）
         for param_idx in (0, 1):  # fs, fp
-            med = np.array([float(np.median([g["params"][param_idx] for g in cells[key]])) for key in keys])
+            med = np.array([
+                float(np.median([g["params"][param_idx] for g in cells[key]]))
+                for key in keys
+            ])
             coef, *_ = np.linalg.lstsq(design, med, rcond=None)
             resid = med - design @ coef
-            sigma = float(resid.std()) or 1e-12
-            bad = {keys[i] for i in range(len(keys)) if abs(resid[i]) > trend_sigma * sigma}
-            for key in keys:
-                if key in bad:
-                    dropped.extend({**g, "reason": "trend_outlier"} for g in cells[key])
-                else:
-                    kept.extend(cells[key])
+            sigma = max(float(resid.std()), 1e-12)  # 下限防常量数据数值误杀
+            bad |= {keys[i] for i in range(len(keys)) if abs(resid[i]) > trend_sigma * sigma}
+        for key in keys:
+            if key in bad:
+                dropped.extend({**g, "reason": "trend_outlier"} for g in cells[key])
+            else:
+                in_trend.extend(cells[key])
+
+    # 第 0 级（最后判定）：物理非法
+    kept: list[dict] = []
+    for r in in_trend:
+        fs, fp, qs, qp = r["params"][0], r["params"][1], r["params"][3], r["params"][4]
+        if qs <= 0 or qp <= 0 or fp <= fs:
+            dropped.append({**r, "reason": "physical"})
+        else:
+            kept.append(r)
     return kept, dropped
 
 
 def select_per_cell(
     records: list[dict],
-    max_per_cell: int = ACFG.surr_per_cell_max,
+    max_per_cell: int = AlgorithmConfig.surr_per_cell_max,
 ) -> list[dict]:
     """每结构组合按 |fs−格中位数| 升序取前 max_per_cell 条（v4，规格 §5.1）。
 
@@ -1094,9 +1100,9 @@ def select_per_cell(
 
 def split_groups(
     groups: list[tuple[float, float, int, str]],
-    val_n: int = ACFG.surr_val_groups,
-    test_n: int = ACFG.surr_test_groups,
-    seed: int = ACFG.surr_split_seed,
+    val_n: int = AlgorithmConfig.surr_val_groups,
+    test_n: int = AlgorithmConfig.surr_test_groups,
+    seed: int = AlgorithmConfig.surr_split_seed,
 ) -> dict[tuple[float, float, int, str], str]:
     """物理器件组划分（v4，规格 §5.5）。
 
@@ -1279,10 +1285,10 @@ def assemble_npz(
             for d in dropped
         ],
         "config": {
-            "fs_tol_mhz": ACFG.surr_clean_fs_tol_mhz,
-            "trend_sigma": ACFG.surr_clean_trend_sigma,
-            "per_cell_max": ACFG.surr_per_cell_max,
-            "default_ag": ACFG.surr_default_ag,
+            "fs_tol_mhz": AlgorithmConfig.surr_clean_fs_tol_mhz,
+            "trend_sigma": AlgorithmConfig.surr_clean_trend_sigma,
+            "per_cell_max": AlgorithmConfig.surr_per_cell_max,
+            "default_ag": AlgorithmConfig.surr_default_ag,
         },
     }
     (out / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1331,7 +1337,6 @@ from app.ml.surrogate.extract import (
 from app.models import Batch, Device, MappingEntry
 
 log = logging.getLogger("extract_surrogate")
-ACFG = AC
 
 _PARAM_COLS = list(AC.surr_param_cols)
 
@@ -1393,7 +1398,7 @@ def main() -> None:
         p = files_dir / str(row["batch_no"]) / str(row["s_param_path"])
         if p.exists():
             freq_axis, _ = read_z_mag_db(p, port=row.get("s_param_port") or "S11",
-                                         target_n_freq=ACFG.surr_n_freq)
+                                         target_n_freq=AlgorithmConfig.surr_n_freq)
             break
     if freq_axis is None:
         raise SystemExit("没有任何可读的 S 参数文件")
@@ -1425,7 +1430,7 @@ def main() -> None:
 
     # 每格抽样（v4：≤ surr_per_cell_max 条/格）
     selected = select_per_cell(kept)
-    log.info("每格抽样: %d → %d（每格 ≤ %d）", len(kept), len(selected), ACFG.surr_per_cell_max)
+    log.info("每格抽样: %d → %d（每格 ≤ %d）", len(kept), len(selected), AlgorithmConfig.surr_per_cell_max)
 
     # 物理组划分 + 统计 + 落地
     groups = sorted({_group_tuple(r) for r in kept})
@@ -1434,7 +1439,7 @@ def main() -> None:
     assemble_npz(selected, groups, splits, stats, dropped, args.out, freq_axis, AC.surr_k)
     n_train = sum(1 for g in groups if splits[g] == "train")
     log.info("完成: %d 物理组（train %d / val %d / test %d）→ %s",
-             len(groups), n_train, ACFG.surr_val_groups, ACFG.surr_test_groups, args.out)
+             len(groups), n_train, AlgorithmConfig.surr_val_groups, AlgorithmConfig.surr_test_groups, args.out)
 
 
 if __name__ == "__main__":
@@ -2070,8 +2075,7 @@ from sklearn.ensemble import ExtraTreesRegressor
 
 from app.config import AlgorithmConfig as AC
 
-ACFG = AC
-_PARAM_COLS = list(ACFG.surr_param_cols)
+_PARAM_COLS = list(AlgorithmConfig.surr_param_cols)
 
 
 def _load_split(data_dir: str, split: str) -> tuple[np.ndarray, np.ndarray]:
@@ -2449,8 +2453,7 @@ from app.ml.sparse.reconstructor import SparseReconstructor
 from app.ml.surrogate.baseline import BaselineTable
 from app.ml.surrogate.model import BaselineResidualMLP
 
-ACFG = AC
-_PARAM_COLS = list(ACFG.surr_param_cols)
+_PARAM_COLS = list(AlgorithmConfig.surr_param_cols)
 _COND_IDX = [0, 1, 3, 4, 2]  # [fs, fp, Qs, Qp, kt2]
 
 
@@ -2496,7 +2499,7 @@ class SurrogatePredictor:
 
     @torch.no_grad()
     def predict(self, eg: float, fl: float, area_um2: float, pf: float = 0.0,
-                ag: float = ACFG.surr_default_ag) -> dict:
+                ag: float = AlgorithmConfig.surr_default_ag) -> dict:
         x = (np.array([eg, fl, ag, area_um2, pf], dtype=np.float32) - self.x_mean) / self.x_std
         x_t = torch.from_numpy(x).float().unsqueeze(0).to(self.dev)
 
@@ -2513,8 +2516,8 @@ class SurrogatePredictor:
         # 预测 fs/fp → 采样位置 → sparse_base（dB → 归一化）
         pos = deterministic_sample_positions(
             self.freq, fs, fp, k=self.k,
-            dense_ratio=ACFG.surr_dense_ratio, transition_ratio=ACFG.surr_transition_ratio,
-            dense_half_bw=ACFG.surr_dense_half_bw, transition_half_bw=ACFG.surr_transition_half_bw,
+            dense_ratio=AlgorithmConfig.surr_dense_ratio, transition_ratio=AlgorithmConfig.surr_transition_ratio,
+            dense_half_bw=AlgorithmConfig.surr_dense_half_bw, transition_half_bw=AlgorithmConfig.surr_transition_half_bw,
         )
         sparse_base_db = z_base_full[pos] if len(z_base_full) == len(self.freq) else np.interp(
             pos / (len(self.freq) - 1), np.linspace(0, 1, len(z_base_full)), z_base_full
@@ -2689,8 +2692,7 @@ from app.core.sparse_sampler import deterministic_sample_positions
 from app.ml.surrogate.baseline import BaselineTable
 from app.ml.surrogate.infer import SurrogatePredictor
 
-ACFG = AC
-_PARAM_COLS = list(ACFG.surr_param_cols)
+_PARAM_COLS = list(AlgorithmConfig.surr_param_cols)
 
 
 def _region_masks(freq: np.ndarray, fs: float, fp: float) -> dict[str, np.ndarray]:
