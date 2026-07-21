@@ -1,6 +1,6 @@
 """eg=0/fl=0 基准表：按 (pf, area) 组织的均值性能参数与均值全谱（规格 §5.4 v4）。
 
-基准表只在清洗后的基准单元记录上构建；查询时 pf 取精确档（0/1），
+基准表只在清洗后的基准单元记录上构建；查询时 pf 取最近档（0/1 语义），
 面积不在档位上时对相邻面积档做 dB 域线性插值（z 已是 dB，params 直接线性）。
 torch-free。
 """
@@ -51,7 +51,9 @@ class BaselineTable:
             groups.setdefault((int(r["has_pf"]), r["area_um2"]), []).append(r)
         pfs = sorted({k[0] for k in groups})
         areas = sorted({k[1] for k in groups})
-        params = np.zeros((len(pfs), len(areas), 7))
+        if len(groups) != len(pfs) * len(areas):
+            raise ValueError("基准网格存在缺失的 (pf, area) 组合")
+        params = np.zeros((len(pfs), len(areas), len(base[0]["params"])))
         z = np.zeros((len(pfs), len(areas), len(base[0]["full_z"])))
         for (pf, area), group in groups.items():
             pi, ai = pfs.index(pf), areas.index(area)

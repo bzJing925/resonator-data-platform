@@ -92,3 +92,10 @@ class TestBaselineTable:
     def test_build_without_baseline_records_raises(self):
         with pytest.raises(ValueError, match="基准单元"):
             BaselineTable.build([_record(1.0, 1.0, 700, [4.8] * 7, [30.0] * 101)])
+
+    def test_build_with_missing_pf_area_combo_raises(self):
+        recs = [_record(0.0, 0.0, 700, [4.8] * 7, [30.0] * 101, has_pf=0),
+                _record(0.0, 0.0, 1500, [4.8] * 7, [31.0] * 101, has_pf=0),
+                _record(0.0, 0.0, 700, [4.8] * 7, [32.0] * 101, has_pf=1)]
+        with pytest.raises(ValueError, match="缺失"):
+            BaselineTable.build(recs)
