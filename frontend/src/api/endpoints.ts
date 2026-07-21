@@ -1,9 +1,14 @@
 import type { AxiosResponse } from 'axios';
 import api from './client';
-import type { Batch, CurveSeries, Device, FieldMeta, FileEntry, Mapping, MappingEntry, PagedList, StatsResponse, Task } from '../types';
+import type { Batch, CurveSeries, Device, FieldMeta, FileEntry, Mapping, MappingEntry, PagedList, ProcessStep, ProcessStepData, StatsResponse, Task } from '../types';
 
 export const getHealth = () => api.get('/health').then((r) => r.data);
 export const getStats = () => api.get('/stats').then((r: AxiosResponse<StatsResponse>) => r.data);
+
+export const listProcessSteps = () =>
+  api.get('/process/steps').then((r: AxiosResponse<ProcessStep[]>) => r.data);
+export const getProcessStep = (step: string) =>
+  api.get(`/process/${step}`).then((r: AxiosResponse<ProcessStepData>) => r.data);
 
 export const listBatches = (params?: Record<string, unknown>) =>
   api.get('/batches', { params }).then((r: AxiosResponse<PagedList<Batch> | { items: Batch[]; total: number }>) => r.data);

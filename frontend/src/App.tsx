@@ -18,6 +18,7 @@ const Explore      = React.lazy(() => import('./pages/Explore'));
 const Tasks        = React.lazy(() => import('./pages/Tasks'));
 const TaskDetail   = React.lazy(() => import('./pages/TaskDetail'));
 const Impedance    = React.lazy(() => import('./pages/Impedance'));
+const Process      = React.lazy(() => import('./pages/Process'));
 
 const PageLoader = memo(function PageLoader() {
   return (
@@ -116,6 +117,7 @@ export default function App() {
                   <Route path="/tasks" element={<Tasks />} />
                   <Route path="/tasks/:taskId" element={<TaskDetail />} />
                   <Route path="/impedance" element={<Impedance />} />
+                  <Route path="/process" element={<Process />} />
                   <Route path="*" element={<NotFound />} />
                 </Routes>
               </Suspense>
