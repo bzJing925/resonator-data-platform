@@ -181,6 +181,22 @@ class AlgorithmConfig:
         )
     )
 
+    # --- 代理模型（surrogate）---
+    SURR_N_FREQ: int = 1001  # 统一频点数
+    SURR_K: int = 256  # 稀疏采样点数
+    SURR_DENSE_RATIO: float = 0.60  # 谐振密集区配额
+    SURR_TRANSITION_RATIO: float = 0.25  # 过渡带配额（远带 = 1 - 前两者）
+    SURR_DENSE_HALF_BW: float = 0.5  # 密集区半宽 = 该值 × (fp - fs)
+    SURR_TRANSITION_HALF_BW: float = 1.5  # 过渡带外沿 = 该值 × (fp - fs)
+    SURR_CLEAN_FS_TOL_MHZ: float = 100.0  # 单元内 fs/fp 离群阈值
+    SURR_CLEAN_TREND_SIGMA: float = 3.0  # 跨单元趋势面离群阈值（σ 倍数）
+    SURR_VAL_CELLS: int = 48  # val 网格单元数
+    SURR_TEST_CELLS: int = 48  # test 网格单元数
+    SURR_SPLIT_SEED: int = 42  # 划分随机种子
+    SURR_PARAM_COLS: tuple = (  # 7 个性能参数列（顺序固定，全流程一致）
+        "fs_ghz", "fp_ghz", "k2eff_pct", "qs", "qp", "qs_bodeq", "qp_bodeq",
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:
