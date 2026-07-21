@@ -16,6 +16,7 @@ from app.ml.sparse.region_partition import partition_regions
 
 __all__ = [
     "baseline_interpolate",
+    "deterministic_sample_positions",
     "fixed_rule_sample",
     "partition_regions",
     "read_z_mag_db",
@@ -251,3 +252,98 @@ def baseline_interpolate(
 
     cs = CubicSpline(sample_freq, sample_z, extrapolate=True)
     return cs(target_freq).astype(np.float64)
+
+
+def deterministic_sample_positions(
+    freq_ghz: NDArray[np.float64],
+    fs: float,
+    fp: float,
+    k: int = 256,
+    dense_ratio: float = 0.60,
+    transition_ratio: float = 0.25,
+    dense_half_bw: float = 0.5,
+    transition_half_bw: float = 1.5,
+) -> NDArray[np.int64]:
+    """确定性稀疏采样位置（规格 §5.3）。
+
+    只依赖 fs/fp 与频率轴，不看频谱内容，保证训练/推理一致。
+    返回 1001 网格上的升序索引数组。
+
+    区域划分（Δ = fp - fs）：
+        密集区  [fs-0.5Δ, fp+0.5Δ]   配额 k×dense_ratio
+        过渡带  两侧各延伸至 ±1.5Δ    配额 k×transition_ratio（左右均分，奇数给右）
+        远带    其余                  剩余配额
+    区域格点不足配额时，缺口按 密集→过渡→远带 顺序让渡。
+    fs/fp 非法（fs<=0 或 fp<=fs）退化为全轴均匀取点。
+    """
+    n = len(freq_ghz)
+    k = min(k, n)
+    if fs <= 0 or fp <= fs:
+        return np.linspace(0, n - 1, k).round().astype(np.int64)
+
+    delta = fp - fs
+    fmin, fmax = float(freq_ghz[0]), float(freq_ghz[-1])
+
+    dense_lo = max(fs - dense_half_bw * delta, fmin)
+    dense_hi = min(fp + dense_half_bw * delta, fmax)
+    trans_lo = max(fs - transition_half_bw * delta, fmin)
+    trans_hi = min(fp + transition_half_bw * delta, fmax)
+
+    def _idx(lo: float, hi: float) -> NDArray[np.int64]:
+        return np.where((freq_ghz >= lo) & (freq_ghz <= hi))[0]
+
+    dense_idx = _idx(dense_lo, dense_hi)
+    trans_idx = np.concatenate(
+        [_idx(trans_lo, dense_lo - 1e-12), _idx(dense_hi + 1e-12, trans_hi)]
+    )
+    occupied = np.zeros(n, dtype=bool)
+    occupied[dense_idx] = True
+    occupied[trans_idx] = True
+    far_idx = np.where(~occupied)[0]
+
+    def _take(idx: NDArray[np.int64], m: int) -> NDArray[np.int64]:
+        """在 idx 内均匀取 m 个（m <= len(idx)）。"""
+        if m <= 0 or len(idx) == 0:
+            return np.array([], dtype=np.int64)
+        sel = np.linspace(0, len(idx) - 1, min(m, len(idx))).round().astype(np.int64)
+        return idx[sel]
+
+    # 初始配额
+    q_dense = int(round(k * dense_ratio))
+    q_trans = int(round(k * transition_ratio))
+    q_far = k - q_dense - q_trans
+
+    take_dense = min(q_dense, len(dense_idx))
+    take_trans = min(q_trans, len(trans_idx))
+    take_far = min(q_far, len(far_idx))
+
+    # 让渡：缺口按 密集→过渡→远带 顺序补给有余量的区域
+    leftover = k - (take_dense + take_trans + take_far)
+    caps = [
+        ("dense", len(dense_idx) - take_dense),
+        ("trans", len(trans_idx) - take_trans),
+        ("far", len(far_idx) - take_far),
+    ]
+    while leftover > 0 and any(c > 0 for _, c in caps):
+        for i, (name, cap) in enumerate(caps):
+            if leftover <= 0:
+                break
+            if cap <= 0:
+                continue
+            if name == "dense":
+                take_dense += 1
+            elif name == "trans":
+                take_trans += 1
+            else:
+                take_far += 1
+            caps[i] = (name, cap - 1)
+            leftover -= 1
+
+    result = np.concatenate(
+        [
+            _take(dense_idx, take_dense),
+            _take(trans_idx, take_trans),
+            _take(far_idx, take_far),
+        ]
+    )
+    return np.sort(result)
