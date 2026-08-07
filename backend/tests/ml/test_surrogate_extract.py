@@ -210,3 +210,52 @@ class TestBuildDeviceRecord:
         r11 = build_device_record(self._row(port="S11"), tmp_path / "files", freq_axis, k=32)
         r22 = build_device_record(self._row(port="S22"), tmp_path / "files", freq_axis, k=32)
         assert not np.allclose(r11["full_z"], r22["full_z"])
+
+
+class TestFillSparseBase:
+    def test_fill_writes_interpolated_baseline(self):
+        # 延迟导入：TDD 红灯期只失败本类 2 个新测试，不影响既有 16 个
+        from app.ml.surrogate.baseline import BaselineTable
+        from app.ml.surrogate.extract import fill_sparse_base
+
+        recs = [
+            _rec(0.0, 0.0, 700, mark="A1-1"), _rec(0.0, 0.0, 700, mark="A1-1"),
+            _rec(1.0, 0.5, 700, mark="B0"),
+        ]
+        table = BaselineTable.build(recs)
+        for r in recs:
+            r["params_base"], _ = table.lookup(r["area_um2"], r["has_pf"])
+        fill_sparse_base(recs, table)
+        for r in recs:
+            # 基准全谱恒 40 → 任意位置插值都是 40
+            np.testing.assert_allclose(r["sparse_base"], 40.0)
+
+
+class TestAssembleNpz:
+    def test_writes_npz_and_meta(self, tmp_path):
+        # 延迟导入：TDD 红灯期只失败本类 2 个新测试，不影响既有 16 个
+        from app.ml.surrogate.extract import assemble_npz
+
+        recs = [
+            _rec(0.0, 0.0, 700, mark="A1-1"), _rec(0.0, 0.0, 5500, mark="A1-1"),
+            _rec(1.0, 0.5, 700, mark="B0"), _rec(2.0, 1.0, 700, mark="C0"),
+        ]
+        for r in recs:
+            r["params_base"] = np.zeros(7)
+        groups = [(0.0, 0.0, 0, "A1-1"), (1.0, 0.5, 0, "B0"), (2.0, 1.0, 0, "C0")]
+        splits = {groups[0]: "train", groups[1]: "val", groups[2]: "test"}
+        stats = compute_norm_stats(recs, splits)
+        assemble_npz(recs, groups, splits, stats, dropped=[], out_dir=tmp_path,
+                     freq_axis=np.linspace(4.0, 7.0, 101), k=32)
+        data = np.load(tmp_path / "dataset.npz")
+        assert data["x_struct"].shape == (4, 5)  # [eg, fl, ag, area, pf]
+        assert data["y_params"].shape == (4, 7)
+        assert data["full_z"].shape == (4, 101)
+        assert data["sample_pos"].shape == (4, 32)
+        # 同 mark（A1-1）的两行 group_idx 相同（物理绑定）
+        assert data["group_idx"][0] == data["group_idx"][1]
+        import json
+        meta = json.loads((tmp_path / "meta.json").read_text(encoding="utf-8"))
+        assert len(meta["groups"]) == 3
+        assert meta["groups"][1]["split"] == "val"
+        assert meta["k"] == 32

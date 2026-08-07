@@ -12,6 +12,7 @@ from numpy.typing import NDArray
 
 from app.config import AlgorithmConfig
 from app.core.sparse_sampler import deterministic_sample_positions, read_z_mag_db
+from app.ml.surrogate.baseline import BaselineTable
 
 
 def build_device_record(
@@ -200,3 +201,71 @@ def compute_norm_stats(records: list[dict], splits: dict) -> dict[str, list[floa
 
 def _group_tuple(r: dict) -> tuple[float, float, int, str]:
     return (r["eg"], r["fl"], r["has_pf"], r["mark"])
+
+
+def fill_sparse_base(records: list[dict], baseline: BaselineTable) -> None:
+    """回填每条记录的 sparse_base：基准全谱在该器件采样位置上的取值（同网格直接索引）。"""
+    for r in records:
+        _, z_base = baseline.lookup(r["area_um2"], r["has_pf"])
+        if len(z_base) == len(r["full_z"]):
+            r["sparse_base"] = z_base[r["sample_pos"]].astype(np.float32)
+        else:  # 网格不一致时按位置比例插值（防御分支）
+            x_old = np.linspace(0, 1, len(z_base))
+            x_new = r["sample_pos"] / (len(r["full_z"]) - 1)
+            r["sparse_base"] = np.interp(x_new, x_old, z_base).astype(np.float32)
+
+
+def assemble_npz(
+    records: list[dict],
+    groups: list[tuple[float, float, int, str]],
+    splits: dict,
+    stats: dict,
+    dropped: list[dict],
+    out_dir: str | Path,
+    freq_axis: NDArray[np.float64],
+    k: int,
+) -> None:
+    """写 dataset.npz + meta.json（数据契约见计划头部，v4：groups 版）。"""
+    import json
+
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    group_list = sorted(groups)
+    group_index = {g: i for i, g in enumerate(group_list)}
+
+    np.savez_compressed(
+        out / "dataset.npz",
+        x_struct=np.array(
+            [[r["eg"], r["fl"], r["ag"], r["area_um2"], r["has_pf"]] for r in records],
+            dtype=np.float32,
+        ),
+        y_params=np.stack([r["params"] for r in records]).astype(np.float32),
+        params_base=np.stack([r["params_base"] for r in records]).astype(np.float32),
+        sample_pos=np.stack([r["sample_pos"] for r in records]).astype(np.int32),
+        y_sparse=np.stack([r["sample_z"] for r in records]).astype(np.float32),
+        sparse_base=np.stack([r["sparse_base"] for r in records]).astype(np.float32),
+        full_z=np.stack([r["full_z"] for r in records]).astype(np.float32),
+        phase=np.stack([r["phase"] for r in records]).astype(np.float32),
+        group_idx=np.array([group_index[_group_tuple(r)] for r in records], dtype=np.int32),
+    )
+    meta = {
+        "groups": [
+            {"eg": g[0], "fl": g[1], "has_pf": g[2], "mark": g[3], "split": splits[g]}
+            for g in group_list
+        ],
+        "freq_ghz": freq_axis.tolist(),
+        "k": k,
+        "n_freq": len(freq_axis),
+        **stats,
+        "dropped": [
+            {"device_id": d["device_id"], "cell_key": d["cell_key"], "reason": d["reason"]}
+            for d in dropped
+        ],
+        "config": {
+            "fs_tol_mhz": AlgorithmConfig.surr_clean_fs_tol_mhz,
+            "trend_sigma": AlgorithmConfig.surr_clean_trend_sigma,
+            "per_cell_max": AlgorithmConfig.surr_per_cell_max,
+            "default_ag": AlgorithmConfig.surr_default_ag,
+        },
+    }
+    (out / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
