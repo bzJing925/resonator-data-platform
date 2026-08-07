@@ -82,13 +82,16 @@ def read_z_mag_db(
     path: str | Path,
     port: str = "S11",
     target_n_freq: int = 1001,
-) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    return_phase: bool = False,
+) -> tuple[NDArray[np.float64], ...]:
     """透明读取 S1P/S2P 并返回指定端口的 (freq_ghz, |Z|_dB)。
 
     Args:
         path: S1P 或 S2P 文件路径。
         port: "S11" 或 "S22"；S1P 时忽略该参数。
         target_n_freq: 统一插值后的频点数。
+        return_phase: True 时返回三元组 (freq_ghz, |Z|_dB, phase_rad)，
+            相位取自同一 Network 对象（避免调用方二次读文件）。
     """
     path = Path(path)
     net = rf.Network(str(path))
@@ -103,13 +106,22 @@ def read_z_mag_db(
 
     z_mag = np.abs(z)
     z_db = 20.0 * np.log10(np.maximum(z_mag, 1e-12))
+    phase = np.angle(z)
 
     if len(freq_ghz) != target_n_freq:
         freq_new = np.linspace(freq_ghz[0], freq_ghz[-1], target_n_freq)
-        z_db_new = np.interp(freq_new, freq_ghz, z_db)
-        return freq_new.astype(np.float64), z_db_new.astype(np.float64)
+        out = (
+            freq_new.astype(np.float64),
+            np.interp(freq_new, freq_ghz, z_db).astype(np.float64),
+        )
+        phase_out = np.interp(freq_new, freq_ghz, phase).astype(np.float64)
+    else:
+        out = (freq_ghz.astype(np.float64), z_db.astype(np.float64))
+        phase_out = phase.astype(np.float64)
 
-    return freq_ghz.astype(np.float64), z_db.astype(np.float64)
+    if return_phase:
+        return (*out, phase_out)
+    return out
 
 
 def uniform_sample_from_mask(

@@ -28,16 +28,16 @@ def build_device_record(
     if not path.exists():
         return None
     try:
-        freq, z_db = read_z_mag_db(path, port=device_row.get("s_param_port") or "S11",
-                                   target_n_freq=len(freq_axis))
-        # 相位通道（预留）
-        import skrf as rf
-
-        net = rf.Network(str(path))
-        port_idx = 1 if (device_row.get("s_param_port") == "S22" and net.nports > 1) else 0
-        phase = np.angle(net.z[:, port_idx, port_idx])
-        if len(phase) != len(freq_axis):
-            phase = np.interp(freq_axis, net.f / 1e9, phase)
+        freq, z_db, phase = read_z_mag_db(
+            path,
+            port=device_row.get("s_param_port") or "S11",
+            target_n_freq=len(freq_axis),
+            return_phase=True,
+        )
+        if not np.allclose(freq, freq_axis):
+            # 文件轴与统一轴不一致（如扫频范围不同）：插值对齐，防静默错位
+            z_db = np.interp(freq_axis, freq, z_db)
+            phase = np.interp(freq_axis, freq, phase)
     except Exception:
         return None
 
@@ -73,6 +73,8 @@ def clean_records(
     判定顺序：单元内 fs/fp 离群 → 跨单元趋势面 → 物理非法（qs/qp<=0 或 fp<=fs）。
     物理非法放最后：同时违反多项的记录按更具体的原因（cell_outlier/trend_outlier）
     归类；物理非法记录仍参与单元中位数与趋势面拟合（中位数/最小二乘对其鲁棒）。
+    趋势面用 MAD 稳健尺度（修正 z 分数）：std 尺度在少键数时被离群格自身撑大
+    （自掩蔽漏检）；格子数 <~10 时检出能力仍有限，靠单元内过滤与物理判定兜底。
     """
     dropped: list[dict] = []
 
@@ -103,7 +105,7 @@ def clean_records(
             for key in keys:
                 in_trend.extend(cells[key])
             continue
-        design = np.array([[1.0, *map(float, key.split("|")[:2])] for key in keys])
+        design = np.array([[1.0, cells[key][0]["eg"], cells[key][0]["fl"]] for key in keys])
         bad: set[str] = set()  # fs/fp 任一维超阈值即整格剔除（并集，判定一次）
         for param_idx in (0, 1):
             med = np.array([
@@ -112,15 +114,21 @@ def clean_records(
             ])
             coef, *_ = np.linalg.lstsq(design, med, rcond=None)
             resid = med - design @ coef
-            sigma = max(float(resid.std()), 1e-12)  # 下限防常量数据数值误杀
-            bad |= {keys[i] for i in range(len(keys)) if abs(resid[i]) > trend_sigma * sigma}
+            # MAD 稳健尺度 + 居中比较（修正 z 分数），下限防常量数据数值误杀
+            center = float(np.median(resid))
+            sigma = max(1.4826 * float(np.median(np.abs(resid - center))), 1e-12)
+            bad |= {
+                keys[i]
+                for i in range(len(keys))
+                if abs(resid[i] - center) > trend_sigma * sigma
+            }
         for key in keys:
             if key in bad:
                 dropped.extend({**g, "reason": "trend_outlier"} for g in cells[key])
             else:
                 in_trend.extend(cells[key])
 
-    # 第 0 级（最后判定）：物理非法
+    # 第 3 级（最后判定）：物理非法（规格 §5.2 第 3 条）
     kept: list[dict] = []
     for r in in_trend:
         fs, fp, qs, qp = r["params"][0], r["params"][1], r["params"][3], r["params"][4]
