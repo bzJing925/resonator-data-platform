@@ -190,8 +190,6 @@ class AlgorithmConfig:
     surr_transition_half_bw: float = 1.5  # 过渡带外沿 = 该值 × (fp - fs)
     surr_clean_fs_tol_mhz: float = 100.0  # 单元内 fs/fp 离群阈值（MHz；比较时 ÷1000 换算为 GHz）
     surr_clean_trend_sigma: float = 3.0  # 跨单元趋势面离群阈值（σ 倍数）
-    surr_val_cells: int = 48  # val 网格单元数
-    surr_test_cells: int = 48  # test 网格单元数
     surr_split_seed: int = 42  # 划分随机种子
     surr_param_cols: tuple[str, ...] = (  # 7 个性能参数列（顺序固定，全流程一致）
         "fs_ghz", "fp_ghz", "k2eff_pct", "qs", "qp", "qs_bodeq", "qp_bodeq",
