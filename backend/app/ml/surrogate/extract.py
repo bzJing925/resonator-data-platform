@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -13,6 +14,17 @@ from numpy.typing import NDArray
 from app.config import AlgorithmConfig
 from app.core.sparse_sampler import deterministic_sample_positions, read_z_mag_db
 from app.ml.surrogate.baseline import BaselineTable
+
+
+def _slim_drop(g: dict, reason: str) -> dict:
+    """剔除记录只保留小字段（避免 full_z/phase 大数组随 dropped 清单常驻内存）。"""
+    return {
+        "device_id": g["device_id"],
+        "cell_key": g["cell_key"],
+        "reason": reason,
+        "fs_ghz": float(g["params"][0]),
+        "fp_ghz": float(g["params"][1]),
+    }
 
 
 def build_device_record(
@@ -52,8 +64,12 @@ def build_device_record(
     pf = int(device_row.get("has_pf") or 0)
     return {
         "device_id": int(device_row.get("id") or 0),
-        "eg": eg, "fl": fl, "ag": AlgorithmConfig.surr_default_ag, "area_um2": area,
-        "has_pf": pf, "mark": str(device_row.get("mark") or ""),
+        "eg": eg,
+        "fl": fl,
+        "ag": AlgorithmConfig.surr_default_ag,
+        "area_um2": area,
+        "has_pf": pf,
+        "mark": str(device_row.get("mark") or ""),
         "cell_key": f"{eg}|{fl}|{area}|{pf}",
         "params": params,
         "sample_pos": pos.astype(np.int32),
@@ -90,7 +106,7 @@ def clean_records(
         fp_med = float(np.median([g["params"][1] for g in group]))
         for g in group:
             if abs(g["params"][0] - fs_med) > tol_ghz or abs(g["params"][1] - fp_med) > tol_ghz:
-                dropped.append({**g, "reason": "cell_outlier"})
+                dropped.append(_slim_drop(g, "cell_outlier"))
             else:
                 in_cell.append(g)
 
@@ -98,7 +114,8 @@ def clean_records(
     by_area_pf: dict[tuple[int, int], dict[str, list[dict]]] = {}
     for r in in_cell:
         by_area_pf.setdefault((r["area_um2"], r["has_pf"]), {}).setdefault(
-            r["cell_key"], []).append(r)
+            r["cell_key"], []
+        ).append(r)
     in_trend: list[dict] = []
     for (_area, _pf), cells in by_area_pf.items():
         keys = sorted(cells)
@@ -109,23 +126,20 @@ def clean_records(
         design = np.array([[1.0, cells[key][0]["eg"], cells[key][0]["fl"]] for key in keys])
         bad: set[str] = set()  # fs/fp 任一维超阈值即整格剔除（并集，判定一次）
         for param_idx in (0, 1):
-            med = np.array([
-                float(np.median([g["params"][param_idx] for g in cells[key]]))
-                for key in keys
-            ])
+            med = np.array(
+                [float(np.median([g["params"][param_idx] for g in cells[key]])) for key in keys]
+            )
             coef, *_ = np.linalg.lstsq(design, med, rcond=None)
             resid = med - design @ coef
             # MAD 稳健尺度 + 居中比较（修正 z 分数），下限防常量数据数值误杀
             center = float(np.median(resid))
             sigma = max(1.4826 * float(np.median(np.abs(resid - center))), 1e-12)
             bad |= {
-                keys[i]
-                for i in range(len(keys))
-                if abs(resid[i] - center) > trend_sigma * sigma
+                keys[i] for i in range(len(keys)) if abs(resid[i] - center) > trend_sigma * sigma
             }
         for key in keys:
             if key in bad:
-                dropped.extend({**g, "reason": "trend_outlier"} for g in cells[key])
+                dropped.extend(_slim_drop(g, "trend_outlier") for g in cells[key])
             else:
                 in_trend.extend(cells[key])
 
@@ -134,7 +148,7 @@ def clean_records(
     for r in in_trend:
         fs, fp, qs, qp = r["params"][0], r["params"][1], r["params"][3], r["params"][4]
         if qs <= 0 or qp <= 0 or fp <= fs:
-            dropped.append({**r, "reason": "physical"})
+            dropped.append(_slim_drop(r, "physical"))
         else:
             kept.append(r)
     return kept, dropped
@@ -169,7 +183,7 @@ def split_groups(
     rng = np.random.default_rng(seed)
     perm = rng.permutation(len(others))
     val_groups = {others[i] for i in perm[:val_n]}
-    test_groups = {others[i] for i in perm[val_n:val_n + test_n]}
+    test_groups = {others[i] for i in perm[val_n : val_n + test_n]}
     splits: dict[tuple[float, float, int, str], str] = {}
     for g in groups:
         if g in baseline:
@@ -226,8 +240,6 @@ def assemble_npz(
     k: int,
 ) -> None:
     """写 dataset.npz + meta.json（数据契约见计划头部，v4：groups 版）。"""
-    import json
-
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     group_list = sorted(groups)

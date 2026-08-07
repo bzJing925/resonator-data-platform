@@ -20,11 +20,24 @@ def _make_2port_s2p(path: Path, n: int = 301) -> None:
 
 
 def _row(i, mark, pf, path_name, fs=4.8, fp=5.1):
-    return {"id": i, "eg": 0.0 if pf == 0 else 1.0, "fl": 0.0, "area_um2": 700,
-            "has_pf": pf, "mark": mark,
-            "fs_ghz": fs, "fp_ghz": fp, "k2eff_pct": 7.0, "qs": 500.0, "qp": 400.0,
-            "qs_bodeq": 450.0, "qp_bodeq": 380.0,
-            "s_param_path": path_name, "s_param_port": "S11", "batch_no": "T1"}
+    return {
+        "id": i,
+        "eg": 0.0 if pf == 0 else 1.0,
+        "fl": 0.0,
+        "area_um2": 700,
+        "has_pf": pf,
+        "mark": mark,
+        "fs_ghz": fs,
+        "fp_ghz": fp,
+        "k2eff_pct": 7.0,
+        "qs": 500.0,
+        "qp": 400.0,
+        "qs_bodeq": 450.0,
+        "qp_bodeq": 380.0,
+        "s_param_path": path_name,
+        "s_param_port": "S11",
+        "batch_no": "T1",
+    }
 
 
 def test_extract_end_to_end(tmp_path):
@@ -45,8 +58,10 @@ def test_extract_end_to_end(tmp_path):
     _make_2port_s2p(files_dir / "a.s2p")
     _make_2port_s2p(files_dir / "b.s2p")
 
-    rows = [_row(1, "A1-1", 0, "a.s2p", fs=4.8, fp=5.1),
-            _row(2, "H1-1", 1, "b.s2p", fs=4.9, fp=5.2)]
+    rows = [
+        _row(1, "A1-1", 0, "a.s2p", fs=4.8, fp=5.1),
+        _row(2, "H1-1", 1, "b.s2p", fs=4.9, fp=5.2),
+    ]
     freq_axis = np.linspace(4.0, 7.0, 1001)
 
     recs = [build_device_record(r, tmp_path / "files", freq_axis, k=32) for r in rows]
@@ -74,3 +89,8 @@ def test_extract_end_to_end(tmp_path):
     assert data["full_z"].shape == (2, 1001)
     assert data["x_struct"].shape == (2, 5)
     assert np.all(np.isfinite(data["full_z"]))
+    # 数值不变量：y_sparse == full_z 在 sample_pos 上的取值
+    for i in range(2):
+        np.testing.assert_allclose(
+            data["y_sparse"][i], data["full_z"][i][data["sample_pos"][i]], atol=1e-5
+        )
