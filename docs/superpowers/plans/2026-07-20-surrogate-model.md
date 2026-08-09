@@ -1748,7 +1748,7 @@ git commit -m "feat(ml): SurrogateDataset（split 过滤 + 归一化 + 基准对
 - 创建：`backend/app/ml/surrogate/model.py`
 - 测试：`backend/tests/ml/test_surrogate_model.py`
 
-设计（规格 §6）：输入归一化 x(4) → Linear 256 → GELU → 残差块×2 → 双头（Δparams(7) / Δsparse(K)）；输出 = 基准 + 残差。**两头最后一层零初始化**，保证零残差时输出恒等于基准。
+设计（规格 §6）：输入归一化 x(5) → Linear 256 → GELU → 残差块×2 → 双头（Δparams(7) / Δsparse(K)）；输出 = 基准 + 残差。**两头最后一层零初始化**，保证零残差时输出恒等于基准。
 
 - [ ] **步骤 1：编写失败的测试**
 
@@ -1764,7 +1764,7 @@ from app.ml.surrogate.model import BaselineResidualMLP
 class TestBaselineResidualMLP:
     def test_forward_shapes(self):
         model = BaselineResidualMLP(in_dim=5, hidden=64, n_res_blocks=2, n_params=7, k=32)
-        out = model(torch.randn(8, 4), torch.randn(8, 7), torch.randn(8, 32))
+        out = model(torch.randn(8, 5), torch.randn(8, 7), torch.randn(8, 32))
         assert out["params"].shape == (8, 7)
         assert out["sparse"].shape == (8, 32)
 
@@ -1773,7 +1773,7 @@ class TestBaselineResidualMLP:
         model = BaselineResidualMLP(in_dim=5, hidden=64, n_res_blocks=2, n_params=7, k=32)
         p_base = torch.randn(4, 7)
         s_base = torch.randn(4, 32)
-        out = model(torch.randn(4, 4), p_base, s_base)
+        out = model(torch.randn(4, 5), p_base, s_base)
         torch.testing.assert_close(out["params"], p_base)
         torch.testing.assert_close(out["sparse"], s_base)
 
@@ -1785,7 +1785,7 @@ class TestBaselineResidualMLP:
                 p.normal_(0, 0.1)
         p_base = torch.zeros(2, 7)
         s_base = torch.zeros(2, 32)
-        out = model(torch.ones(2, 4), p_base, s_base)
+        out = model(torch.ones(2, 5), p_base, s_base)
         assert out["params"].abs().sum() > 0
 ```
 
@@ -1821,11 +1821,11 @@ class _ResBlock(nn.Module):
 
 
 class BaselineResidualMLP(nn.Module):
-    """(eg, fl, area[, ag]) → Δparams(7) + Δsparse(K)，输出基准+残差。"""
+    """(eg, fl, ag, area, pf) → Δparams(7) + Δsparse(K)，输出基准+残差。"""
 
     def __init__(
         self,
-        in_dim: int = 4,
+        in_dim: int = 5,
         hidden: int = 256,
         n_res_blocks: int = 2,
         n_params: int = 7,
