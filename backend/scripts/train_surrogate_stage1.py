@@ -12,13 +12,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import torch
 from torch.utils.data import DataLoader
 
-from app.ml.surrogate.dataset import SurrogateDataset
-from app.ml.surrogate.model import BaselineResidualMLP
+# 把 backend 目录加入路径，以便 import app（同 train_sparse_reconstructor.py）
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from app.ml.surrogate.dataset import SurrogateDataset  # noqa: E402
+from app.ml.surrogate.model import BaselineResidualMLP  # noqa: E402
 
 
 def _device() -> torch.device:

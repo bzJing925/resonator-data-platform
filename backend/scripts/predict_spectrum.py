@@ -10,11 +10,17 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import sys
 from pathlib import Path
 
 import matplotlib
 
 matplotlib.use("Agg")
+
+# 把 backend 目录加入路径，以便 import app（同 train_sparse_reconstructor.py）
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+
 import matplotlib.pyplot as plt  # noqa: E402
 
 from app.ml.surrogate.infer import SurrogatePredictor  # noqa: E402

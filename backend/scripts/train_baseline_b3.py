@@ -9,13 +9,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import joblib
 import numpy as np
 from sklearn.ensemble import ExtraTreesRegressor
 
-from app.config import AlgorithmConfig
+# 把 backend 目录加入路径，以便 import app（同 train_sparse_reconstructor.py）
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from app.config import AlgorithmConfig  # noqa: E402
 
 _PARAM_COLS = list(AlgorithmConfig.surr_param_cols)
 

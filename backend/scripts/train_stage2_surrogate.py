@@ -9,14 +9,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset
 
-from app.core.sparse_sampler import baseline_interpolate
-from app.ml.sparse.reconstructor import SparseReconstructor
+# 把 backend 目录加入路径，以便 import app（同 train_sparse_reconstructor.py）
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from app.core.sparse_sampler import baseline_interpolate  # noqa: E402
+from app.ml.sparse.reconstructor import SparseReconstructor  # noqa: E402
 
 _COND_IDX = [0, 1, 3, 4, 2]  # y_params 中 [fs, fp, Qs, Qp, kt2] 的列索引
 
@@ -32,8 +37,10 @@ class Stage2Dataset(Dataset):
             mask = np.array([ci in keep for ci in data["group_idx"]])
             self.cond = torch.from_numpy(data["y_params"][mask][:, _COND_IDX]).float()
             self.samples = np.stack(
-                [np.asarray(meta["freq_ghz"], dtype=np.float32)[data["sample_pos"][mask]],
-                 data["y_sparse"][mask]],
+                [
+                    np.asarray(meta["freq_ghz"], dtype=np.float32)[data["sample_pos"][mask]],
+                    data["y_sparse"][mask],
+                ],
                 axis=-1,
             ).astype(np.float32)  # (M, K, 2)
             self.target = torch.from_numpy(data["full_z"][mask]).float()
@@ -126,8 +133,7 @@ def train(
     torch.save(model.state_dict(), out / "stage2.pt")
     (out / "stage2_config.json").write_text(
         json.dumps(
-            {"d_model": 64, "n_encoder_layers": 4, "n_heads": 4, "dropout": 0.1,
-             "max_freq": 10.0},
+            {"d_model": 64, "n_encoder_layers": 4, "n_heads": 4, "dropout": 0.1, "max_freq": 10.0},
             indent=2,
         ),
         encoding="utf-8",

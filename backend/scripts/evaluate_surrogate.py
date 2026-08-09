@@ -9,12 +9,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import joblib
 import matplotlib
 
 matplotlib.use("Agg")
+
+# 把 backend 目录加入路径，以便 import app（同 train_sparse_reconstructor.py）
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 
@@ -171,8 +177,12 @@ def main() -> None:
         if _mean("rmse_b0") > 0
         else float("nan"),
         "b3_fs_mae_mhz": _mean("b3_fs_err_mhz") if b3 else None,
-        "targets": {"fs_mae_mhz": 10, "fp_mae_mhz": 15, "rmse_full_db": 0.5,
-                    "improvement_vs_b0_pct": 50},
+        "targets": {
+            "fs_mae_mhz": 10,
+            "fp_mae_mhz": 15,
+            "rmse_full_db": 0.5,
+            "improvement_vs_b0_pct": 50,
+        },
     }
     (out_dir / "report.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -206,8 +216,9 @@ def main() -> None:
             if r["cell"]["area"] != area:
                 continue
             grid[fls.index(r["cell"]["fl"]), egs.index(r["cell"]["eg"])] = r["rmse_full"]
-        im = ax.imshow(grid, origin="lower", aspect="auto",
-                       extent=[min(egs), max(egs), min(fls), max(fls)])
+        im = ax.imshow(
+            grid, origin="lower", aspect="auto", extent=[min(egs), max(egs), min(fls), max(fls)]
+        )
         ax.set_title(f"area={int(area)}")
         ax.set_xlabel("eg")
         ax.set_ylabel("fl")
