@@ -94,3 +94,13 @@ def test_extract_end_to_end(tmp_path):
         np.testing.assert_allclose(
             data["y_sparse"][i], data["full_z"][i][data["sample_pos"][i]], atol=1e-5
         )
+
+    # 接缝：SurrogateDataset 读回真实 extract 产物（extract→dataset 契约兜底）
+    from app.ml.surrogate.dataset import SurrogateDataset
+
+    ds = SurrogateDataset(tmp_path / "out", split="train")
+    if len(ds) > 0:
+        item = ds[0]
+        assert item["x"].shape == (5,)
+        assert item["y_params"].shape == (7,)
+        assert item["y_sparse"].shape == (32,)

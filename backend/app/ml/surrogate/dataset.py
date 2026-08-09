@@ -28,16 +28,19 @@ class SurrogateDataset(Dataset):
 
         data = np.load(data_dir / "dataset.npz")
         keep_groups = {i for i, g in enumerate(meta["groups"]) if g["split"] == split}
-        mask = np.array([ci in keep_groups for ci in data["group_idx"]])
+        if not keep_groups:
+            raise ValueError(f"meta['groups'] 中没有 split={split!r} 的组（检查 split 拼写）")
+        with data:
+            mask = np.array([ci in keep_groups for ci in data["group_idx"]])
 
-        self.x = torch.from_numpy(data["x_struct"][mask]).float()
-        self.y_params = torch.from_numpy(data["y_params"][mask]).float()
-        self.params_base = torch.from_numpy(data["params_base"][mask]).float()
-        self.y_sparse = torch.from_numpy(data["y_sparse"][mask]).float()
-        self.sparse_base = torch.from_numpy(data["sparse_base"][mask]).float()
-        self.full_z = torch.from_numpy(data["full_z"][mask]).float()
-        self.sample_pos = torch.from_numpy(data["sample_pos"][mask]).long()
-        self.group_idx = torch.from_numpy(data["group_idx"][mask]).long()
+            self.x = torch.from_numpy(data["x_struct"][mask]).float()
+            self.y_params = torch.from_numpy(data["y_params"][mask]).float()
+            self.params_base = torch.from_numpy(data["params_base"][mask]).float()
+            self.y_sparse = torch.from_numpy(data["y_sparse"][mask]).float()
+            self.sparse_base = torch.from_numpy(data["sparse_base"][mask]).float()
+            self.full_z = torch.from_numpy(data["full_z"][mask]).float()
+            self.sample_pos = torch.from_numpy(data["sample_pos"][mask]).long()
+            self.group_idx = torch.from_numpy(data["group_idx"][mask]).long()
 
         self.x_mean = torch.tensor(meta["x_mean"], dtype=torch.float32)
         self.x_std = torch.tensor(meta["x_std"], dtype=torch.float32)
