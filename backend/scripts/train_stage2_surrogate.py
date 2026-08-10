@@ -33,17 +33,25 @@ class Stage2Dataset(Dataset):
         data_dir = Path(data_dir)
         meta = json.loads((data_dir / "meta.json").read_text(encoding="utf-8"))
         keep = {i for i, g in enumerate(meta["groups"]) if g["split"] == split}
+        cond_idx = np.asarray(_COND_IDX)
+        cond_mean = np.asarray(meta["params_mean"], dtype=np.float32)[cond_idx]
+        cond_std = np.asarray(meta["params_std"], dtype=np.float32)[cond_idx]
+        z_mean = float(meta["z_mean"][0])
+        z_std = float(meta["z_std"][0])
         with np.load(data_dir / "dataset.npz") as data:
             mask = np.array([ci in keep for ci in data["group_idx"]])
-            self.cond = torch.from_numpy(data["y_params"][mask][:, _COND_IDX]).float()
+            # cond/z 归一化（O(1) 激活；原始 dB/百位 Q 值会压垮 LayerNorm 的位置分辨）
+            self.cond = torch.from_numpy(
+                (data["y_params"][mask][:, _COND_IDX] - cond_mean) / cond_std
+            ).float()
             self.samples = np.stack(
                 [
                     np.asarray(meta["freq_ghz"], dtype=np.float32)[data["sample_pos"][mask]],
-                    data["y_sparse"][mask],
+                    (data["y_sparse"][mask] - z_mean) / z_std,
                 ],
                 axis=-1,
             ).astype(np.float32)  # (M, K, 2)
-            self.target = torch.from_numpy(data["full_z"][mask]).float()
+            self.target = torch.from_numpy((data["full_z"][mask] - z_mean) / z_std).float()
         self.freq = np.asarray(meta["freq_ghz"], dtype=np.float32)
         self.z_baseline = torch.from_numpy(
             np.stack([baseline_interpolate(s[:, 0], s[:, 1], self.freq) for s in self.samples])
@@ -133,7 +141,13 @@ def train(
     torch.save(model.state_dict(), out / "stage2.pt")
     (out / "stage2_config.json").write_text(
         json.dumps(
-            {"d_model": 64, "n_encoder_layers": 4, "n_heads": 4, "dropout": 0.1, "max_freq": 10.0},
+            {
+                "d_model": 64,
+                "n_encoder_layers": 4,
+                "n_heads": 4,
+                "dropout": 0.1,
+                "max_freq": 0.1,
+            },  # 频率标尺：4–7 GHz 映射到 40–70，正弦位置编码可分辨
             indent=2,
         ),
         encoding="utf-8",

@@ -50,12 +50,35 @@ def _rmse(a: np.ndarray, b: np.ndarray, mask: np.ndarray | None = None) -> float
     return float(np.sqrt(np.mean((a - b) ** 2)))
 
 
+def _aligned_rmse(pred: np.ndarray, true: np.ndarray, max_shift: int = 15) -> float:
+    """位移对齐 RMSE：在 ±max_shift 个格点内取最优平移（≈3 MHz/格点）。
+
+    量化"形状对、位置偏"的成分：aligned << 原始 说明误差主要是谐振位置偏移，
+    而非曲线形状错误。两端截断比较（移出的边缘不纳入）。
+    """
+    best = float("inf")
+    for s in range(-max_shift, max_shift + 1):
+        if s >= 0:
+            p, t = pred[s:], true[: len(true) - s] if s else true
+        else:
+            p, t = pred[:s], true[-s:]
+        v = float(np.sqrt(np.mean((p - t) ** 2)))
+        if v < best:
+            best = v
+    return best
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", default="./surrogate_data")
     ap.add_argument("--ckpt", default="./checkpoints_surrogate")
     ap.add_argument("--out", default="./eval_out")
     ap.add_argument("--max-devices", type=int, default=0, help="调试：最多评估 N 个器件")
+    ap.add_argument(
+        "--stage2",
+        default="",
+        help="Stage 2 权重路径（默认 ckpt/stage2.pt，Step B 微调后传 ckpt/stage2_ft.pt）",
+    )
     args = ap.parse_args()
 
     data_dir, ckpt_dir = Path(args.data), Path(args.ckpt)
@@ -75,7 +98,7 @@ def main() -> None:
 
     pred = SurrogatePredictor(
         ckpt_dir / "stage1.pt",
-        ckpt_dir / "stage2.pt",
+        Path(args.stage2) if args.stage2 else ckpt_dir / "stage2.pt",
         ckpt_dir / "stage2_config.json",
         data_dir / "baseline.npz",
         data_dir / "meta.json",
@@ -94,11 +117,20 @@ def main() -> None:
         cell_mean_z.setdefault(key, []).append(npz["full_z"][i])
     cell_mean_z_mean = {key: np.mean(v, axis=0) for key, v in cell_mean_z.items()}
 
+    # 格均值谱参照（格内工艺离散不可约 → 对"格典型谱"的公平评价基准）
+    cell_members: dict[tuple, list[int]] = {}
+    for j in range(len(npz["x_struct"])):
+        e_j, f_j, _a, ar_j, pf_j = npz["x_struct"][j]
+        cell_members.setdefault((float(e_j), float(f_j), float(pf_j), float(ar_j)), []).append(j)
+    cell_mean_true = {k: npz["full_z"][v].mean(axis=0) for k, v in cell_members.items()}
+
     rows = []
     for i in idx_all:
         true_z = npz["full_z"][i]
         true_params = npz["y_params"][i]
         eg, fl, _ag, area, pf = npz["x_struct"][i]
+        cell_key = (float(eg), float(fl), float(pf), float(area))
+        cm_true = cell_mean_true[cell_key]
         r = pred.predict(float(eg), float(fl), float(area), float(pf))
         pred_z = r["z_db"]
         pred_params = np.array([r["params"][c] for c in _PARAM_COLS])
@@ -138,6 +170,10 @@ def main() -> None:
             "fs_reextract_err_mhz": abs(fs_re - fs_t) * 1000,
             "fp_reextract_err_mhz": abs(fp_re - fp_t) * 1000,
             "rmse_full": _rmse(pred_z, true_z),
+            "rmse_aligned": _aligned_rmse(pred_z, true_z),
+            "rmse_cellmean": _rmse(pred_z, cm_true),
+            "rmse_b0_cellmean": _rmse(z_b0, cm_true),
+            "rmse_b2_cellmean": _rmse(z_b2, cm_true),
             **{f"rmse_{k}": _rmse(pred_z, true_z, m) for k, m in regions.items()},
             "rmse_b0": _rmse(z_b0, true_z),
             "rmse_b2": _rmse(z_b2, true_z),
@@ -168,6 +204,10 @@ def main() -> None:
         "fs_reextract_mae_mhz": _mean("fs_reextract_err_mhz"),
         "fp_reextract_mae_mhz": _mean("fp_reextract_err_mhz"),
         "rmse_full_db": _mean("rmse_full"),
+        "rmse_aligned_db": _mean("rmse_aligned"),
+        "rmse_cellmean_db": _mean("rmse_cellmean"),
+        "rmse_b0_cellmean_db": _mean("rmse_b0_cellmean"),
+        "rmse_b2_cellmean_db": _mean("rmse_b2_cellmean"),
         "rmse_dense_db": _mean("rmse_dense"),
         "rmse_transition_db": _mean("rmse_transition"),
         "rmse_far_db": _mean("rmse_far"),

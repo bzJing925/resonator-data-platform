@@ -109,23 +109,29 @@ class SurrogatePredictor:
         out2 = self.stage1(x_t, pb, sb)
         sparse_z = (out2["sparse"][0].cpu().numpy() * self.z_std + self.z_mean).astype(np.float64)
 
-        # Stage 2：稀疏点 + cond → 全谱
-        cond = torch.tensor(params[_COND_IDX], dtype=torch.float32, device=self.dev).unsqueeze(0)
+        # Stage 2：稀疏点 + cond → 全谱（cond/z 归一化，与 Step B 训练一致）
+        pm_c = self.p_mean[_COND_IDX]
+        ps_c = self.p_std[_COND_IDX]
+        cond = (
+            (torch.tensor(params[_COND_IDX], dtype=torch.float32, device=self.dev) - pm_c) / ps_c
+        ).unsqueeze(0)
         sample_freq = self.freq[pos]
+        sparse_z_n = (sparse_z - self.z_mean) / self.z_std
         samples = (
-            torch.from_numpy(np.stack([sample_freq, sparse_z], axis=-1))
+            torch.from_numpy(np.stack([sample_freq, sparse_z_n], axis=-1))
             .float()
             .unsqueeze(0)
             .to(self.dev)
         )
         zb = (
-            torch.from_numpy(baseline_interpolate(sample_freq, sparse_z, self.freq))
+            torch.from_numpy(baseline_interpolate(sample_freq, sparse_z_n, self.freq))
             .float()
             .unsqueeze(0)
             .to(self.dev)
         )
         freq_t = torch.from_numpy(self.freq).float().to(self.dev)
         z_pred = self.stage2(cond, samples, freq_t, z_baseline=zb)[0].cpu().numpy()
+        z_pred = z_pred * self.z_std + self.z_mean
 
         return {
             "params": {c: float(params[i]) for i, c in enumerate(_PARAM_COLS)},
