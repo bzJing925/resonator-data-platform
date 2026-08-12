@@ -51,6 +51,8 @@
   `backend/checkpoints_surrogate/`（stage1.pt、stage2.pt=Step B 微调版、b3、config/history）
 - 关键修复（48f21c3）：SparseReconstructor max_freq=10 使位置编码失效（注意力均匀化），
   改 0.1 + cond/z 归一化后残差通路才工作
+- 交互式探索器（8858061）：`cd backend && uv run python scripts/surrogate_viewer.py`
+  → http://localhost:8600 ，逐个输入 5 参数实时出谱 + 指标 + 同格真值叠加
 | 最终代码审查 | ⬜ | — |
 
 ## 4. 在新机器上恢复
