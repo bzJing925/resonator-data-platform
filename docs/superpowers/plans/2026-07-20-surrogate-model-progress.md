@@ -53,6 +53,11 @@
   改 0.1 + cond/z 归一化后残差通路才工作
 - 交互式探索器（8858061）：`cd backend && uv run python scripts/surrogate_viewer.py`
   → http://localhost:8600 ，逐个输入 5 参数实时出谱 + 指标 + 同格真值叠加
+- **平台集成**（b37873f + 8a90f22 + 78942a0）：平台新页『代理模型』（/surrogate），
+  API `/api/surrogate/status|predict`（懒单例 + LRU 缓存，未命中 20–80ms），
+  产物经 `SURROGATE_DATA_DIR`/`SURROGATE_CKPT_DIR` 配置（缺时页面降级提示）；
+  部署到桌面版/服务器时把 surrogate_data + checkpoints_surrogate 放到 backend 同级
+  或设环境变量；4 项 API 测试 + Playwright 页面验证通过
 | 最终代码审查 | ⬜ | — |
 
 ## 4. 在新机器上恢复
