@@ -37,6 +37,8 @@
 | 导出 | GET | `/api/exports/{id}` | 下载导出文件 |
 | 系统 | GET | `/api/health` | 健康检查 |
 | 系统 | GET | `/api/stats` | 系统总览（批次/器件/磁盘） |
+| 代理模型 | GET | `/api/surrogate/status` | 模型可用性 + 网格范围（产物缺失时 available=false 降级） |
+| 代理模型 | GET | `/api/surrogate/predict` | 结构参数 → 性能参数 + Z11(dB) 谱（含 B0 基准/稀疏点/同格真值叠加数据） |
 
 ---
 
@@ -448,3 +450,31 @@ full_freq_0, full_z_0, ..., full_freq_N-1, full_z_N-1
 1. 大文件上传：直接走 `multipart/form-data`（依赖 nginx `client_max_body_size`），还是引入 tus 协议？取决于客户网络情况。
 2. 是否支持上传**未压缩的文件夹**？需要前端先打成 zip。建议：**仅接受 zip**，前端用 JSZip 在浏览器侧打包。
 3. 滤波器入口是否也要 `/api/uploads?type=filter`？建议预留 `type` 字段，v1 只支持 `resonator`。
+
+## 12. 代理模型（surrogate）
+
+**GET `/api/surrogate/status`** — 模型可用性与输入网格：
+
+```json
+{ "available": true, "eg_min": 0.0, "eg_max": 2.0, "fl_min": 0.0, "fl_max": 2.0,
+  "areas": [700, 900, 1200, 1500, 2000, 2500, 3000, 3500, 4000, 4500, 5000, 5500] }
+```
+
+产物（`SURROGATE_DATA_DIR` / `SURROGATE_CKPT_DIR`，相对 backend/ 解析）缺失时：
+`{"available": false, "reason": "..."}`，前端页面显示降级提示，不影响平台其余功能。
+
+**GET `/api/surrogate/predict?eg&fl&area&pf&ag`** — 预测（pf 0/1，ag 默认 1.0）：
+
+```json
+{ "params": {"fs_ghz": 4.871, "fp_ghz": 5.153, "k2eff_pct": 12.73, "qs": 306.6,
+             "qp": 502.9, "qs_bodeq": 248.9, "qp_bodeq": 500.8},
+  "freq": [4.0, ...], "z": [...], "z_base": [...],
+  "sample_freq": [...], "sample_z": [...],
+  "in_grid": true,
+  "true_curves": [[...], ...], "true_mean": {"fs_ghz": 4.87, ...} }
+```
+
+- `z_base`：B0 基准谱（同面积/PF 的 eg=0/fl=0 基准，面积维插值）
+- `sample_*`：Stage 1 输出的 256 个确定性稀疏点（Stage 2 输入）
+- `true_curves`/`true_mean`：同结构格实测谱与参数均值（仅该格已流片时返回，≤5 条）
+- 产物缺失时 503。推理器懒加载常驻；预测按舍入键 LRU 缓存（命中 ~10ms，未命中 ~20–80ms）。
