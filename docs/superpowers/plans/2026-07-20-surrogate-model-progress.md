@@ -38,7 +38,19 @@
 | 11 端到端推理器 | ✅ | ac16c97 |
 | 12 推理 CLI | ✅ | 6f19150（+matplotlib 依赖） |
 | 13 评估脚本 | ✅ | 2b6b329（热图网格动态尺寸/npz 物化/fp 重提取补报） |
-| 14 真实数据运行验收 | 🔄 进行中 | 全量提取已启动（批次 #2，42,900 器件） |
+| 14 真实数据运行验收 | ✅（含结构修复迭代） | 实测结果见规格 §8.1；训练产物仅在 worktree 本地（gitignored） |
+| 最终代码审查 | ✅ | 8b7324e（Step A max_freq 半修复/CLI stage2 选项/默认超参对齐） |
+
+## 8. 最终状态（2026-08-10 收官）
+
+- 分支 `feat/backend-ml-surrogate` 全部完成（22 提交），45 项 ml 测试 + ruff 通过
+- 实测：全谱 RMSE 逐器件 1.20 dB / 格均值口径 0.93 dB / 位移对齐口径 0.72 dB；
+  **逐器件 0.5 dB 目标被证不可达**（格内工艺离散地板 0.79 dB，详见规格 §8.1）
+- 级联胜 B0/B2；fs MAE 11.4 MHz 不及 B3 的 9.46 MHz（地板 5.2 MHz）
+- 训练产物（不进 git）：`backend/surrogate_data/`（2,840 条 npz+meta+baseline）、
+  `backend/checkpoints_surrogate/`（stage1.pt、stage2.pt=Step B 微调版、b3、config/history）
+- 关键修复（48f21c3）：SparseReconstructor max_freq=10 使位置编码失效（注意力均匀化），
+  改 0.1 + cond/z 归一化后残差通路才工作
 | 最终代码审查 | ⬜ | — |
 
 ## 4. 在新机器上恢复
