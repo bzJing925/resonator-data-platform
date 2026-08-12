@@ -1,6 +1,6 @@
 import type { AxiosResponse } from 'axios';
 import api from './client';
-import type { Batch, CurveSeries, Device, FieldMeta, FileEntry, Mapping, MappingEntry, PagedList, StatsResponse, Task } from '../types';
+import type { Batch, CurveSeries, Device, FieldMeta, FileEntry, Mapping, MappingEntry, PagedList, StatsResponse, SurrogatePredictResponse, SurrogateStatus, Task } from '../types';
 
 export const getHealth = () => api.get('/health').then((r) => r.data);
 export const getStats = () => api.get('/stats').then((r: AxiosResponse<StatsResponse>) => r.data);
@@ -144,3 +144,8 @@ export const exportXlsx = (body: Record<string, unknown>) => api.post('/export/x
 export const downloadExport = (id: number | string) => api.get(`/exports/${id}`, { responseType: 'blob' });
 
 export type { CurveSeries };
+
+export const getSurrogateStatus = () =>
+  api.get('/surrogate/status').then((r: AxiosResponse<SurrogateStatus>) => r.data);
+export const predictSurrogate = (params: { eg: number; fl: number; area: number; pf: number; ag: number }) =>
+  api.get('/surrogate/predict', { params }).then((r: AxiosResponse<SurrogatePredictResponse>) => r.data);

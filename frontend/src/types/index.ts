@@ -187,3 +187,25 @@ export interface StatsResponse {
   tasks_running?: number;
   tasks_pending?: number;
 }
+
+export interface SurrogateStatus {
+  available: boolean;
+  reason?: string;
+  eg_min?: number;
+  eg_max?: number;
+  fl_min?: number;
+  fl_max?: number;
+  areas?: number[];
+}
+
+export interface SurrogatePredictResponse {
+  params: Record<string, number>;
+  freq: number[];
+  z: number[];
+  z_base: number[];
+  sample_freq: number[];
+  sample_z: number[];
+  in_grid: boolean;
+  true_curves?: number[][];
+  true_mean?: Record<string, number>;
+}
