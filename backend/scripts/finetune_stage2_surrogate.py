@@ -6,7 +6,7 @@ Step A 用真值稀疏点/cond 训练；推理时输入是 Stage 1 的预测点�
 
 用法：
     uv run python scripts/finetune_stage2_surrogate.py --data ./surrogate_data \
-        --ckpt ./checkpoints_surrogate --epochs 100 --lr 1e-4
+        --ckpt ./checkpoints_surrogate --from-scratch --epochs 400 --lr 5e-3
 """
 
 from __future__ import annotations
@@ -129,9 +129,9 @@ class StepBDataset(Dataset):
 def train(
     data_dir: str,
     ckpt_dir: str,
-    epochs: int = 100,
+    epochs: int = 400,
     batch_size: int = 256,
-    lr: float = 1e-3,
+    lr: float = 5e-3,
     patience: int = 20,
     scale_init: float = 1.0,
     from_scratch: bool = False,
@@ -242,9 +242,9 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", default="./surrogate_data")
     ap.add_argument("--ckpt", default="./checkpoints_surrogate")
-    ap.add_argument("--epochs", type=int, default=100)
+    ap.add_argument("--epochs", type=int, default=400)
     ap.add_argument("--batch-size", type=int, default=256)
-    ap.add_argument("--lr", type=float, default=1e-3)
+    ap.add_argument("--lr", type=float, default=5e-3)
     ap.add_argument("--patience", type=int, default=20)
     ap.add_argument(
         "--scale-init",
@@ -253,6 +253,11 @@ def main() -> None:
         help="重开残差通路的 residual_scale 初值（0=不重置）",
     )
     ap.add_argument("--smoke", action="store_true")
+    ap.add_argument(
+        "--from-scratch",
+        action="store_true",
+        help="不加载 stage2.pt，从零训练（归一化语义变更后使用）",
+    )
     args = ap.parse_args()
     train(
         args.data,
@@ -262,6 +267,7 @@ def main() -> None:
         args.lr,
         args.patience,
         args.scale_init,
+        args.from_scratch,
         args.smoke,
     )
 

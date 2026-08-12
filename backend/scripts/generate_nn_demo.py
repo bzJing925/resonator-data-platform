@@ -62,7 +62,9 @@ def main() -> int:
             return 1
         log.info(
             "批次 %s 共有 %d 个器件，随机抽取 %d 个",
-            BATCH_NO, batch.device_count, SAMPLE_SIZE,
+            BATCH_NO,
+            batch.device_count,
+            SAMPLE_SIZE,
         )
 
         # 标量列 + batch_no
@@ -98,7 +100,9 @@ def main() -> int:
 
             for row in rows:
                 out_row = _build_nn_export_row(
-                    dict(row), target_k=TARGET_K, target_n_freq=TARGET_N_FREQ,
+                    dict(row),
+                    target_k=TARGET_K,
+                    target_n_freq=TARGET_N_FREQ,
                 )
                 if out_row is None:
                     skipped += 1

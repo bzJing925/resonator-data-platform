@@ -43,9 +43,7 @@ class BaselineResidualMLP(nn.Module):
         self.head_params = nn.Sequential(
             nn.Linear(hidden, hidden), nn.GELU(), nn.Linear(hidden, n_params)
         )
-        self.head_sparse = nn.Sequential(
-            nn.Linear(hidden, hidden), nn.GELU(), nn.Linear(hidden, k)
-        )
+        self.head_sparse = nn.Sequential(nn.Linear(hidden, hidden), nn.GELU(), nn.Linear(hidden, k))
         # 零初始化双头最后一层：零残差 → 输出恒等于基准
         for head in (self.head_params, self.head_sparse):
             nn.init.zeros_(head[-1].weight)

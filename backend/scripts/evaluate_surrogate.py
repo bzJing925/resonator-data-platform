@@ -96,9 +96,16 @@ def main() -> None:
     if args.max_devices > 0:
         idx_all = idx_all[: args.max_devices]
 
+    if args.stage2:
+        stage2_path = Path(args.stage2)
+    else:  # Step B 微调产物优先
+        stage2_path = ckpt_dir / "stage2_ft.pt"
+        if not stage2_path.exists():
+            stage2_path = ckpt_dir / "stage2.pt"
+    print(f"Stage 2 权重: {stage2_path}")
     pred = SurrogatePredictor(
         ckpt_dir / "stage1.pt",
-        Path(args.stage2) if args.stage2 else ckpt_dir / "stage2.pt",
+        stage2_path,
         ckpt_dir / "stage2_config.json",
         data_dir / "baseline.npz",
         data_dir / "meta.json",
@@ -230,6 +237,9 @@ def main() -> None:
     print(json.dumps(report, ensure_ascii=False, indent=2))
 
     # 图 1：随机 6 个 test 器件 预测 vs 真值
+    if not rows:
+        print("无 test 器件，跳过绘图")
+        return
     rng = np.random.default_rng(0)
     pick = rng.choice(len(rows), size=min(6, len(rows)), replace=False)
     fig, axes = plt.subplots(2, 3, figsize=(15, 7))

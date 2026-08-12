@@ -36,15 +36,22 @@ def main() -> None:
     ap.add_argument("--data", default="./surrogate_data")
     ap.add_argument("--ckpt", default="./checkpoints_surrogate")
     ap.add_argument("--out", default="./pred_out")
+    ap.add_argument("--stage2", default="", help="Stage 2 权重（默认优先 ckpt/stage2_ft.pt）")
     args = ap.parse_args()
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     data, ckpt = Path(args.data), Path(args.ckpt)
 
+    if args.stage2:
+        stage2_path = Path(args.stage2)
+    else:  # Step B 微调产物优先（Stage 1 预测点分布训练，端到端口径）
+        stage2_path = ckpt / "stage2_ft.pt"
+        if not stage2_path.exists():
+            stage2_path = ckpt / "stage2.pt"
     pred = SurrogatePredictor(
         stage1_path=ckpt / "stage1.pt",
-        stage2_path=ckpt / "stage2.pt",
+        stage2_path=stage2_path,
         stage2_config=ckpt / "stage2_config.json",
         baseline_path=data / "baseline.npz",
         meta_path=data / "meta.json",

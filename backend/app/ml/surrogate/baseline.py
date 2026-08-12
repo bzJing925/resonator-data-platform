@@ -86,8 +86,11 @@ class BaselineTable:
 
     def save(self, path: str | Path) -> None:
         np.savez_compressed(
-            path, pfs=self.pfs, areas=self.areas,
-            params_base=self.params_base, z_base_full=self.z_base_full,
+            path,
+            pfs=self.pfs,
+            areas=self.areas,
+            params_base=self.params_base,
+            z_base_full=self.z_base_full,
         )
 
     @classmethod

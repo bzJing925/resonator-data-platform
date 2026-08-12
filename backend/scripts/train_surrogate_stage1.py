@@ -37,9 +37,9 @@ def _device() -> torch.device:
 def train(
     data_dir: str,
     out_dir: str,
-    epochs: int = 300,
-    batch_size: int = 512,
-    lr: float = 3e-4,
+    epochs: int = 500,
+    batch_size: int = 64,
+    lr: float = 1e-3,
     lambda_sparse: float = 0.1,
     patience: int = 30,
     smoke: bool = False,
@@ -124,9 +124,9 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", required=True)
     ap.add_argument("--out", default="./checkpoints_surrogate")
-    ap.add_argument("--epochs", type=int, default=300)
-    ap.add_argument("--batch-size", type=int, default=512)
-    ap.add_argument("--lr", type=float, default=3e-4)
+    ap.add_argument("--epochs", type=int, default=500)
+    ap.add_argument("--batch-size", type=int, default=64)
+    ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--lambda-sparse", type=float, default=0.1)
     ap.add_argument("--patience", type=int, default=30)
     ap.add_argument("--smoke", action="store_true")

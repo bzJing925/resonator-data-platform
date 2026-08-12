@@ -26,11 +26,10 @@ class SurrogateDataset(Dataset):
         self.k: int = meta["k"]
         self.n_freq: int = meta["n_freq"]
 
-        data = np.load(data_dir / "dataset.npz")
         keep_groups = {i for i, g in enumerate(meta["groups"]) if g["split"] == split}
         if not keep_groups:
             raise ValueError(f"meta['groups'] 中没有 split={split!r} 的组（检查 split 拼写）")
-        with data:
+        with np.load(data_dir / "dataset.npz") as data:
             mask = np.array([ci in keep_groups for ci in data["group_idx"]])
 
             self.x = torch.from_numpy(data["x_struct"][mask]).float()

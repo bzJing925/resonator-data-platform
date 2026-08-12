@@ -94,7 +94,10 @@ def train(
     if smoke:
         epochs = min(epochs, 2)
 
-    model = SparseReconstructor(d_model=64, n_encoder_layers=4, n_heads=4, dropout=0.1).to(dev)
+    # max_freq=0.1 必须与保存的 stage2_config.json 一致（频率标尺，勿改默认 10.0）
+    model = SparseReconstructor(
+        d_model=64, n_encoder_layers=4, n_heads=4, dropout=0.1, max_freq=0.1
+    ).to(dev)
     opt = torch.optim.AdamW(model.parameters(), lr=lr)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)
 
