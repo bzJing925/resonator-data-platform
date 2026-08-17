@@ -28,6 +28,9 @@ dependencies = [
     "zipfile-deflate64>=0.2",
     "watchfiles>=1.0",
     "zipstream-ng>=1.9",
+    "torch>=2.13.0",
+    "scikit-learn>=1.9.0",
+    "matplotlib>=3.11.1",
 ]
 
 [dependency-groups]
