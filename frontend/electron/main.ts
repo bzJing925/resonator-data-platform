@@ -70,6 +70,22 @@ function notifyBackendState(state: 'starting' | 'ready' | 'error') {
   }
 }
 
+// 窗口曾在后端未就绪时加载（或后端中途退出）→ 就绪后需要自动刷新一次，
+// 否则窗口停留在冷启动期间的报错页（数据请求打到旧端口/未就绪服务）。
+let reloadOnReady = false;
+
+function onBackendReady() {
+  backendReady = true;
+  notifyBackendState('ready');
+  console.log('[main] 后端服务就绪:', backendUrl);
+  startHealthCheck();
+  if (reloadOnReady && mainWindow && !mainWindow.isDestroyed()) {
+    reloadOnReady = false;
+    console.log('[main] 后端就绪，自动刷新主窗口');
+    mainWindow.webContents.reload();
+  }
+}
+
 /**
  * 清理残留的 aln-backend 进程（上次崩溃/强退遗留）。
  * 仅打包模式生效：开发模式的后端是 `python -m uvicorn`，不能按进程名误杀。
@@ -196,6 +212,7 @@ async function startBackend(): Promise<void> {
     console.log(`[main] 后端进程退出，code=${code}`);
     backendProcess = null;
     backendReady = false;
+    reloadOnReady = true; // 窗口可能仍持有旧端口，下次就绪时需刷新
     closeBackendLogFd();
     notifyBackendState('error');
     if (!isDev) {
@@ -205,13 +222,17 @@ async function startBackend(): Promise<void> {
 
   try {
     await waitForBackend(backendUrl);
-    backendReady = true;
-    notifyBackendState('ready');
-    console.log('[main] 后端服务就绪:', backendUrl);
-    startHealthCheck();
+    onBackendReady();
   } catch (e) {
     console.error('[main] 等待后端就绪超时:', e);
     notifyBackendState('error');
+    // 进程仍活着（冷启动导入慢，实测可达 ~40s）→ 转后台慢速继续等，
+    // 就绪后走同一 onBackendReady（含窗口自动刷新）
+    if (backendProcess) {
+      waitForBackend(backendUrl, 900, 1000)
+        .then(() => onBackendReady())
+        .catch(() => {});
+    }
   }
 }
 
@@ -289,6 +310,7 @@ function createMainWindow() {
     const indexPath = path.join(__dirname, '..', '..', 'dist', 'index.html');
     mainWindow.loadFile(indexPath);
   }
+  if (!backendReady) reloadOnReady = true; // 冷启动：窗口先于后端加载
 
   mainWindow.webContents.setWindowOpenHandler(({ url }: { url: string }) => {
     shell.openExternal(url);
