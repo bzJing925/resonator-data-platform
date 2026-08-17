@@ -109,6 +109,16 @@ def run(onedir: bool = False):
     # psycopg 需要完整打包，否则 PyInstaller 中可能出现编码/bytes 解析错误
     args.extend(["--collect-all", "psycopg", "--hidden-import", "psycopg_binary"])
 
+    # 代理模型推理：torch 体量大但页面实时推理必需（推理链路为懒加载导入，
+    # PyInstaller 静态分析发现不了，必须显式收集）
+    args.extend(["--collect-all", "torch"])
+    hidden.extend([
+        "app.ml.surrogate.infer",
+        "app.ml.surrogate.model",
+        "app.ml.surrogate.baseline",
+        "app.ml.sparse.reconstructor",
+    ])
+
     print("执行 PyInstaller...")
     subprocess.check_call([sys.executable, "-m", "PyInstaller"] + args)
 
@@ -129,6 +139,20 @@ def run(onedir: bool = False):
         shutil.copy2(src, dst)
         print(f"后端可执行文件已输出: {dst}")
 
+    # 代理模型产物：只并入推理必需文件（b3 joblib 35MB、训练 history 等不带进安装包）
+    surr_data = ROOT / "surrogate_data"
+    surr_ckpt = ROOT / "checkpoints_surrogate"
+    if surr_data.exists() and surr_ckpt.exists():
+        shutil.copytree(surr_data, FRONTEND_BUILD / "surrogate_data", dirs_exist_ok=True)
+        (FRONTEND_BUILD / "checkpoints_surrogate").mkdir(exist_ok=True)
+        for f in ("stage1.pt", "stage2.pt", "stage2_ft.pt", "stage2_config.json"):
+            src_f = surr_ckpt / f
+            if src_f.exists():
+                shutil.copy2(src_f, FRONTEND_BUILD / "checkpoints_surrogate" / f)
+        print("代理模型产物已并入安装包")
+    else:
+        print("警告：代理模型产物缺失（backend/surrogate_data 或 checkpoints_surrogate），"
+              "安装包内代理模型页将显示未部署")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="打包后端为桌面可执行文件")

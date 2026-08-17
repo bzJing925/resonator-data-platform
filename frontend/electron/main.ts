@@ -186,6 +186,13 @@ async function startBackend(): Promise<void> {
     ALN_BACKEND_PORT: String(port),
     MPLCONFIGDIR: mplDir,
     KEEP_RAW_ZIP: 'true',
+    // 代理模型产物随安装包放在 Resources/backend/ 下（dev 模式不设，走后端默认相对路径）
+    ...(isPackaged
+      ? {
+          SURROGATE_DATA_DIR: path.join(process.resourcesPath, 'backend', 'surrogate_data'),
+          SURROGATE_CKPT_DIR: path.join(process.resourcesPath, 'backend', 'checkpoints_surrogate'),
+        }
+      : {}),
   };
 
   const backendLogDir = path.join(desktopDir, 'logs');
