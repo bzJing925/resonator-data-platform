@@ -4,17 +4,15 @@
 import * as duckdb from '@duckdb/duckdb-wasm';
 import duckdb_wasm from '@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url';
 import mvp_worker from '@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?url';
-import duckdb_wasm_eh from '@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url';
-import eh_worker from '@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js?url';
 
 let _db: Promise<duckdb.AsyncDuckDB> | null = null;
 let _conn: Promise<duckdb.AsyncDuckDBConnection> | null = null;
 const _tables = new Map<string, Promise<void>>();
 
 async function init(): Promise<duckdb.AsyncDuckDB> {
+  // 只打 MVP bundle：eh 变体多 36MB wasm，MVP 全浏览器可用
   const bundle = await duckdb.selectBundle({
     mvp: { mainModule: duckdb_wasm, mainWorker: mvp_worker },
-    eh: { mainModule: duckdb_wasm_eh, mainWorker: eh_worker },
   });
   const worker = new Worker(bundle.mainWorker!);
   const db = new duckdb.AsyncDuckDB(

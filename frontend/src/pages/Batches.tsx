@@ -4,6 +4,7 @@ import I from '../components/Icons';
 import { listBatches, deleteBatch, renameBatch } from '../api/endpoints';
 import RenameBatchModal from '../components/RenameBatchModal';
 import { usePageState } from '../contexts/PageStateContext';
+import { IS_STATIC } from '../config';
 import type { Batch } from '../types';
 
 interface BatchRowProps {
@@ -48,12 +49,16 @@ const BatchRow = memo(function BatchRow({ batch, onDelete, onRename }: BatchRowP
           >
             <I.table size={12} />
           </Link>
-          <button className="btn ghost sm" title="重命名" onClick={() => onRename(b.batch_no)}>
-            <I.edit size={12} />
-          </button>
-          <button className="btn ghost sm danger" title="删除" onClick={() => onDelete(b.batch_no)}>
-            <I.trash size={12} />
-          </button>
+          {!IS_STATIC && (
+            <>
+              <button className="btn ghost sm" title="重命名" onClick={() => onRename(b.batch_no)}>
+                <I.edit size={12} />
+              </button>
+              <button className="btn ghost sm danger" title="删除" onClick={() => onDelete(b.batch_no)}>
+                <I.trash size={12} />
+              </button>
+            </>
+          )}
         </div>
       </td>
     </tr>
@@ -143,9 +148,11 @@ export default function Batches() {
         <span className="dim mono" style={{ fontSize: 11 }}>
           {data.total} 批次{loading && ' · 加载中…'}
         </span>
-        <Link to="/upload" className="btn primary" style={{ textDecoration: 'none' }}>
-          <I.upload size={13} /> 上传批次
-        </Link>
+        {!IS_STATIC && (
+          <Link to="/upload" className="btn primary" style={{ textDecoration: 'none' }}>
+            <I.upload size={13} /> 上传批次
+          </Link>
+        )}
       </div>
       <div style={{ flex: 1, overflow: 'auto' }}>
         {error && (

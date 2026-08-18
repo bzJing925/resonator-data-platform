@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import I from '../components/Icons';
 import { LineChart } from '../components/Charts';
 import { getSurrogateStatus, predictSurrogate } from '../api/endpoints';
+import { IS_STATIC } from '../config';
 import type { SurrogatePredictResponse, SurrogateStatus } from '../types';
 
 // 性能参数列（与后端 surr_param_cols 顺序一致）
@@ -66,10 +67,11 @@ export default function Surrogate() {
         s.push({
           x: data.freq,
           y: t,
-          name: i === 0 ? '同格真值' : undefined,
+          // 静态版叠加的是格均值谱（单条），HTTP 版是同格各器件谱
+          name: i === 0 ? (IS_STATIC ? '格均值真值' : '同格真值') : undefined,
           color: '#16a34a',
-          width: 1,
-          opacity: 0.55,
+          width: IS_STATIC ? 1.6 : 1,
+          opacity: IS_STATIC ? 0.9 : 0.55,
           mode: 'lines',
         });
       }
@@ -155,7 +157,7 @@ export default function Surrogate() {
         <div style={{ display: 'flex', gap: 14, fontSize: 12, color: 'var(--fg-2)', paddingBottom: 3 }}>
           <label><input type="checkbox" checked={showBase} onChange={(e) => setShowBase(e.target.checked)} /> B0 基准</label>
           <label><input type="checkbox" checked={showPts} onChange={(e) => setShowPts(e.target.checked)} /> 稀疏点</label>
-          <label><input type="checkbox" checked={showTrue} onChange={(e) => setShowTrue(e.target.checked)} /> 同格真值</label>
+          <label><input type="checkbox" checked={showTrue} onChange={(e) => setShowTrue(e.target.checked)} /> {IS_STATIC ? '格均值真值' : '同格真值'}</label>
         </div>
         {loading && <I.spinner size={14} style={{ animation: 'spin 1s linear infinite', color: 'var(--fg-3)' }} />}
       </div>
