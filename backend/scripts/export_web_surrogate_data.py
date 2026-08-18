@@ -10,8 +10,11 @@ import numpy as np
 
 def export_surrogate_webdata(surrogate_dir: Path, out_dir: Path) -> tuple[list[str], list[str]]:
     """返回 (written, missing)。任一源文件缺失 → 全部跳过并记入 missing。"""
-    need = [surrogate_dir / "baseline.npz", surrogate_dir / "meta.json",
-            surrogate_dir / "dataset.npz"]
+    need = [
+        surrogate_dir / "baseline.npz",
+        surrogate_dir / "meta.json",
+        surrogate_dir / "dataset.npz",
+    ]
     if not all(p.exists() for p in need):
         return [], ["baseline.json", "surr_meta.json", "cell_means.parquet"]
 
@@ -20,9 +23,19 @@ def export_surrogate_webdata(surrogate_dir: Path, out_dir: Path) -> tuple[list[s
     (out_dir / "baseline.json").write_text(json.dumps(baseline), encoding="utf-8")
 
     meta = json.loads((surrogate_dir / "meta.json").read_text(encoding="utf-8"))
-    surr_meta = {k: meta[k] for k in
-                 ("freq_ghz", "k", "x_mean", "x_std", "params_mean", "params_std",
-                  "z_mean", "z_std")}
+    surr_meta = {
+        k: meta[k]
+        for k in (
+            "freq_ghz",
+            "k",
+            "x_mean",
+            "x_std",
+            "params_mean",
+            "params_std",
+            "z_mean",
+            "z_std",
+        )
+    }
     (out_dir / "surr_meta.json").write_text(json.dumps(surr_meta), encoding="utf-8")
 
     import pandas as pd

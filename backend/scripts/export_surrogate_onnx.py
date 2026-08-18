@@ -41,44 +41,67 @@ def export_stage1(model: BaselineResidualMLP, out_path: str | Path, k: int) -> P
     args = (torch.zeros(1, 5), torch.zeros(1, 7), torch.zeros(1, k))
     with torch.no_grad():
         torch.onnx.export(
-            w, args, str(out_path), opset_version=17, dynamo=False,
+            w,
+            args,
+            str(out_path),
+            opset_version=17,
+            dynamo=False,
             input_names=["x", "params_base", "sparse_base"],
             output_names=["params", "sparse"],
-            dynamic_axes={"x": {0: "b"}, "params_base": {0: "b"}, "sparse_base": {0: "b"},
-                          "params": {0: "b"}, "sparse": {0: "b"}},
+            dynamic_axes={
+                "x": {0: "b"},
+                "params_base": {0: "b"},
+                "sparse_base": {0: "b"},
+                "params": {0: "b"},
+                "sparse": {0: "b"},
+            },
         )
     return Path(out_path)
 
 
-def export_stage2(model: SparseReconstructor, out_path: str | Path, k: int,
-                  n_freq: int) -> Path:
+def export_stage2(model: SparseReconstructor, out_path: str | Path, k: int, n_freq: int) -> Path:
     model = model.eval().requires_grad_(False)
 
     class _W(nn.Module):
         def forward(self, cond, samples, freq_target, z_baseline):
             return model(cond, samples, freq_target, z_baseline=z_baseline)
 
-    args = (torch.zeros(1, 5), torch.zeros(1, k, 2),
-            torch.zeros(1, n_freq), torch.zeros(1, n_freq))
+    args = (torch.zeros(1, 5), torch.zeros(1, k, 2), torch.zeros(1, n_freq), torch.zeros(1, n_freq))
     # 关掉 MHA 融合 fastpath：eval 模式下 nn.TransformerEncoderLayer 会走
     # aten::_transformer_encoder_layer_fwd（无 ONNX symbolic）；关掉后走可导出的慢路径。
     torch.backends.mha.set_fastpath_enabled(False)
     try:
         with torch.no_grad():
             torch.onnx.export(
-                _W(), args, str(out_path), opset_version=17, dynamo=False,
+                _W(),
+                args,
+                str(out_path),
+                opset_version=17,
+                dynamo=False,
                 input_names=["cond", "samples", "freq_target", "z_baseline"],
                 output_names=["z"],
-                dynamic_axes={"cond": {0: "b"}, "samples": {0: "b"}, "freq_target": {0: "b"},
-                              "z_baseline": {0: "b"}, "z": {0: "b"}},
+                dynamic_axes={
+                    "cond": {0: "b"},
+                    "samples": {0: "b"},
+                    "freq_target": {0: "b"},
+                    "z_baseline": {0: "b"},
+                    "z": {0: "b"},
+                },
             )
     finally:
         torch.backends.mha.set_fastpath_enabled(True)
     return Path(out_path)
 
 
-def _align_check(ckpt_dir: Path, data_dir: Path, s1_onnx: Path, s2_onnx: Path,
-                 stage2_path: Path, n_cases: int = 100, tol: float = 1e-3) -> None:
+def _align_check(
+    ckpt_dir: Path,
+    data_dir: Path,
+    s1_onnx: Path,
+    s2_onnx: Path,
+    stage2_path: Path,
+    n_cases: int = 100,
+    tol: float = 1e-3,
+) -> None:
     """真实数据对齐：torch vs onnxruntime（归一化空间，1e-3 容差）。"""
     import onnxruntime as ort
 
@@ -104,9 +127,13 @@ def _align_check(ckpt_dir: Path, data_dir: Path, s1_onnx: Path, s2_onnx: Path,
     s1 = ort.InferenceSession(str(s1_onnx))
     p_o, s_o = s1.run(None, {"x": x_n, "params_base": pb_n, "sparse_base": sb_n})
     c1 = torch.load(ckpt_dir / "stage1.pt", map_location="cpu", weights_only=True)
-    m1 = BaselineResidualMLP(in_dim=c1["in_dim"], hidden=c1["hidden"],
-                             n_res_blocks=c1["n_res_blocks"], n_params=c1["n_params"],
-                             k=c1["k"]).eval()
+    m1 = BaselineResidualMLP(
+        in_dim=c1["in_dim"],
+        hidden=c1["hidden"],
+        n_res_blocks=c1["n_res_blocks"],
+        n_params=c1["n_params"],
+        k=c1["k"],
+    ).eval()
     m1.load_state_dict(c1["model_state"])
     with torch.no_grad():
         ref = m1(torch.from_numpy(x_n), torch.from_numpy(pb_n), torch.from_numpy(sb_n))
@@ -121,18 +148,22 @@ def _align_check(ckpt_dir: Path, data_dir: Path, s1_onnx: Path, s2_onnx: Path,
     sfreq = freq[sample_pos]
     sz_n = ((y_sparse - zm) / zs).astype(np.float32)
     samples = np.stack([sfreq, sz_n], axis=-1).astype(np.float32)
-    zb = np.stack([baseline_interpolate(sfreq[i], sz_n[i], freq)
-                   for i in range(len(sfreq))]).astype(np.float32)
+    zb = np.stack(
+        [baseline_interpolate(sfreq[i], sz_n[i], freq) for i in range(len(sfreq))]
+    ).astype(np.float32)
     ft = np.tile(freq, (len(samples), 1))
     s2 = ort.InferenceSession(str(s2_onnx))
-    (z_o,) = s2.run(None, {"cond": cond, "samples": samples,
-                           "freq_target": ft, "z_baseline": zb})
+    (z_o,) = s2.run(None, {"cond": cond, "samples": samples, "freq_target": ft, "z_baseline": zb})
     cfg = json.loads((ckpt_dir / "stage2_config.json").read_text(encoding="utf-8"))
     m2 = SparseReconstructor(**cfg).eval()
     m2.load_state_dict(torch.load(stage2_path, map_location="cpu", weights_only=True))
     with torch.no_grad():
-        ref2 = m2(torch.from_numpy(cond), torch.from_numpy(samples),
-                  torch.from_numpy(ft), z_baseline=torch.from_numpy(zb))
+        ref2 = m2(
+            torch.from_numpy(cond),
+            torch.from_numpy(samples),
+            torch.from_numpy(ft),
+            z_baseline=torch.from_numpy(zb),
+        )
     np.testing.assert_allclose(z_o, ref2.numpy(), atol=tol)
     print(f"对齐校验通过（{len(x_n)} 例，容差 {tol}）")
 
@@ -147,9 +178,13 @@ def main() -> None:
     out.mkdir(parents=True, exist_ok=True)
 
     c1 = torch.load(ckpt / "stage1.pt", map_location="cpu", weights_only=True)
-    m1 = BaselineResidualMLP(in_dim=c1["in_dim"], hidden=c1["hidden"],
-                             n_res_blocks=c1["n_res_blocks"], n_params=c1["n_params"],
-                             k=c1["k"]).eval()
+    m1 = BaselineResidualMLP(
+        in_dim=c1["in_dim"],
+        hidden=c1["hidden"],
+        n_res_blocks=c1["n_res_blocks"],
+        n_params=c1["n_params"],
+        k=c1["k"],
+    ).eval()
     m1.load_state_dict(c1["model_state"])
     cfg = json.loads((ckpt / "stage2_config.json").read_text(encoding="utf-8"))
     m2 = SparseReconstructor(**cfg).eval()

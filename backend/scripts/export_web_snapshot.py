@@ -14,7 +14,7 @@ import argparse
 import json
 import sqlite3
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -24,17 +24,72 @@ sys.path.insert(0, str(PROJECT_ROOT))
 DEVICE_EXCLUDE = {"s_param_path"}
 
 DEVICE_COLS = [
-    "id", "batch_id", "original_filename", "display_name", "mark", "wafer", "folder_name",
-    "coord", "x", "y", "eg", "fl", "ag", "pf", "area_n", "area_um2",
-    "fs_ghz", "fp_ghz", "zs_ohm", "zp_ohm", "qs", "qp", "qs_bodeq", "qp_bodeq",
-    "dbqs", "dbqp", "bodeq_fitted", "bodeq_smooth", "bodeq_raw", "fbode_ghz",
-    "k2eff_pct", "fp2_ghz", "fs2_ghz", "zp2_ohm", "zs2_ohm", "deembedded", "s_param_port",
+    "id",
+    "batch_id",
+    "original_filename",
+    "display_name",
+    "mark",
+    "wafer",
+    "folder_name",
+    "coord",
+    "x",
+    "y",
+    "eg",
+    "fl",
+    "ag",
+    "pf",
+    "area_n",
+    "area_um2",
+    "fs_ghz",
+    "fp_ghz",
+    "zs_ohm",
+    "zp_ohm",
+    "qs",
+    "qp",
+    "qs_bodeq",
+    "qp_bodeq",
+    "dbqs",
+    "dbqp",
+    "bodeq_fitted",
+    "bodeq_smooth",
+    "bodeq_raw",
+    "fbode_ghz",
+    "k2eff_pct",
+    "fp2_ghz",
+    "fs2_ghz",
+    "zp2_ohm",
+    "zs2_ohm",
+    "deembedded",
+    "s_param_port",
 ]
 
-BATCH_COLS = ["id", "batch_no", "mapping_id", "f_start_ghz", "f_end_ghz",
-              "deembedded", "uploaded_at", "device_count"]
-ENTRY_COLS = ["id", "mapping_id", "mark", "description", "eg", "fl", "ag",
-              "area_s11", "area_s22", "has_pf"]
+# batches 列：file_path/raw_zip_path/source 是服务器路径，静态版无意义不导出
+BATCH_COLS = [
+    "id",
+    "batch_no",
+    "mapping_id",
+    "f_start_ghz",
+    "f_end_ghz",
+    "deembedded",
+    "deembed_method",
+    "process_type",
+    "uploaded_at",
+    "uploaded_by",
+    "device_count",
+    "task_id",
+]
+ENTRY_COLS = [
+    "id",
+    "mapping_id",
+    "mark",
+    "description",
+    "eg",
+    "fl",
+    "ag",
+    "area_s11",
+    "area_s22",
+    "has_pf",
+]
 
 
 def _rows(conn: sqlite3.Connection, table: str, cols: list[str]) -> list[dict]:
@@ -42,8 +97,7 @@ def _rows(conn: sqlite3.Connection, table: str, cols: list[str]) -> list[dict]:
     return [dict(zip(cols, r, strict=True)) for r in cur.fetchall()]
 
 
-def export_all(db_path: str | Path, surrogate_dir: str | Path | None,
-               out_dir: str | Path) -> dict:
+def export_all(db_path: str | Path, surrogate_dir: str | Path | None, out_dir: str | Path) -> dict:
     import pandas as pd  # 延迟导入：脚本级依赖
 
     out = Path(out_dir)
@@ -64,21 +118,18 @@ def export_all(db_path: str | Path, surrogate_dir: str | Path | None,
 
     # batches.json
     batches = _rows(conn, "batches", BATCH_COLS)
-    (out / "batches.json").write_text(
-        json.dumps(batches, ensure_ascii=False), encoding="utf-8")
+    (out / "batches.json").write_text(json.dumps(batches, ensure_ascii=False), encoding="utf-8")
     written.append("batches.json")
 
-    # mappings.json（含 entries）
-    mappings = _rows(conn, "mappings", ["id", "name", "uploaded_at"])
+    # mappings.json（含 entries；entry_count 直接取表列）
+    mappings = _rows(conn, "mappings", ["id", "name", "entry_count", "uploaded_at"])
     entries = _rows(conn, "mapping_entries", ENTRY_COLS)
     by_mid: dict[int, list[dict]] = {}
     for e in entries:
         by_mid.setdefault(e["mapping_id"], []).append(e)
     for m in mappings:
         m["entries"] = by_mid.get(m["id"], [])
-        m["entry_count"] = len(m["entries"])
-    (out / "mappings.json").write_text(
-        json.dumps(mappings, ensure_ascii=False), encoding="utf-8")
+    (out / "mappings.json").write_text(json.dumps(mappings, ensure_ascii=False), encoding="utf-8")
     written.append("mappings.json")
 
     # process.json（复用 api.process 的 STEPS 元数据；表不存在则跳过）
@@ -93,51 +144,109 @@ def export_all(db_path: str | Path, surrogate_dir: str | Path | None,
         if not exists:
             continue
         names = [f.name for f in fields]
-        rows = _rows(conn, table, ["id", *names]) if "id" not in names else _rows(conn, table, names)
+        if "id" not in names:
+            names = ["id", *names]
+        rows = _rows(conn, table, names)
         process[key] = {
             "label": label,
             "fields": [f.model_dump() for f in fields],
             "rows": rows,
         }
     (out / "process.json").write_text(
-        json.dumps(process, ensure_ascii=False, default=str), encoding="utf-8")
+        json.dumps(process, ensure_ascii=False, default=str), encoding="utf-8"
+    )
     written.append("process.json")
 
-    # stats.json（对齐 /api/stats 的核心字段）
+    # stats.json（与 /api/stats 同键；静态版无任务/磁盘语义 → 0/null）
     n_dev = conn.execute("SELECT COUNT(*) FROM devices").fetchone()[0]
-    n_pass = conn.execute("SELECT COUNT(*) FROM devices WHERE pf='Y'").fetchone()[0]
     stats = {
-        "total_batches": len(batches),
-        "total_devices": n_dev,
-        "pass_devices": n_pass,
-        "pass_rate": (n_pass / n_dev) if n_dev else 0.0,
+        "batches": len(batches),
+        "devices": n_dev,
+        "mappings": len(mappings),
+        "disk_used_gb": None,
+        "disk_free_gb": None,
+        "tasks_pending": 0,
+        "tasks_running": 0,
     }
     (out / "stats.json").write_text(json.dumps(stats), encoding="utf-8")
     written.append("stats.json")
 
-    # fields.json（/api/query/fields 的静态等价）
+    # fields.json（精确镜像后端 /api/query/fields 的硬编码结构；
+    # values_endpoint 仅作"可取 distinct"标记，前端实际调 distinctValues(field)）
     fields = {
         "categorical": [
-            {"name": "batch_no", "label": "批次号", "values": sorted({b["batch_no"] for b in batches})},
-            {"name": "wafer", "label": "Wafer"},
-            {"name": "pf", "label": "Pass/Fail", "values": ["Y", "N"]},
-            {"name": "folder_name", "label": "端口", "values": ["S11", "S22"]},
+            {
+                "name": "batch_no",
+                "label": "批次号",
+                "values_endpoint": "/api/query/distinct?field=batch_no",
+            },
+            {
+                "name": "wafer",
+                "label": "晶圆 (Wafer)",
+                "values_endpoint": "/api/query/distinct?field=wafer",
+            },
+            {"name": "pf", "label": "PF", "values": ["Y", "N"]},
+            {"name": "folder_name", "label": "端口 (S11/S22)", "values": ["S11", "S22"]},
+            {
+                "name": "original_filename",
+                "label": "原始文件名",
+                "values_endpoint": "/api/query/distinct?field=original_filename",
+            },
+            {
+                "name": "display_name",
+                "label": "展示名",
+                "values_endpoint": "/api/query/distinct?field=display_name",
+            },
+            {"name": "mark", "label": "代号", "values_endpoint": "/api/query/distinct?field=mark"},
+            {
+                "name": "coord",
+                "label": "坐标",
+                "values_endpoint": "/api/query/distinct?field=coord",
+            },
+            {
+                "name": "area_n",
+                "label": "区域编号",
+                "values_endpoint": "/api/query/distinct?field=area_n",
+            },
         ],
         "geometric": [
-            {"name": "x", "label": "X 坐标"}, {"name": "y", "label": "Y 坐标"},
+            {"name": "x", "label": "X 坐标"},
+            {"name": "y", "label": "Y 坐标"},
         ],
         "numeric": [
-            {"name": n, "label": n} for n in cols
-            if n not in ("id", "batch_id", "original_filename", "display_name", "mark",
-                         "coord", "folder_name", "pf", "deembedded", "s_param_port")
+            {"name": "fs_ghz", "label": "fs(GHz)", "unit": ""},
+            {"name": "fp_ghz", "label": "fp(GHz)", "unit": ""},
+            {"name": "zs_ohm", "label": "Zs", "unit": "Ω"},
+            {"name": "zp_ohm", "label": "Zp", "unit": "Ω"},
+            {"name": "qs", "label": "Qs", "unit": ""},
+            {"name": "qp", "label": "Qp", "unit": ""},
+            {"name": "qs_bodeq", "label": "bodeQs", "unit": ""},
+            {"name": "qp_bodeq", "label": "bodeQp", "unit": ""},
+            {"name": "dbqs", "label": "dBQs", "unit": "dB"},
+            {"name": "dbqp", "label": "dBQp", "unit": "dB"},
+            {"name": "bodeq_fitted", "label": "BodeQ 拟合", "unit": ""},
+            {"name": "bodeq_smooth", "label": "BodeQ 平滑", "unit": ""},
+            {"name": "bodeq_raw", "label": "BodeQ 原始", "unit": ""},
+            {"name": "fbode_ghz", "label": "fBode(GHz)", "unit": ""},
+            {"name": "k2eff_pct", "label": "k²eff(%)", "unit": ""},
+            {"name": "fp2_ghz", "label": "fp2(GHz)", "unit": ""},
+            {"name": "fs2_ghz", "label": "fs2(GHz)", "unit": ""},
+            {"name": "zp2_ohm", "label": "二次并联阻抗 (Zp2)", "unit": "Ω"},
+            {"name": "zs2_ohm", "label": "二次串联阻抗 (Zs2)", "unit": "Ω"},
         ],
         "process": [
-            {"name": "eg", "label": "EG"}, {"name": "fl", "label": "FL"},
-            {"name": "ag", "label": "AG"},
+            {"name": "eg", "label": "EG", "values_endpoint": "/api/query/distinct?field=eg"},
+            {"name": "fl", "label": "FL", "values_endpoint": "/api/query/distinct?field=fl"},
+            {"name": "ag", "label": "AG", "values_endpoint": "/api/query/distinct?field=ag"},
+            {
+                "name": "area_um2",
+                "label": "面积",
+                "unit": "",
+                "values_endpoint": "/api/query/distinct?field=area_um2",
+            },
         ],
     }
-    (out / "fields.json").write_text(
-        json.dumps(fields, ensure_ascii=False), encoding="utf-8")
+    (out / "fields.json").write_text(json.dumps(fields, ensure_ascii=False), encoding="utf-8")
     written.append("fields.json")
 
     missing: list[str] = []
@@ -149,13 +258,14 @@ def export_all(db_path: str | Path, surrogate_dir: str | Path | None,
         missing += m
 
     manifest = {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "files": written,
         "missing": missing,
         "counts": {"devices": int(n_dev), "batches": len(batches)},
     }
     (out / "manifest.json").write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     conn.close()
     return manifest
 
