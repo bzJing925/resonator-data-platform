@@ -1,18 +1,20 @@
 import type { AxiosResponse } from 'axios';
 import api from './client';
 import type { Batch, CurveSeries, Device, FieldMeta, FileEntry, Mapping, MappingEntry, PagedList, ProcessStep, ProcessStepData, StatsResponse, SurrogatePredictResponse, SurrogateStatus, Task } from '../types';
+import { IS_STATIC } from '../config';
+import * as staticApi from './static';
 
-export const getHealth = () => api.get('/health').then((r) => r.data);
-export const getStats = () => api.get('/stats').then((r: AxiosResponse<StatsResponse>) => r.data);
+const httpGetHealth = () => api.get('/health').then((r) => r.data);
+const httpGetStats = () => api.get('/stats').then((r: AxiosResponse<StatsResponse>) => r.data);
 
-export const listProcessSteps = () =>
+const httpListProcessSteps = () =>
   api.get('/process/steps').then((r: AxiosResponse<ProcessStep[]>) => r.data);
-export const getProcessStep = (step: string) =>
+const httpGetProcessStep = (step: string) =>
   api.get(`/process/${step}`).then((r: AxiosResponse<ProcessStepData>) => r.data);
 
-export const listBatches = (params?: Record<string, unknown>) =>
+const httpListBatches = (params?: Record<string, unknown>) =>
   api.get('/batches', { params }).then((r: AxiosResponse<PagedList<Batch> | { items: Batch[]; total: number }>) => r.data);
-export const getBatch = (batchNo: string) =>
+const httpGetBatch = (batchNo: string) =>
   api.get(`/batches/${encodeURIComponent(batchNo)}`).then((r: AxiosResponse<Batch>) => r.data);
 export const deleteBatch = (batchNo: string) =>
   api.delete(`/batches/${encodeURIComponent(batchNo)}`).then((r) => r.data);
@@ -20,7 +22,7 @@ export const renameBatch = (batchNo: string, newBatchNo: string) =>
   api
     .post(`/batches/${encodeURIComponent(batchNo)}/rename`, { new_batch_no: newBatchNo })
     .then((r) => r.data as { batch_no: string });
-export const listBatchDevices = (batchNo: string, params?: Record<string, unknown>) =>
+const httpListBatchDevices = (batchNo: string, params?: Record<string, unknown>) =>
   api
     .get(`/batches/${encodeURIComponent(batchNo)}/devices`, { params })
     .then((r: AxiosResponse<PagedList<Device>>) => r.data);
@@ -40,14 +42,14 @@ export const getFileCurve = (batchNo: string, relpath: string, param = 'z_mag_db
     })
     .then((r: AxiosResponse<{ relpath: string; port: string; freq_ghz: number[]; values: number[] }>) => r.data);
 
-export const listMappings = () => api.get('/mappings').then((r: AxiosResponse<Mapping[] | PagedList<Mapping>>) => r.data);
+const httpListMappings = () => api.get('/mappings').then((r: AxiosResponse<Mapping[] | PagedList<Mapping>>) => r.data);
 export const createMapping = (formData: FormData) =>
   api
     .post('/mappings', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     })
     .then((r) => r.data);
-export const listMappingEntries = (id: number | string, params?: Record<string, unknown>) =>
+const httpListMappingEntries = (id: number | string, params?: Record<string, unknown>) =>
   api.get(`/mappings/${id}/entries`, { params }).then((r: AxiosResponse<PagedList<MappingEntry>>) => r.data);
 export const deleteMapping = (id: number | string) =>
   api.delete(`/mappings/${id}`).then((r) => r.data);
@@ -61,7 +63,7 @@ export const uploadBatch = (formData: FormData, onProgress?: (e: { loaded: numbe
     })
     .then((r) => r.data);
 
-export const listTasks = (params?: Record<string, unknown>) =>
+const httpListTasks = (params?: Record<string, unknown>) =>
   api.get('/tasks', { params }).then((r: AxiosResponse<Task[] | PagedList<Task>>) => r.data);
 export const getTask = (taskId: number | string) =>
   api.get(`/tasks/${taskId}`).then((r: AxiosResponse<Task>) => r.data);
@@ -75,22 +77,21 @@ export const redeembedBatch = (batchNo: string) =>
 export const recomputeBatch = (batchNo: string, metrics: string[]) =>
   api.post(`/batches/${encodeURIComponent(batchNo)}/recompute`, { metrics }).then((r) => r.data);
 
-export const queryDevices = (body: Record<string, unknown>) =>
+const httpQueryDevices = (body: Record<string, unknown>) =>
   api.post('/query/devices', body).then((r) => r.data);
-export const queryAggregate = (body: Record<string, unknown>) =>
+const httpQueryAggregate = (body: Record<string, unknown>) =>
   api.post('/query/aggregate', body).then((r) => r.data);
-export const getQueryFields = () => api.get('/query/fields').then((r: AxiosResponse<Record<string, FieldMeta[]>>) => r.data);
-export const getQueryDistinct = (field: string, limit = 500) =>
+const httpGetQueryFields = () => api.get('/query/fields').then((r: AxiosResponse<Record<string, FieldMeta[]>>) => r.data);
+const httpGetQueryDistinct = (field: string, limit = 500) =>
   api.get('/query/distinct', { params: { field, limit } }).then((r: AxiosResponse<unknown[] | { values: unknown[] }>) => r.data);
-// Alias commonly used by UI components
-export const distinctValues = (field: string, limit = 500) => getQueryDistinct(field, limit);
 
 export const getDeviceSparam = (id: number | string, param = 's11_db') =>
   api
     .get(`/devices/${id}/sparam`, { params: { param } })
     .then((r) => r.data);
 export const getDeviceBodeq = (id: number | string) =>
-  api.get(`/devices/${id}/bodeq`).then((r) => r.data);
+  api
+    .get(`/devices/${id}/bodeq`).then((r) => r.data);
 
 export const getDeviceSparseSparam = (id: number | string, param = 'z_mag_db', piezo = '308', nPoints = 300) =>
   api
@@ -142,7 +143,7 @@ export const downloadDeviceS1p = (id: number | string) =>
     responseType: 'blob',
   });
 
-export const exportCsv = (body: Record<string, unknown>) => api.post('/export/csv', body, { responseType: 'blob' });
+const httpExportCsv = (body: Record<string, unknown>) => api.post('/export/csv', body, { responseType: 'blob' });
 export const exportNnCsv = (body: Record<string, unknown>, timeoutMs: number = 0) =>
   api.post('/export/nn-csv', body, { responseType: 'blob', timeout: timeoutMs });
 export const exportXlsx = (body: Record<string, unknown>) => api.post('/export/xlsx', body).then((r) => r.data);
@@ -150,7 +151,32 @@ export const downloadExport = (id: number | string) => api.get(`/exports/${id}`,
 
 export type { CurveSeries };
 
-export const getSurrogateStatus = () =>
+const httpGetSurrogateStatus = () =>
   api.get('/surrogate/status').then((r: AxiosResponse<SurrogateStatus>) => r.data);
-export const predictSurrogate = (params: { eg: number; fl: number; area: number; pf: number; ag: number }) =>
+const httpPredictSurrogate = (params: { eg: number; fl: number; area: number; pf: number; ag: number }) =>
   api.get('/surrogate/predict', { params }).then((r: AxiosResponse<SurrogatePredictResponse>) => r.data);
+
+/* --------------------------------------------------------------------------
+ * IS_STATIC 分发：静态网页版（VITE_STATIC=1）走 DuckDB-WASM/JSON/ONNX 实现，
+ * 其余保持 HTTP。写操作与文件/曲线类接口在静态模式下不可达（UI 已裁剪），故不分发。
+ * ------------------------------------------------------------------------ */
+
+export const getHealth = IS_STATIC ? staticApi.getHealth : httpGetHealth;
+export const getStats = IS_STATIC ? staticApi.getStats : httpGetStats;
+export const listTasks = (IS_STATIC ? staticApi.listTasks : httpListTasks) as typeof httpListTasks;
+export const listProcessSteps = (IS_STATIC ? staticApi.listProcessSteps : httpListProcessSteps) as typeof httpListProcessSteps;
+export const getProcessStep = (IS_STATIC ? staticApi.getProcessStep : httpGetProcessStep) as typeof httpGetProcessStep;
+export const listBatches = (IS_STATIC ? staticApi.listBatches : httpListBatches) as typeof httpListBatches;
+export const getBatch = (IS_STATIC ? staticApi.getBatch : httpGetBatch) as typeof httpGetBatch;
+export const listBatchDevices = (IS_STATIC ? staticApi.listBatchDevices : httpListBatchDevices) as typeof httpListBatchDevices;
+export const listMappings = (IS_STATIC ? staticApi.listMappings : httpListMappings) as typeof httpListMappings;
+export const listMappingEntries = (IS_STATIC ? staticApi.listMappingEntries : httpListMappingEntries) as typeof httpListMappingEntries;
+export const queryDevices = (IS_STATIC ? staticApi.queryDevices : httpQueryDevices) as typeof httpQueryDevices;
+export const queryAggregate = (IS_STATIC ? staticApi.queryAggregate : httpQueryAggregate) as typeof httpQueryAggregate;
+export const getQueryFields = (IS_STATIC ? staticApi.getQueryFields : httpGetQueryFields) as typeof httpGetQueryFields;
+export const getQueryDistinct = (IS_STATIC ? staticApi.getQueryDistinct : httpGetQueryDistinct) as typeof httpGetQueryDistinct;
+// Alias commonly used by UI components
+export const distinctValues = (field: string, limit = 500) => getQueryDistinct(field, limit);
+export const exportCsv = (IS_STATIC ? staticApi.exportCsv : httpExportCsv) as unknown as typeof httpExportCsv;
+export const getSurrogateStatus = (IS_STATIC ? staticApi.getSurrogateStatus : httpGetSurrogateStatus) as typeof httpGetSurrogateStatus;
+export const predictSurrogate = (IS_STATIC ? staticApi.predictSurrogate : httpPredictSurrogate) as typeof httpPredictSurrogate;
