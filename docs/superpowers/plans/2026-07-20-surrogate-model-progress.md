@@ -109,3 +109,14 @@ uv run python -c "import torch, skrf, sklearn; print(torch.backends.mps.is_avail
 | `aln-data-migration.bundle` | git 全分支完整历史（main + feat/backend-ml-surrogate + backup 等） |
 | `claude-skills.tar.gz` | 仓库 `.claude/`（superpowers 技能框架 + 设置；被 .gitignore 不入库） |
 | `~/.aln-data/`（单独拷贝） | 桌面版数据库 + S 参数文件（任务 14 输入；28MB db + files/） |
+
+## 9. 仿真补充实验（2026-08-19，负结果，细节见规格 §8.2）
+
+COMSOL D1/D2 仿真补充实测的完整实验已收官，**结论为负：不更换生产 checkpoint**。
+
+- 可行性（2026-08-17）：仿真 100% 覆盖实测 568 格 + 63 个中间水平新格（L_AG=1.0 过滤后）；域差系统性可校准（ExtraTrees Δ，纯 train 格防泄漏，CV fs 9.9 / fp 13.9 MHz）；Q 不可用（+485%）
+- 混合训练：实测 2,391 + 63 校准伪标签格（权重 0.3，pmask 屏蔽 Q 系）
+- 多种子消融（3 种子，scripts/hybrid_ablation.py）：test fs baseline 13.80±2.78 / hybrid63 13.74±1.37 / hybrid43 14.28±1.05（全在种子噪声内）；**留出 20 仿真格公平对比 fs 11.42（baseline）→ 14.19（hybrid43），缝隙填充无收益**
+- 副产物（正）：纯实测模型在缝隙格上对校准伪标签 fs MAE 11.4 MHz ≈ 校准器噪声地板 → 实测网格够密，COMSOL 独立验证了缝隙插值可信
+- 注意：种子彩票实测达 ±3.4 MHz，任何单跑对比（如 11.41 vs 12.90）无意义，评估必须多种子
+- 基础设施保留可复用：sim_offset_analysis.py / build_sim_supplement.py / train_surrogate_stage1.py --sim-npz/--sim-weight/--seed / hybrid_ablation.py；产物 backend/sim_offset_report/、backend/ckpt_ablation/（gitignored）
