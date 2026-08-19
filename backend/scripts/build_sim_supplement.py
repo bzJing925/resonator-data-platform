@@ -159,6 +159,38 @@ def main() -> None:
         in_range = in_range[~bad]
     print(f"仿真独有格 {len(only)}，范围内可用 {len(in_range)} 格")
 
+    # ── 范围外扩展格（如 area=600）：eg/fl 在实测范围内（校准器可插值），
+    #    仅 area 越界（ExtraTrees 平推，Δ≈端点值）→ 单独写 sim_extension.npz ──
+    ext = only[
+        only["eg"].between(eg_lo, eg_hi)
+        & only["fl"].between(fl_lo, fl_hi)
+        & ~only["area"].between(ar_lo, ar_hi)
+    ].copy()
+    if len(ext):
+        x_ext = ext[["eg", "fl", "area", "has_PF"]].to_numpy()
+        ext["fs_cal"] = ext["sim_fs"] - calibrators["d_fs"].predict(x_ext) / 1000
+        ext["fp_cal"] = ext["sim_fp"] - calibrators["d_fp"].predict(x_ext) / 1000
+        ext = ext[ext["fp_cal"] > ext["fs_cal"]]
+        ext_path = Path(args.out).parent / "sim_extension.npz"
+        np.savez_compressed(
+            ext_path,
+            x_struct=(
+                ext[["eg", "fl"]]
+                .assign(ag=1.0, area=ext["area"], pf=ext["has_PF"])
+                .to_numpy(dtype=np.float32)
+            ),
+            params3=np.stack(
+                [
+                    ext["fs_cal"].to_numpy(),
+                    ext["fp_cal"].to_numpy(),
+                    [_kt2_pct(f, p) for f, p in zip(ext["fs_cal"], ext["fp_cal"], strict=False)],
+                ],
+                axis=1,
+            ).astype(np.float32),
+            cells=ext[["eg", "fl", "area", "has_PF"]].to_numpy(),
+        )
+        print(f"范围外扩展格 {len(ext)}（area {sorted(ext['area'].unique())}）→ {ext_path}")
+
     x_out = (
         in_range[["eg", "fl"]]
         .assign(ag=1.0, area=in_range["area"], pf=in_range["has_PF"])
