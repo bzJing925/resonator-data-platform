@@ -54,6 +54,7 @@ def _extract_one(rel_path: str) -> dict | None:
             "qs": float(d.get("qs") or np.nan),
             "qp": float(d.get("qp") or np.nan),
             "k2eff_pct": float(d.get("k2eff_pct") or np.nan),
+            "zp_db": float(20 * np.log10(max(d["zp_ohm"], 1e-12))) if d.get("zp_ohm") else np.nan,
         }
     except Exception:
         return None

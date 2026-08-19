@@ -104,6 +104,7 @@ def train(
     sim_weight: float = 0.3,
     smoke: bool = False,
     seed: int | None = None,
+    w_apex: float = 0.0,
 ) -> dict:
     if seed is not None:
         torch.manual_seed(seed)
@@ -149,9 +150,15 @@ def train(
                 loss_params = (dparams * w.unsqueeze(1)).sum() / (w.unsqueeze(1) * pmask).sum()
                 dsparse = (out_pred["sparse"] - ys) ** 2
                 w_sparse = torch.where(batch["is_sim"].to(dev), torch.zeros_like(w), w)
-                loss_sparse = (dsparse * w_sparse.unsqueeze(1)).sum() / (
-                    w_sparse.sum() * dsparse.shape[1] + 1e-12
-                )
+                if w_apex > 0:
+                    # 顶点加权：Zp 顶点是 256 点中最难的单点（普通 MSE 下欠预测 3.5dB），
+                    # w = 1 + w_apex·relu(y_n−1) 只加压峰区（低谷为负σ不受影响）
+                    w_s = w_sparse.unsqueeze(1) * (1.0 + w_apex * torch.relu(ys - 1.0))
+                    loss_sparse = (dsparse * w_s).sum() / w_s.sum().clamp_min(1e-12)
+                else:
+                    loss_sparse = (dsparse * w_sparse.unsqueeze(1)).sum() / (
+                        w_sparse.sum() * dsparse.shape[1] + 1e-12
+                    )
                 loss = loss_params + lambda_sparse * loss_sparse
                 if train_mode:
                     opt.zero_grad()
@@ -211,6 +218,12 @@ def main() -> None:
     ap.add_argument("--sim-weight", type=float, default=0.3, help="仿真样本权重（Q 已掩码）")
     ap.add_argument("--smoke", action="store_true")
     ap.add_argument("--seed", type=int, default=None, help="随机种子（默认每次随机）")
+    ap.add_argument(
+        "--w-apex",
+        type=float,
+        default=0.0,
+        help="稀疏头顶点加权（0=普通 MSE）；Zp 顶点是普通 MSE 下欠预测最严重的点",
+    )
     args = ap.parse_args()
     train(
         args.data,
@@ -224,6 +237,7 @@ def main() -> None:
         args.sim_weight,
         args.smoke,
         args.seed,
+        args.w_apex,
     )
 
 
