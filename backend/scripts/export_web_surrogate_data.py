@@ -16,7 +16,7 @@ def export_surrogate_webdata(surrogate_dir: Path, out_dir: Path) -> tuple[list[s
         surrogate_dir / "dataset.npz",
     ]
     if not all(p.exists() for p in need):
-        return [], ["baseline.json", "surr_meta.json", "cell_means.parquet"]
+        return [], ["baseline.json", "surr_meta.json", "cell_means.arrow.gz"]
 
     with np.load(surrogate_dir / "baseline.npz") as b:
         baseline = {k: b[k].tolist() for k in ("pfs", "areas", "params_base", "z_base_full")}
@@ -54,6 +54,9 @@ def export_surrogate_webdata(surrogate_dir: Path, out_dir: Path) -> tuple[list[s
         for j in range(n_freq):
             recs.append((eg, fl, area, pf, j, float(mean_z[j])))
     df = pd.DataFrame(recs, columns=["eg", "fl", "area", "pf", "idx", "z"])
-    df.to_parquet(out_dir / "cell_means.parquet", compression="zstd", index=False)
+    # Arrow IPC（同 export_web_snapshot._write_arrow；避免 parquet 扩展联网下载）
+    from export_web_snapshot import _write_arrow
 
-    return ["baseline.json", "surr_meta.json", "cell_means.parquet"], []
+    _write_arrow(df, out_dir / "cell_means.arrow.gz")
+
+    return ["baseline.json", "surr_meta.json", "cell_means.arrow.gz"], []

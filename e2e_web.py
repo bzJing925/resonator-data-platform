@@ -63,14 +63,14 @@ def main() -> None:
         )
         page.goto(f"{BASE}/#/surrogate")
         page.wait_for_selector("text=代理模型", timeout=15000)
-        # 填输入
+        # 等状态加载 + 默认输入的首次推理出图（页面稳定后再改输入，避免 fill 撞重渲染）
+        page.wait_for_selector(".js-plotly-plot", timeout=60000)
         page.fill('input[type="number"] >> nth=0', str(case["eg"]))
         page.fill('input[type="number"] >> nth=1', str(case["fl"]))
         # area 选择器
         page.select_option("select", str(int(case["area"])))
-        page.wait_for_timeout(12000)  # wasm 下载 + 两次推理 + 去抖
-        # 从页面取预测曲线：重放推理（evaluate 直接调 dist 里的模块不可行，
-        # 改为读 Plotly 图的 trace 数据）
+        page.wait_for_timeout(8000)  # 去抖 150ms + 推理 + 渲染
+        # 从页面取预测曲线：读 Plotly 图的 trace 数据
         z_db = page.evaluate(
             """() => {
               const gd = document.querySelector('.js-plotly-plot');
