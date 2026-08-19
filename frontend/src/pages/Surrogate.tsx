@@ -166,6 +166,13 @@ export default function Surrogate() {
         </div>
       )}
 
+      {status?.sim_only_areas?.includes(area) && (
+        <div style={{ fontSize: 12, color: '#d97706' }}>
+          ⚠ 面积 {area} μm² 为仿真外推档：标签来自校准后的 COMSOL 仿真（无实测验证），
+          精度仅作参考；面积外其余变量的可靠性不变
+        </div>
+      )}
+
       <div style={{ flex: 1, minHeight: 380 }}>
         {series.length > 0 && (
           <LineChart series={series} xLabel="Frequency (GHz)" yLabel="|Z11| (dB)" showLegend />

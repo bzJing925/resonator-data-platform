@@ -29,6 +29,13 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", default="./surrogate_data_sim")
     ap.add_argument("--out", required=True)
+    ap.add_argument(
+        "--sim-ext",
+        default="",
+        help="范围外仿真扩展格 npz（build_sim_supplement.py 产物）；"
+        "给定后这些格以 ΔZp 校准伪标签并入训练（前端'仿真外推'档）",
+    )
+    ap.add_argument("--sim-ref", default="", help="仿真格参考 npz（取 Zp 原始值）")
     args = ap.parse_args()
     data = Path(args.data)
 
@@ -45,8 +52,41 @@ def main() -> None:
     feats = np.stack([x[:, 0], x[:, 1], x[:, 3], x[:, 4]], axis=1)
     tr, te = splits[gi] == "train", splits[gi] == "test"
 
+    feats_tr, zp_tr = feats[tr], zp[tr]
+    # ── 范围外仿真扩展格（如 area=600）：ΔZp 校准（纯 train 格防泄漏）后并入训练 ──
+    if args.sim_ext and args.sim_ref:
+        with np.load(args.sim_ext) as z:
+            ext_cells = z["cells"]
+        with np.load(args.sim_ref) as z:
+            ref_cells, ref = z["cells"], z["ref"]
+        ref_zp = {
+            (round(float(c[0]), 4), round(float(c[1]), 4), int(c[2]), int(c[3])): float(r[2])
+            for c, r in zip(ref_cells, ref, strict=False)
+        }
+        # 实测 train 格的 Zp 中位数 → ΔZp = 实测 − 仿真 校准器
+        by_cell: dict[tuple, list[float]] = {}
+        for i in np.where(tr)[0]:
+            key = (round(float(x[i, 0]), 4), round(float(x[i, 1]), 4), int(x[i, 3]), int(x[i, 4]))
+            by_cell.setdefault(key, []).append(float(zp[i]))
+        inter = [k for k in by_cell if k in ref_zp]
+        x_cal = np.array([list(k) for k in inter])
+        y_cal = np.array([float(np.median(by_cell[k])) - ref_zp[k] for k in inter])
+        cal = ExtraTreesRegressor(n_estimators=300, n_jobs=-1, random_state=0)
+        cal.fit(x_cal, y_cal)
+        ext_x, ext_zp = [], []
+        for c in ext_cells:
+            key = (round(float(c[0]), 4), round(float(c[1]), 4), int(c[2]), int(c[3]))
+            if key not in ref_zp:
+                continue
+            ext_x.append([float(c[0]), float(c[1]), float(c[2]), float(c[3])])
+            ext_zp.append(ref_zp[key] + float(cal.predict([ext_x[-1]])[0]))
+        if ext_x:
+            feats_tr = np.concatenate([feats_tr, np.array(ext_x)])
+            zp_tr = np.concatenate([zp_tr, np.array(ext_zp)])
+            print(f"并入范围外仿真扩展格 {len(ext_x)}（ΔZp 校准）")
+
     m = ExtraTreesRegressor(n_estimators=400, n_jobs=-1, random_state=0)
-    m.fit(feats[tr], zp[tr])
+    m.fit(feats_tr, zp_tr)
     e = m.predict(feats[te]) - zp[te]
     print(f"test: bias {e.mean():+.2f} MAE {np.abs(e).mean():.2f} "
           f"p95 {np.percentile(np.abs(e), 95):.2f} max {np.abs(e).max():.2f}")
