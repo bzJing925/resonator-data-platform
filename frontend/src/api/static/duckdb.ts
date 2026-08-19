@@ -1,7 +1,11 @@
-/** DuckDB-WASM 懒单例 + 按需注册 Parquet 视图（规格 §4）。
- *  devices.parquet 在首个数据查询时加载；cell_means.parquet 仅代理模型页需要。 */
+/** DuckDB-WASM 懒单例 + 按需注册 Arrow 表（规格 §4）。
+ *  devices.arrow 在首个数据查询时加载；cell_means.arrow 仅代理模型页需要。
+ *  用 Arrow IPC 而非 Parquet：parquet_scan 需联网下载 parquet 扩展
+ *  （extensions.duckdb.org，不可靠且违背静态自包含）；Arrow 由
+ *  apache-arrow 在 JS 侧解码后 insertArrowTable 入库，完全离线。 */
 
 import * as duckdb from '@duckdb/duckdb-wasm';
+import { tableFromIPC } from 'apache-arrow';
 import duckdb_wasm from '@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url';
 import mvp_worker from '@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?url';
 
@@ -33,21 +37,20 @@ export function getConn(): Promise<duckdb.AsyncDuckDBConnection> {
   return _conn;
 }
 
-/** 注册某张 Parquet 为同名视图（幂等）。 */
+/** 注册某张 Arrow 表（幂等）。文件为 Arrow IPC + 外层 gzip
+ *  （arrow-js 不支持 IPC 内压缩；GH Pages 无法自定义 Content-Encoding，
+ *  故用浏览器 DecompressionStream 手动解压）。 */
 export function ensureTable(name: 'devices' | 'cell_means'): Promise<void> {
   let p = _tables.get(name);
   if (!p) {
     p = (async () => {
-      const db = await getDb();
       const conn = await getConn();
-      const buf = await fetch(`webdata/${name}.parquet`).then((r) => {
-        if (!r.ok) throw new Error(`快照缺失: ${name}.parquet`);
-        return r.arrayBuffer();
-      });
-      await db.registerFileBuffer(`${name}.parquet`, new Uint8Array(buf));
-      await conn.query(
-        `CREATE VIEW ${name} AS SELECT * FROM parquet_scan('${name}.parquet')`,
-      );
+      const resp = await fetch(`webdata/${name}.arrow.gz`);
+      if (!resp.ok) throw new Error(`快照缺失: ${name}.arrow.gz`);
+      const ds = new DecompressionStream('gzip');
+      const buf = await new Response(resp.body!.pipeThrough(ds)).arrayBuffer();
+      const table = tableFromIPC(new Uint8Array(buf));
+      await conn.insertArrowTable(table, { name, create: true });
     })();
     _tables.set(name, p);
   }

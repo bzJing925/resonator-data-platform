@@ -97,6 +97,25 @@ def _rows(conn: sqlite3.Connection, table: str, cols: list[str]) -> list[dict]:
     return [dict(zip(cols, r, strict=True)) for r in cur.fetchall()]
 
 
+def _write_arrow(df, path: Path) -> None:
+    """Arrow IPC 文件，外层 gzip（path 应为 *.arrow.gz）。
+
+    用 Arrow 而非 Parquet：DuckDB-WASM 的 parquet_scan 需联网下载
+    parquet 扩展（extensions.duckdb.org，不可靠）；Arrow IPC 由前端
+    apache-arrow 解码后 insertArrowTable 直接入库，完全自包含。
+    注意 IPC 内不压缩：arrow-js 不支持 lz4/zstd record batch；
+    外层 gzip 由浏览器 DecompressionStream 解压。
+    """
+    import gzip
+
+    import pyarrow as pa
+
+    table = pa.Table.from_pandas(df, preserve_index=False)
+    with gzip.open(str(path), "wb", compresslevel=6) as sink:
+        with pa.ipc.new_file(sink, table.schema) as w:
+            w.write_table(table)
+
+
 def export_all(db_path: str | Path, surrogate_dir: str | Path | None, out_dir: str | Path) -> dict:
     import pandas as pd  # 延迟导入：脚本级依赖
 
@@ -105,7 +124,7 @@ def export_all(db_path: str | Path, surrogate_dir: str | Path | None, out_dir: s
     conn = sqlite3.connect(str(db_path))
     written: list[str] = []
 
-    # devices.parquet：JOIN batches 拍平 batch_no
+    # devices.arrow：JOIN batches 拍平 batch_no
     cols = [c for c in DEVICE_COLS if c not in DEVICE_EXCLUDE]
     select_cols = ", ".join(f"d.{c}" for c in cols)
     df = pd.read_sql_query(
@@ -113,8 +132,8 @@ def export_all(db_path: str | Path, surrogate_dir: str | Path | None, out_dir: s
         " JOIN batches b ON d.batch_id = b.id ORDER BY d.id",
         conn,
     )
-    df.to_parquet(out / "devices.parquet", compression="zstd", index=False)
-    written.append("devices.parquet")
+    _write_arrow(df, out / "devices.arrow.gz")
+    written.append("devices.arrow.gz")
 
     # batches.json
     batches = _rows(conn, "batches", BATCH_COLS)
