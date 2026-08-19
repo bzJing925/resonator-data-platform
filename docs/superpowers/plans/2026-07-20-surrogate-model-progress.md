@@ -120,3 +120,14 @@ COMSOL D1/D2 仿真补充实测的完整实验已收官，**结论为负：不�
 - 副产物（正）：纯实测模型在缝隙格上对校准伪标签 fs MAE 11.4 MHz ≈ 校准器噪声地板 → 实测网格够密，COMSOL 独立验证了缝隙插值可信
 - 注意：种子彩票实测达 ±3.4 MHz，任何单跑对比（如 11.41 vs 12.90）无意义，评估必须多种子
 - 基础设施保留可复用：sim_offset_analysis.py / build_sim_supplement.py / train_surrogate_stage1.py --sim-npz/--sim-weight/--seed / hybrid_ablation.py；产物 backend/sim_offset_report/、backend/ckpt_ablation/（gitignored）
+
+## 10. 仿真参考清洗 + Zp 校正（2026-08-19，Zp 峰高 3.24→0.62 dB，细节见规格 §8.3）
+
+针对"fp 峰拟合差、小面积差几个 dB"的问题，按用户处方完成仿真参考清洗并收官：
+
+- **诊断**：峰高欠预测（bias −2.34 dB）源于晶圆离散平均 + 基准锚被压 7–13 dB；瓶颈在 Stage 1 稀疏头顶点（3.54 dB），稀疏表征本身无损（0.11 dB）；结构→Zp 对 MLP 是模态交叉不连续（3.35 dB 饱和），ExtraTrees 0.62 dB
+- **清洗**：每格按校准仿真距离（|Δfs|+|Δfp|+|ΔZp|，MAD 归一）选器件；基准表改用仿真选中 basic 器件；校准器纯 train 格防泄漏。格内 Zp std 1.58→0.47 dB，Stage 1 val 0.117→0.070
+- **Zp 校正器**：ExtraTrees→Zp + 推理侧 σ=12MHz 窄高斯峰区校正（infer.py 自动探测 zp_corrector.joblib）
+- **最终指标（test）**：Zp 峰高 MAE 0.62 dB（小面积 0.45–0.78）、atfp 0.80、fs 11.05 / fp 12.43 MHz、全谱三项持平旧版
+- **Step B 提速 20×**：`--device cpu`（MPS 对该模型慢 7×）+ 训练态点子采样；35 min/次
+- 生产 stack 已切换（旧版 `*_prev` 目录）；重打包桌面版需按使用说明 §1.3 刷新产物后重建

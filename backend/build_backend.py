@@ -145,7 +145,8 @@ def run(onedir: bool = False):
     if surr_data.exists() and surr_ckpt.exists():
         shutil.copytree(surr_data, FRONTEND_BUILD / "surrogate_data", dirs_exist_ok=True)
         (FRONTEND_BUILD / "checkpoints_surrogate").mkdir(exist_ok=True)
-        for f in ("stage1.pt", "stage2.pt", "stage2_ft.pt", "stage2_config.json"):
+        for f in ("stage1.pt", "stage2.pt", "stage2_ft.pt", "stage2_config.json",
+                  "zp_corrector.joblib"):
             src_f = surr_ckpt / f
             if src_f.exists():
                 shutil.copy2(src_f, FRONTEND_BUILD / "checkpoints_surrogate" / f)

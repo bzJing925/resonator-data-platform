@@ -215,6 +215,36 @@
 
 基础设施保留（仿真格增多或校准改善后可复用）：`scripts/sim_offset_analysis.py`（域差分析）、`build_sim_supplement.py`（校准伪标签生成）、`train_surrogate_stage1.py --sim-npz/--sim-weight/--seed`、`hybrid_ablation.py`（多种子消融框架）。报告：`backend/sim_offset_report/`、`backend/ckpt_ablation/results.json`（均 gitignored）。
 
+### 8.3 仿真参考清洗 + Zp 校正（2026-08-19，Zp 峰高 MAE 3.24→0.62 dB）
+
+动机：Zp 峰（fp 处反谐振峰高）拟合差——test 逐器件峰高 MAE 3.24 dB（bias −2.34 系统性欠预测），小面积（700/1200/1500）atfp MAE 5–9 dB、max 18.4 dB。用户要求峰高口径逼近 0.5 dB。
+
+诊断链（scripts/zp_peak_diagnosis.py 及分解实验）：
+
+1. 晶圆离散使"每格按 |fs−中位数| 选器件"的目标峰高互相平均；基准表（B0 锚）由全部 basic 器件均值构建，峰被压低 7–13 dB——欠预测结构性来源。
+2. 误差分解：真值稀疏点样条重建峰 MAE 仅 0.11 dB（稀疏表征+Stage 2 架构无损）；瓶颈在 Stage 1 稀疏头的顶点（MAE 3.54 dB）；λ_sparse/顶点/峰区加权只能压到 3.35 dB 饱和。
+3. 结构→Zp 含模态交叉不连续（DOE 文档亦指出 Q/杂散属树模型领域）：同一训练集上 ExtraTrees (eg,fl,area,pf)→Zp 达 MAE 0.62 dB（格内地板 0.30 dB）→ 混合方案。
+
+措施：
+
+- **仿真参考清洗**（用户处方）：每格按校准仿真距离（MAD 归一 |Δfs|+|Δfp|+|ΔZp|）选 ≤5 器件；Δ 校准器纯 train 格拟合防泄漏（覆盖 555/568 格）；基准表改用仿真选中的 basic 器件构建。效果：选中器件格内 Zp std 1.58→0.47 dB，基准谱峰 +7~+13 dB，Stage 1 best val 0.117→0.070。
+- **Zp 校正器**：ExtraTrees 结构→Zp（scripts/train_zp_corrector.py），推理时对级联谱峰区施加 σ=12MHz 窄高斯加性校正使顶点匹配树预测（infer.py 自动探测 zp_corrector.joblib，平台/CLI/探索器透明生效）。
+- **Step B 工程修复**：1001 查询点注意力在 MPS 上实测比 CPU 慢 7 倍（35.8 vs 5.3 s/step）→ `--device cpu`；训练态目标频率点子采样（查询点相互独立故 MSE 无偏，~4×）→ Step B 从 2.5h+ 降至 ~35 min；`--w-peak`/`--w-apex` 加权保留为可选（被校正器取代）。
+
+结果（test；新数据集为仿真选中器件，同分组同划分）：
+
+| 指标 | 旧（中位数清洗） | 新（仿真清洗+校正） |
+|---|---|---|
+| Zp 峰高 MAE / bias | 3.24 dB / −2.34 | **0.62 dB / +0.05** |
+| 小面积 700/1200/1500 峰高 MAE | 5.05 / 4.60 / 8.98 | **0.78 / 0.61 / 0.45** |
+| Zp atfp MAE | 3.59 | 0.80（残留 max 22.8 dB 为单格 fp 差 78 MHz 的频率问题，非峰高） |
+| fs / fp MAE | 11.41 / 14.90 MHz | 11.05 / 12.43 MHz（B3 同数据重训：11.15 / 15.03） |
+| rmse_full / cellmean / aligned | 1.20 / 0.93 / 0.72 dB | 1.20 / 0.93 / 0.73 dB（校正代价 +0.02~0.04） |
+
+全谱指标持平、Zp 峰高 5 倍改善。逐器件"最大误差 ≤0.5 dB"物理不可达（格内 std 0.30 dB 意味着器件间 max 必然超 0.5；个别格 fp 误差 >50 MHz 时峰沿 dB 误差不可避免）——当前达到 MAE 0.62 / p95 1.54 / 小面积 ≤0.78。后续可选迭代：Stage 1 λ_sparse=0.5 变体 fs/fp 更优（10.39/11.53 MHz），采纳需重跑 Step B。
+
+生产 stack 已切换：`surrogate_data/`（仿真清洗版）+ `checkpoints_surrogate/`（含 zp_corrector.joblib；B3 已在新数据重训）；旧版保留在 `surrogate_data_prev/`、`checkpoints_surrogate_prev/`。
+
 ## 9. 工程与测试
 
 - 环境：uv + `backend/.venv`，PyTorch + MPS；入口 `uv run python scripts/...`
