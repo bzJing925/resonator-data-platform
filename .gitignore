@@ -89,3 +89,4 @@ backend/eval_out_ft/
 # 静态网页版
 .web-deploy/
 frontend/public/webdata/
+.web-data/

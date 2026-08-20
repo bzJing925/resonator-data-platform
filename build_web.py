@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parent
 BACKEND = ROOT / "backend"
 FRONTEND = ROOT / "frontend"
 DEPLOY_DIR = ROOT / ".web-deploy"
+DATA_DIR = ROOT / ".web-data"  # aln-data-web main 分支（canonical 数据仓）
 
 DEFAULT_REPO = "https://github.com/bzJing925/aln-data-web.git"
 
@@ -46,8 +47,28 @@ def main() -> None:
     print("=" * 60 + "\nStep 1: 数据快照\n" + "=" * 60)
     run([python, "scripts/export_web_snapshot.py"], cwd=BACKEND)
 
+    # Step 1.5: 与 canonical 数据仓双向合并（同事分享包批次不落回 sqlite，
+    # 不合并会被主机导出覆盖）。canonical 不存在则跳过（单机模式）。
+    if (DATA_DIR / ".git").exists():
+        print("=" * 60 + "\nStep 1.5: 同步 canonical 数据仓\n" + "=" * 60)
+        run(["git", "pull", "--ff-only"], cwd=DATA_DIR)
+        run(
+            [python, "scripts/sync_canonical_webdata.py",
+             "--webdata", str(FRONTEND / "public/webdata"),
+             "--canonical", str(DATA_DIR)],
+            cwd=BACKEND,
+        )
+    else:
+        print("（跳过 canonical 同步：.web-data 不存在；单机模式）")
+
     print("=" * 60 + "\nStep 2: ONNX 导出 + 对齐校验\n" + "=" * 60)
     run([python, "scripts/export_surrogate_onnx.py"], cwd=BACKEND)
+    if (DATA_DIR / ".git").exists():
+        # 步骤 1.5 时 stage*.onnx 尚未生成，这里补拷，保证 canonical 与发布一致
+        for name in ("stage1.onnx", "stage2.onnx"):
+            src = FRONTEND / "public/webdata" / name
+            if src.exists():
+                shutil.copy(src, DATA_DIR / "surr" / name)
 
     print("=" * 60 + "\nStep 3: 前端静态构建\n" + "=" * 60)
     env = {**os.environ, "VITE_STATIC": "1"}
@@ -96,7 +117,20 @@ def main() -> None:
     else:
         run(["git", "commit", "-m", f"deploy: 数据快照 {stamp}"], cwd=DEPLOY_DIR)
         run(["git", "push", auth_repo, "gh-pages:gh-pages"], cwd=DEPLOY_DIR)
-    print("\n已部署。Pages 设置：仓库 Settings → Pages → Source 选 gh-pages 分支根目录")
+
+    # Step 5: canonical 数据仓回推 main（data/ + surr/；同事分享包已在 CI 并入）
+    if (DATA_DIR / ".git").exists():
+        print("=" * 60 + "\nStep 5: 回推 canonical（main 分支）\n" + "=" * 60)
+        run(["git", "add", "data/", "surr/"], cwd=DATA_DIR)
+        r = run(["git", "diff", "--cached", "--quiet"], cwd=DATA_DIR, check=False)
+        if r.returncode == 0:
+            print("canonical 无变化")
+        else:
+            run(["git", "-c", "user.name=aln-web-deploy",
+                 "-c", "user.email=aln-web-deploy@local",
+                 "commit", "-m", f"data: 主机全量重建 {stamp}"], cwd=DATA_DIR)
+            run(["git", "push", auth_repo, "main:main"], cwd=DATA_DIR)
+    print("\n已部署。站点：https://bzjing925.github.io/aln-data-web/")
 
 
 if __name__ == "__main__":
