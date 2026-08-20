@@ -139,7 +139,7 @@ def make_share_pack(
     writer.writeheader()
     for r in rows:
         writer.writerow({k: ("" if r.get(k) is None else r.get(k)) for k in PACK_COLUMNS})
-    csv_bytes = gzip.compress(text_buf.getvalue().encode("utf-8"), compresslevel=6)
+    csv_bytes = gzip.compress(text_buf.getvalue().encode("utf-8"), compresslevel=6, mtime=0)
 
     mapping_json = {
         "name": mapping_path.stem,
