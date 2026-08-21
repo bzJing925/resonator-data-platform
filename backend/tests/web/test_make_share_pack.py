@@ -135,3 +135,142 @@ def test_make_share_pack_deembed_missing_cal(mini_zip, tmp_path):
     zip_path, map_path = mini_zip
     with pytest.raises(SystemExit, match="校准件"):
         make_share_pack(zip_path, "#5", map_path, tmp_path / "x.zip", deembed=True)
+
+
+# ---------------------------------------------------------------------------
+# 参数表格（xlsx）直传
+# ---------------------------------------------------------------------------
+
+
+def _make_params_xlsx(path: Path, n_marks: int = 2, both_ports: bool = True,
+                      extra_unknown: bool = True) -> None:
+    """合成参数表格：表头对齐客户示例（含 mBVD 6 列与未知列）。"""
+    import pandas as pd
+
+    recs = []
+    for mi in range(n_marks):
+        mark = f"A1-{mi + 1}"
+        ports = ("S11", "S22") if both_ports else ("S11",)
+        for pi, port in enumerate(ports):
+            recs.append({
+                "original_filename": f"3_{mark}_X-1Y-{mi + 1}N27_Fail_{port}.s1p",
+                "display_name": f"EG1.0 FL0.5 700&5500 #{mi}",
+                "folder_name": port,
+                "coord": f"X-1Y-{mi + 1}",
+                "X": -1,
+                "Y": -(mi + 1),
+                "EG": 1.0, "FL": 0.5, "AG": "700&5500",
+                "PF": "Y" if mi == 0 else "N",
+                "Area": mi + 1,
+                "Area(um2)": 12000.0 + mi,
+                "fs(GHz)": 4.80 + 0.1 * mi, "fp(GHz)": 5.00 + 0.1 * mi,
+                "Zs(Ω)": 1.5, "Zp(Ω)": 250.0 + 10 * pi,
+                "Qs": 800.0, "Qp": 900.0,
+                "Qs_BodeQ": 810.0, "Qp_BodeQ": 910.0,
+                "dbqs": None, "dbqp": None,
+                "BodeQ_fitted": 820.0, "BodeQ_smooth": 830.0,
+                "Fbode(GHz)": 4.95,
+                "k2eff(%)": 6.5,
+                # mBVD 6 列：识别但平台不存储
+                "C0(pF)": 1.1, "Cm(pF)": 0.2, "Lm(nH)": 90.0,
+                "Rm(Ω)": 2.0, "R0(Ω)": 3.0, "Rs(Ω)": 0.5,
+            })
+            if extra_unknown:
+                recs[-1]["神秘列"] = "foo"
+    pd.DataFrame(recs).to_excel(path, index=False)
+
+
+def test_make_share_pack_xlsx(tmp_path):
+    from app.share_pack import make_share_pack_xlsx
+
+    xlsx = tmp_path / "3_results.xlsx"
+    _make_params_xlsx(xlsx)
+    out = tmp_path / "share_xlsx.zip"
+    meta, report = make_share_pack_xlsx(xlsx, "#T1", out, deembedded=False)
+
+    assert meta["batch_no"] == "#T1"
+    assert meta["source"] == "xlsx"
+    assert meta["deembedded"] is False
+    assert meta["process_type"] == "BOTH"
+    assert meta["device_count"] == 4  # 2 marks × 2 ports
+    assert meta["mapping_name"] == "auto_T1"
+
+    # 列识别报告：mBVD 忽略、未知列列出
+    assert set(report["ignored_mbvd"]) == {
+        "C0(pF)", "Cm(pF)", "Lm(nH)", "Rm(Ω)", "R0(Ω)", "Rs(Ω)"}
+    assert report["unknown"] == ["神秘列"]
+    assert report["n_marks"] == 2
+    assert "fs_ghz" in report["mapped"] and "k2eff_pct" in report["mapped"]
+
+    with zipfile.ZipFile(out) as zf:
+        csv_bytes = zf.read("devices.csv.gz")
+        mapping = json.loads(zf.read("mapping.json"))
+
+    import hashlib
+
+    assert hashlib.sha256(csv_bytes).hexdigest() == meta["sha256_devices_csv_gz"]
+    rows = list(csv.DictReader(io.StringIO(gzip.decompress(csv_bytes).decode("utf-8"))))
+    assert len(rows) == 4
+    assert set(rows[0].keys()) == set(PACK_COLUMNS)
+    by_port = {(r["mark"], r["s_param_port"]): r for r in rows}
+    assert set(by_port) == {("A1-1", "S11"), ("A1-1", "S22"),
+                            ("A1-2", "S11"), ("A1-2", "S22")}
+    r = by_port[("A1-1", "S11")]
+    assert r["coord"] == "X-1Y-1" and r["x"] == "-1" and r["y"] == "-1"
+    assert abs(float(r["fs_ghz"]) - 4.8) < 1e-9
+    assert float(r["fs_ghz"]) < float(r["fp_ghz"])
+    assert r["k2eff_pct"] == "6.5"
+    assert r["pf"] == "Y"
+    assert r["deembedded"] == "False"
+    # 派生对照表：S11/S22 面积分列、has_pf 取并集
+    e1 = next(e for e in mapping["entries"] if e["mark"] == "A1-1")
+    assert e1["area_s11"] == 12000.0 and e1["area_s22"] == 12000.0
+    assert e1["has_pf"] is True
+    e2 = next(e for e in mapping["entries"] if e["mark"] == "A1-2")
+    assert e2["has_pf"] is False
+
+
+def test_make_share_pack_xlsx_de(tmp_path):
+    """勾选已去嵌：meta 与每行 deembedded=True。"""
+    from app.share_pack import make_share_pack_xlsx
+
+    xlsx = tmp_path / "3_de_results.xlsx"
+    _make_params_xlsx(xlsx, n_marks=1, both_ports=False)
+    meta, _ = make_share_pack_xlsx(xlsx, "#T2", tmp_path / "s.zip", deembedded=True)
+    assert meta["deembedded"] is True
+    assert meta["process_type"] == "S1P"
+    with zipfile.ZipFile(tmp_path / "s.zip") as zf:
+        rows = list(csv.DictReader(io.StringIO(
+            gzip.decompress(zf.read("devices.csv.gz")).decode("utf-8"))))
+    assert all(r["deembedded"] == "True" for r in rows)
+
+
+def test_make_share_pack_xlsx_missing_required(tmp_path):
+    """缺必填列 → 报错并附表头提示。"""
+    import pandas as pd
+
+    from app.share_pack import XLSX_HINT, make_share_pack_xlsx
+
+    xlsx = tmp_path / "bad.xlsx"
+    pd.DataFrame([{"original_filename": "3_A1-1_X-1Y-1N27_Fail_S11.s1p",
+                   "display_name": "x", "EG": 1.0}]).to_excel(xlsx, index=False)
+    with pytest.raises(SystemExit) as exc:
+        make_share_pack_xlsx(xlsx, "#T3", tmp_path / "s.zip", deembedded=False)
+    assert "缺少必填列" in str(exc.value)
+    assert XLSX_HINT in str(exc.value)
+
+
+def test_make_share_pack_xlsx_xy_without_coord(tmp_path):
+    """无 coord 列但有 X/Y 两列 → 通过校验，coord 从文件名派生。"""
+    import pandas as pd
+
+    from app.share_pack import rows_from_xlsx
+
+    xlsx = tmp_path / "xy.xlsx"
+    _make_params_xlsx(xlsx, n_marks=1, both_ports=False)
+    df = pd.read_excel(xlsx).drop(columns=["coord"])
+    df.to_excel(xlsx, index=False)
+    rows, _, _, _, _ = rows_from_xlsx(xlsx, deembedded=False)
+    assert len(rows) == 1
+    assert rows[0]["coord"] == "X-1Y-1"  # 来自 original_filename
+    assert rows[0]["x"] == -1 and rows[0]["y"] == -1
