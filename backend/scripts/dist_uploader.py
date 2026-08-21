@@ -49,6 +49,7 @@ pandas
 openpyxl
 pydantic
 pydantic-settings
+certifi
 pyinstaller
 """
 
