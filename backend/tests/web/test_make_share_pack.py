@@ -92,3 +92,46 @@ def test_make_share_pack(mini_zip, tmp_path):
         assert r["mark"] == "A1-1"
         assert r["eg"] not in ("", None)  # 对照表命中
     assert mapping["entries"][0]["mark"] == "A1-1"
+
+
+def _make_cal_s2p(path: Path, kind: str, n: int = 401) -> None:
+    """校准件：OPEN → s≈+1；SHORT → s≈-1（与 DUT 同频率轴）。"""
+    import skrf
+
+    freq = np.linspace(4.0, 7.0, n)
+    val = 0.999 if kind == "OPEN" else -0.999
+    s = np.full((n, 2, 2), val, dtype=complex)
+    net = skrf.Network(f=freq * 1e9, s=s, z0=np.full((n, 2), 50.0))
+    net.write_touchstone(str(path), form="ma")
+
+
+def test_make_share_pack_deembed(mini_zip, tmp_path):
+    """去嵌开关：zip 内加 OPEN/SHORT 校准件，meta.deembedded=True。"""
+    zip_path, map_path = mini_zip
+    # 往 zip 里补校准件（重新打包）
+    import skrf  # noqa: F401
+
+    src = tmp_path / "withcal"
+    src.mkdir()
+    with zipfile.ZipFile(zip_path) as zf:
+        zf.extractall(src)
+    _make_cal_s2p(src / "5_OPEN.s2p", "OPEN")
+    _make_cal_s2p(src / "5_SHORT.s2p", "SHORT")
+    zip2 = tmp_path / "data_cal.zip"
+    with zipfile.ZipFile(zip2, "w") as zf:
+        for f in src.iterdir():
+            zf.write(f, f.name)
+
+    out = tmp_path / "share_de.zip"
+    meta = make_share_pack(zip2, "#5.1", map_path, out, deembed=True)
+    assert meta["deembedded"] is True
+    assert meta["deembed_method"] == "default"
+    assert meta["device_count"] == 4  # 校准件不算器件
+    assert meta["batch_no"] == "#5.1"
+
+
+def test_make_share_pack_deembed_missing_cal(mini_zip, tmp_path):
+    """去嵌开启但无校准件 → 明确报错。"""
+    zip_path, map_path = mini_zip
+    with pytest.raises(SystemExit, match="校准件"):
+        make_share_pack(zip_path, "#5", map_path, tmp_path / "x.zip", deembed=True)
