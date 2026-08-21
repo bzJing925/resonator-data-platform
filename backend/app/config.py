@@ -141,11 +141,34 @@ class AlgorithmConfig:
 
     # ── 谐振峰检测 ────────────────────────────────────────────
     min_separation_hz: float = 20e6  # fs/fp 最小间距
+    # fp 主模态窗口上限：BAW 的 fp 总在 fs 上方 k2eff 物理允许范围内
+    # （k2eff=25% 极端值对应 fp/fs≈1.12），窗口外的高峰必为杂散/带外峰。
+    fp_fs_max_ratio: float = 1.15
+    # 极值定位前的轻度平滑窗口（点，仅用于定位；取值仍用原始索引）。
+    # 原始 dB 上严格不等式找极值会被单点抖动/毛刺干扰。
+    resonance_detect_smooth_pts: int = 5
+
+    # ── 相位法 Q ─────────────────────────────────────────────
+    # 谐振点两侧各取 N 点做相位局部拟合取斜率；单点梯度对噪声
+    # 极敏感（实测 σ=0.02 rad 相位噪声下平均误差 67%，拟合后 <10%）。
+    phase_fit_halfwin: int = 4
+    # 拟合阶数：3 = 奇次项吸收 arctan 相位曲率，消除窗口平均带来的
+    # 系统性低估（#2 批次实测：deg1 中位 −3.4%，deg3 中位 0.0%）。
+    # 1 = 纯线性（退化为窗口平均斜率）。点数不足时自动降阶。
+    phase_fit_deg: int = 3
 
     # ── BodeQ 平滑与拟合 ──────────────────────────────────────
     savgol_window: int = 51  # Savitzky-Golay 窗口（自动 cap 到 len(data)//10*2+1）
     savgol_polyorder: int = 3
     lorentz_peak_range_ratio: float = 0.3  # 拟合带宽 = 总点数 × 该比例（前后各取）
+    # 主模态 BodeQ 峰搜索窗口：半宽 = 该值 × (fp−fs)。主模 BodeQ 峰物理上
+    # 位于 fs 与 fp 之间；全局 argmax 会被带外/杂散尖峰劫持。
+    bodeq_peak_half_span_ratio: float = 0.5
+    # 平滑前掩蔽 [fs, fp] 内窄高杂散尖峰：prominence ≥ 该比例 × 区间峰值
+    # 且半 prominence 宽度 ≤ bodeq_spike_max_width_pts 的峰被置 NaN（后续插值填平）。
+    # 主模峰宽远超 5 点，不会被误掩。
+    bodeq_spike_prominence_ratio: float = 0.05
+    bodeq_spike_max_width_pts: int = 5
 
     # ── 中间寄生峰检测 ────────────────────────────────────────
     intermediate_peak_prominence_db: float = 3.0

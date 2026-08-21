@@ -613,3 +613,30 @@ tests/
 最容易被忽视的是 T07（去嵌缓存键名一致性，虽然默认关也要修对），最容易翻车的
 是 T09（真实数据触发的边界条件）。
 
+
+## 8. 杂散模态鲁棒性修订（2026-08-20，刻意偏离客户脚本）
+
+本轮修订源于对 Feld (2008) BodeQ 公式与相位斜率法的文献核对 + mBVD 合成数据
+实测复现。结论：三个 Q 的公式本身都与文献一致，但客户脚本的实现方式在杂散
+模态场景下算错。以下修复**刻意偏离客户脚本行为**，由
+`tests/test_extract.py`「杂散模态鲁棒性」一节固化（各测试 docstring 记录了
+修复前的错误输出值）。
+
+| 位置 | 客户脚本/旧实现 | 修复后 | 复现的错误 |
+|---|---|---|---|
+| `find_resonances` fp 选取 | fs 之后绝对高度最高的局部最大 | 主模态窗口 `[fs, fs×fp_fs_max_ratio]`（默认 1.15，覆盖 k2eff≤25% 的物理极限）内 **prominence 最大**的峰；窗口无候选回退旧行为 | 杂散并联峰绝对高度超过主 fp（60.5 vs 52.4 dB）时 fp 被劫持到 2.0750（主峰 2.0395），Qp/k2eff 全错 |
+| `find_resonances` 极值定位 | 原始 dB 严格不等式 | 先 `resonance_detect_smooth_pts`（默认 5 点 savgol）轻度平滑再定位，取值仍用原始索引 | 单点抖动/毛刺会产生假极值 |
+| `calc_q_phase` | 单点 `np.gradient`，未 unwrap | `np.unwrap` + 谐振点 ±`phase_fit_halfwin`（默认 4）点、`phase_fit_deg`（默认 3）阶多项式拟合取一次项 | 相位在谐振处跨 ±π（去嵌误差致 Re(Z)<0）时 Q 偏差 208 倍；σ=0.02 rad 噪声下平均误差 67%（拟合后 ~4%） |
+| `calc_q_3db` | 全数组 `argmin(|z−level|)` 找最近点 | 从谐振点向外**逐点扫描首次穿越** + 线性插值；未穿越/在边界 → NaN | 远处杂散凹陷的肩部比近穿越点更贴近电平时，带宽被锁到远点（Q 差数倍）；电平未穿越时静默返回假带宽 |
+| `calc_bodeq` 峰搜索 | 全频段 `nanargmax` | 主模态窗口 `[fs−0.5(fp−fs), fp+0.5(fp−fs)]`（`bodeq_peak_half_span_ratio`）内 argmax；洛伦兹拟合窗口同样收进主模态窗口（<20 点回退原宽窗口），f0 拟合边界也钳在窗口内 | 带外尖峰比主峰高时 fbode 锁到 1.13×fs 处；病态器件上 f0 漂出窗口（fbode=4.07 而窗口 [4.46,4.90]，拟合值落在基线上） |
+| `calc_bodeq` 平滑前 | 直接 savgol | 先掩蔽 [fs,fp] 内窄高尖峰（prominence ≥ `bodeq_spike_prominence_ratio`×区间峰值 且半宽 ≤ `bodeq_spike_max_width_pts` 点，置 NaN 后插值填平） | fs 旁 1.2 MHz 的窄尖峰使 qs_bodeq 偏差 669%、bodeq_fitted 偏差 32% |
+| `calc_bodeq` raw 插值 | `interp1d(cubic)` 直接作用含 NaN 数组 | 先 `_interpolate_nan` 填平再插值 | raw 含 NaN 时 bodeq_raw 输出莫名缺失 |
+
+未改动：`calc_bodeq_curve`（绘图曲线接口，无 fs/fp 上下文，保持全局峰拟合）；
+fs 的「最深谷」选取不变（主串联谐振物理上是最深点，平滑后定位已足够稳）。
+
+注（相位拟合阶数，#2 批次对标后定）：对称窗口上 deg1 的线性项等于窗口
+平均斜率，arctan 相位曲率被平均 → 系统性低估（#2 批次 40 器件抽样中位
+−3.4%，γ=2 MHz 构造上 −5.5%）；deg3 奇次项吸收曲率，一次项恢复中心切线
+（抽样中位差 +0.01%，构造上 −0.3%），噪声代价 ~1.5× 仍远优于单点梯度；
+deg2 与 deg1 在对称窗口上数学等价（偶次项正交），无效。

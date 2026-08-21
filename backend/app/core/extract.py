@@ -29,6 +29,24 @@ class ExtractError(Exception):
 
 
 # ── 1. 谐振点检测 ─────────────────────────────────────────────────────
+def _light_smooth_for_detect(z_db: np.ndarray, window: int) -> np.ndarray:
+    """极值定位前的轻度平滑（仅用于定位，不改原数组取值）。
+
+    原始 dB 曲线上用严格不等式找极值会被单点抖动/毛刺干扰；窗口过小或
+    平滑失败时回退原数组。
+    """
+    from scipy.signal import savgol_filter
+
+    n = len(z_db)
+    w = min(window, n // 2 * 2 - 1)  # 奇数且 ≤ n
+    if w < 3:
+        return z_db
+    try:
+        return savgol_filter(z_db, window_length=w, polyorder=2)
+    except Exception:
+        return z_db
+
+
 def find_resonances(
     z_mag: np.ndarray,
     freq: np.ndarray,
@@ -37,23 +55,30 @@ def find_resonances(
     """返回 (fs_idx, fp_idx)。
 
     fs：阻抗最低点（局部最小中最深的）。
-    fp：fs 之后、间距 ≥ min_separation_hz 的所有局部最大里阻抗最高的。
+    fp：主模态窗口 [fs, fs × fp_fs_max_ratio] 内 prominence 最大的局部最大。
+        窗口内无候选时回退旧行为（fs 之后、间距 ≥ min_separation_hz 的最高峰）。
+
+    注意（2026-08-20 review 修复）：fp 不能按绝对高度选——杂散模态的并联峰
+    可以骑在主模态高阻抗区上，绝对高度超过主 fp（合成数据复现：主峰 52.4 dB
+    vs 杂散峰 60.5 dB）。主峰 prominence 从 fs 深谷量起，物理上总是更大。
+    极值定位在轻度平滑后的曲线上做（取值索引仍对应原数组）。
     """
     cfg = config or get_algorithm_config()
     z_db = 20 * np.log10(np.maximum(z_mag, cfg.z_db_floor))
+    z_det = _light_smooth_for_detect(z_db, cfg.resonance_detect_smooth_pts)
 
     minima: list[int] = []
     maxima: list[int] = []
-    for i in range(1, len(z_db) - 1):
-        if z_db[i] < z_db[i - 1] and z_db[i] < z_db[i + 1]:
+    for i in range(1, len(z_det) - 1):
+        if z_det[i] < z_det[i - 1] and z_det[i] < z_det[i + 1]:
             minima.append(i)
-        elif z_db[i] > z_db[i - 1] and z_db[i] > z_db[i + 1]:
+        elif z_det[i] > z_det[i - 1] and z_det[i] > z_det[i + 1]:
             maxima.append(i)
 
     if minima:
-        fs_idx = int(minima[int(np.argmin(z_db[minima]))])
+        fs_idx = int(minima[int(np.argmin(z_det[minima]))])
     else:
-        fs_idx = int(np.argmin(z_db))
+        fs_idx = int(np.argmin(z_det))
 
     candidate_peaks: list[int] = []
     for peak in maxima:
@@ -63,7 +88,14 @@ def find_resonances(
             continue
         candidate_peaks.append(peak)
 
-    if candidate_peaks:
+    # 主模态窗口内的候选按 prominence（dB 域）选，而不是绝对高度
+    windowed = [p for p in candidate_peaks if freq[p] <= freq[fs_idx] * cfg.fp_fs_max_ratio]
+    if windowed:
+        from scipy.signal import peak_prominences
+
+        prominences = peak_prominences(z_det, np.array(windowed))[0]
+        fp_idx = int(windowed[int(np.argmax(prominences))])
+    elif candidate_peaks:
         fp_idx = int(candidate_peaks[int(np.argmax(z_db[candidate_peaks]))])
     elif maxima:
         fp_idx = int(maxima[int(np.argmax(z_db[maxima]))])
@@ -99,6 +131,71 @@ def _interpolate_nan(arr: np.ndarray, freq: np.ndarray) -> np.ndarray:
     filled = arr.copy()
     filled[~finite] = np.interp(freq[~finite], freq[finite], arr[finite])
     return filled
+
+
+def _mask_narrow_spikes(
+    bodeq_raw: np.ndarray,
+    freq: np.ndarray,
+    fs_idx: int,
+    fp_idx: int,
+    cfg: AlgorithmConfig,
+) -> np.ndarray:
+    """把 [fs, fp] 区间内的窄高杂散尖峰置 NaN（后续平滑前会被插值填平）。
+
+    杂散模态的 BodeQ 尖峰又窄又高，savgol 平滑会把尖峰能量泄漏进
+    fs/fp 处的 qs_bodeq/qp_bodeq 采样值（合成数据实测偏差达数倍）。
+    判定：prominence ≥ bodeq_spike_prominence_ratio × 区间峰值，
+    且半 prominence 宽度 ≤ bodeq_spike_max_width_pts（点）。
+    主模态 BodeQ 峰宽远超该宽度上限，不会被误掩。
+    """
+    from scipy.signal import find_peaks, peak_widths
+
+    if fp_idx - fs_idx < 10:
+        return bodeq_raw
+    filled = _interpolate_nan(bodeq_raw, freq)
+    seg = filled[fs_idx : fp_idx + 1]
+    if not np.isfinite(seg).any():
+        return bodeq_raw
+    seg_max = float(np.nanmax(seg))
+    if seg_max <= 0:
+        return bodeq_raw
+    peaks, _ = find_peaks(seg, prominence=cfg.bodeq_spike_prominence_ratio * seg_max)
+    if len(peaks) == 0:
+        return bodeq_raw
+    widths, _, left_ips, right_ips = peak_widths(seg, peaks, rel_height=0.5)
+    masked = bodeq_raw.copy()
+    for width, left, right in zip(widths, left_ips, right_ips, strict=True):
+        if width > cfg.bodeq_spike_max_width_pts:
+            continue  # 宽峰视为主模态/真实特征，不动
+        lo = fs_idx + max(0, int(np.floor(left)))
+        hi = fs_idx + min(len(seg) - 1, int(np.ceil(right)))
+        masked[lo : hi + 1] = np.nan
+    return masked
+
+
+def _main_mode_window(
+    freq: np.ndarray, fs_idx: int, fp_idx: int, cfg: AlgorithmConfig
+) -> tuple[int, int]:
+    """主模态窗口 [fs−r(fp−fs), fp+r(fp−fs)] 的索引界 [lo, hi)（r=半宽比例）。
+
+    主模 BodeQ 峰物理上位于 fs 与 fp 之间；全局搜索/拟合在宽扫频时会被
+    带外或杂散尖峰劫持（合成数据复现：fbode 锁到 1.13×fs 处的尖峰）。
+    """
+    half = cfg.bodeq_peak_half_span_ratio * (freq[fp_idx] - freq[fs_idx])
+    lo = int(np.searchsorted(freq, freq[fs_idx] - half))
+    hi = int(np.searchsorted(freq, freq[fp_idx] + half, side="right"))
+    return lo, hi
+
+
+def _main_mode_argmax(
+    arr: np.ndarray, freq: np.ndarray, fs_idx: int, fp_idx: int, cfg: AlgorithmConfig
+) -> int:
+    """主模态窗口内的 nanargmax；窗口无有限值回退全局。"""
+    lo, hi = _main_mode_window(freq, fs_idx, fp_idx, cfg)
+    seg = arr[lo:hi]
+    if len(seg) == 0 or not np.isfinite(seg).any():
+        return int(np.nanargmax(arr))
+    return lo + int(np.nanargmax(np.where(np.isfinite(seg), seg, -np.inf)))
 
 
 def _smooth_bodeq(bodeq_raw: np.ndarray, freq: np.ndarray, cfg: AlgorithmConfig) -> np.ndarray:
@@ -138,16 +235,23 @@ def calc_bodeq(
     if valid_count < 10:
         raise ExtractError(f"BodeQ 有效数据点不足（{valid_count} 点）")
 
-    bodeq_smooth_arr = _smooth_bodeq(bodeq_raw_arr, freq, cfg)
+    bodeq_smooth_arr = _smooth_bodeq(
+        _mask_narrow_spikes(bodeq_raw_arr, freq, fs_idx, fp_idx, cfg), freq, cfg
+    )
     if np.all(np.isnan(bodeq_smooth_arr)):
         raise ExtractError("平滑后的 BodeQ 数组全为 NaN")
 
-    max_idx = int(np.nanargmax(bodeq_smooth_arr))
+    max_idx = _main_mode_argmax(bodeq_smooth_arr, freq, fs_idx, fp_idx, cfg)
     f_peak_guess = float(freq[max_idx])
 
     peak_range = int(len(freq) * cfg.lorentz_peak_range_ratio)
     start_idx = max(0, max_idx - peak_range)
     end_idx = min(len(freq), max_idx + peak_range)
+    # 拟合窗口收进主模态窗口：窗口外的杂散/带外尖峰会把洛伦兹拟合拉偏。
+    # 窗口太窄（<20 点，如 fs/fp 检测异常）时保留原宽窗口兜底。
+    win_lo, win_hi = _main_mode_window(freq, fs_idx, fp_idx, cfg)
+    if min(end_idx, win_hi) - max(start_idx, win_lo) >= 20:
+        start_idx, end_idx = max(start_idx, win_lo), min(end_idx, win_hi)
 
     fit_freq = freq[start_idx:end_idx]
     fit_bodeq = bodeq_smooth_arr[start_idx:end_idx]
@@ -159,6 +263,11 @@ def calc_bodeq(
     from scipy.interpolate import interp1d
     from scipy.optimize import curve_fit
 
+    # f0 边界收进主模态窗口：峰搜索在窗口内，拟合中心就不应漂出窗口
+    # （病态器件上 0.9~1.1×f00 的宽边界会让 fbode 漂到窗口外的基线上）。
+    f0_lo = max(0.9 * f00, float(freq[win_lo]))
+    f0_hi = min(1.1 * f00, float(freq[win_hi - 1]))
+
     try:
         popt, _ = curve_fit(
             _lorentzian,
@@ -166,8 +275,8 @@ def calc_bodeq(
             fit_bodeq,
             p0=[amp0, f00, gamma0],
             bounds=(
-                [0.1 * amp0, 0.9 * f00, gamma0 / 10],
-                [10 * amp0, 1.1 * f00, 10 * gamma0],
+                [0.1 * amp0, f0_lo, gamma0 / 10],
+                [10 * amp0, f0_hi, 10 * gamma0],
             ),
         )
     except Exception as exc:
@@ -179,8 +288,13 @@ def calc_bodeq(
     interp_smooth = interp1d(
         freq, bodeq_smooth_arr, kind="cubic", bounds_error=False, fill_value="extrapolate"
     )
+    # raw 数组可能含 NaN（|s|≈1 的点），cubic 插值会把 NaN 扩散到邻域 → 先填平
     interp_raw = interp1d(
-        freq, bodeq_raw_arr, kind="cubic", bounds_error=False, fill_value="extrapolate"
+        freq,
+        _interpolate_nan(bodeq_raw_arr, freq),
+        kind="cubic",
+        bounds_error=False,
+        fill_value="extrapolate",
     )
     bodeq_smooth_at_peak = float(interp_smooth(f0))
     bodeq_raw_at_peak = float(interp_raw(f0))
@@ -272,16 +386,75 @@ def calc_bodeq_curve(
 
 
 # ── 3. 相位法 Q ───────────────────────────────────────────────────────
-def calc_q_phase(z: np.ndarray, freq: np.ndarray, fs_idx: int, fp_idx: int) -> tuple[float, float]:
-    """从阻抗相位斜率计算 Qs / Qp。"""
-    z_phase = np.angle(z)
-    phase_deriv = np.gradient(z_phase, freq)
-    qs = float(abs(freq[fs_idx] * phase_deriv[fs_idx] / 2))
-    qp = float(abs(freq[fp_idx] * phase_deriv[fp_idx] / 2))
+def _phase_slope_q(
+    phase_unwrapped: np.ndarray, freq: np.ndarray, idx: int, halfwin: int, deg: int
+) -> float:
+    """以 idx 为中心 ±halfwin 点局部多项式拟合相位，取一次项系数为斜率，返回 Q = |f·slope/2|。
+
+    单点梯度对噪声极敏感（fp 处 |S11|→1，S11 噪声被 Z 变换剧烈放大）。
+    用三次（而非一次）多项式：对称窗口上 deg1 的线性项等于窗口平均斜率，
+    arctan 形相位的曲率会被平均掉 → 系统性低估（#2 实测中位 −3.4%）；
+    deg3 的奇次项吸收曲率，一次项恢复中心切线（实测中位差 0.0%），
+    噪声代价仅 ~1.5×（仍远优于单点）。窗口以 freq[idx] 为中心做数值稳定化。
+    窗口点数不足时自动降阶。
+    """
+    sl = slice(max(0, idx - halfwin), min(len(freq), idx + halfwin + 1))
+    n = sl.stop - sl.start
+    if n < 2:
+        return float("nan")
+    d = min(deg, n - 1)
+    slope = float(np.polyfit(freq[sl] - freq[idx], phase_unwrapped[sl], d)[-2])
+    return abs(freq[idx] * slope / 2)
+
+
+def calc_q_phase(
+    z: np.ndarray,
+    freq: np.ndarray,
+    fs_idx: int,
+    fp_idx: int,
+    config: AlgorithmConfig | None = None,
+) -> tuple[float, float]:
+    """从阻抗相位斜率计算 Qs / Qp。
+
+    相位先 np.unwrap：去嵌误差使 Re(Z)<0 时 ∠Z 会在谐振附近跨过 ±π，
+    未 unwrap 的梯度会被 2π 跳变污染（合成数据实测 Q 偏差超 200 倍）。
+    """
+    cfg = config or get_algorithm_config()
+    phase = np.unwrap(np.angle(z))
+    qs = _phase_slope_q(phase, freq, fs_idx, cfg.phase_fit_halfwin, cfg.phase_fit_deg)
+    qp = _phase_slope_q(phase, freq, fp_idx, cfg.phase_fit_halfwin, cfg.phase_fit_deg)
     return qs, qp
 
 
 # ── 4. 3dB 带宽法 Q ───────────────────────────────────────────────────
+def _first_crossing(
+    z_db: np.ndarray, idx: int, level: float, direction: int
+) -> float | None:
+    """从 idx 向 direction(±1) 逐点扫描 z_db 首次穿越 level 的位置。
+
+    返回线性插值后的分数索引；扫描到数组边界仍未穿越返回 None。
+    谐振点与扫频边界之间存在杂散凹陷时，全数组 argmin 会随机锁定到
+    远处的穿越点（带宽高估数倍）；紧邻谐振点的第一个穿越才是
+    半功率带宽的物理定义。
+    """
+    i = idx
+    while True:
+        j = i + direction
+        if not (0 <= j < len(z_db)):
+            return None
+        di = float(z_db[i] - level)
+        dj = float(z_db[j] - level)
+        if di * dj <= 0:
+            frac = abs(di) / max(abs(dj - di), 1e-12)
+            return i + direction * frac
+        i = j
+
+
+def _frac_index_to_freq(freq: np.ndarray, frac_idx: float) -> float:
+    """分数索引线性映射到频率轴。"""
+    return float(np.interp(frac_idx, np.arange(len(freq)), freq))
+
+
 def calc_q_3db(
     z_db: np.ndarray,
     freq: np.ndarray,
@@ -290,23 +463,29 @@ def calc_q_3db(
     fs: float,
     fp: float,
 ) -> tuple[float, float]:
-    """从 ±3dB 带宽估计 Qs / Qp，无法估计时返回 NaN。"""
+    """从 ±3dB 带宽估计 Qs / Qp。
+
+    从谐振点向外找首次穿越（线性插值）；任一方向未穿越（电平没到、
+    或谐振点在扫频边界）→ 该 Q 返回 NaN，不静默凑假带宽。
+    """
     fs_idx = int(np.argmin(np.abs(freq - fs)))
     fp_idx = int(np.argmin(np.abs(freq - fp)))
 
-    if fs_idx > 0:
-        left_idx = int(np.argmin(np.abs(z_db[:fs_idx] - (zs_db + 3))))
+    left = _first_crossing(z_db, fs_idx, zs_db + 3, -1)
+    right = _first_crossing(z_db, fs_idx, zs_db + 3, +1)
+    if left is not None and right is not None:
+        bw = _frac_index_to_freq(freq, right) - _frac_index_to_freq(freq, left)
+        dbqs = float(fs / bw) if bw > 0 else float("nan")
     else:
-        left_idx = 0
-    right_idx = fs_idx + int(np.argmin(np.abs(z_db[fs_idx:] - (zs_db + 3))))
-    dbqs = float(fs / (freq[right_idx] - freq[left_idx])) if right_idx > left_idx else float("nan")
+        dbqs = float("nan")
 
-    if fp_idx > 0:
-        left_idx = fp_idx - int(np.argmin(np.abs(z_db[:fp_idx][::-1] - (zp_db - 3))))
+    left = _first_crossing(z_db, fp_idx, zp_db - 3, -1)
+    right = _first_crossing(z_db, fp_idx, zp_db - 3, +1)
+    if left is not None and right is not None:
+        bw = _frac_index_to_freq(freq, right) - _frac_index_to_freq(freq, left)
+        dbqp = float(fp / bw) if bw > 0 else float("nan")
     else:
-        left_idx = 0
-    right_idx = fp_idx + int(np.argmin(np.abs(z_db[fp_idx:] - (zp_db - 3))))
-    dbqp = float(fp / (freq[right_idx] - freq[left_idx])) if right_idx > left_idx else float("nan")
+        dbqp = float("nan")
 
     return dbqs, dbqp
 
