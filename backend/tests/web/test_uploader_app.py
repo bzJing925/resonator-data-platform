@@ -86,3 +86,43 @@ def test_double_pack_rejected(mini_inputs, tmp_path):
     })
     assert r.status_code == 409
     server._set_state(running=False)
+
+
+def test_pack_flow_xlsx(tmp_path):
+    """xlsx 模式：input_type=xlsx + 已去嵌勾选 → 分享包带 report。"""
+    from app.webui.uploader.server import create_app
+    from tests.web.test_make_share_pack import _make_params_xlsx
+
+    xlsx = tmp_path / "3_de_results.xlsx"
+    _make_params_xlsx(xlsx, n_marks=2, both_ports=True)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+
+    client = TestClient(create_app())
+    r = client.post("/api/pack", json={
+        "inputs": [str(xlsx)],
+        "batch_no": "#T9",
+        "input_type": "xlsx",
+        "xlsx_deembedded": True,
+        "mapping_mode": "auto",
+        "out_dir": str(out_dir),
+    })
+    assert r.status_code == 200 and r.json()["started"]
+
+    for _ in range(120):
+        s = client.get("/api/progress").json()
+        if s["done"]:
+            break
+        time.sleep(0.25)
+    assert s["done"] and s["error"] is None, s
+    meta = s["meta"]
+    assert meta["batch_no"] == "#T9"
+    assert meta["device_count"] == 4
+    assert meta["deembedded"] is True
+    assert meta["source"] == "xlsx"
+    assert meta["mapping_name"] == "auto_T9"
+    rep = meta["report"]
+    assert set(rep["ignored_mbvd"]) == {
+        "C0(pF)", "Cm(pF)", "Lm(nH)", "Rm(Ω)", "R0(Ω)", "Rs(Ω)"}
+    assert rep["unknown"] == ["神秘列"]
+    assert rep["n_marks"] == 2
