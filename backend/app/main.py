@@ -46,6 +46,18 @@ settings = get_settings()
 logging.basicConfig(level=settings.LOG_LEVEL)
 log = logging.getLogger("aln")
 
+# 代理模型预热延迟：让开启动后的首批 UI 请求再开始加载 torch/检查点
+_PREWARM_DELAY_S = 2.0
+
+
+async def _prewarm_surrogate() -> None:
+    """服务就绪后后台预热代理模型（torch/ckpt 加载约 30s，避免首次访问页面卡顿）。"""
+    await asyncio.sleep(_PREWARM_DELAY_S)
+    try:
+        await asyncio.to_thread(surrogate.prewarm)
+    except Exception:  # noqa: BLE001 — 预热失败不影响平台其余功能
+        log.exception("代理模型预热失败")
+
 
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -63,7 +75,11 @@ async def lifespan(app: FastAPI):
         from app.watch.watcher import watch_uploads
 
         watcher_task = asyncio.create_task(watch_uploads())
+    prewarm_task = asyncio.create_task(_prewarm_surrogate())
     yield
+    prewarm_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await prewarm_task
     if worker_thread is not None:
         stop_local_worker()
     if watcher_task is not None:

@@ -31,15 +31,15 @@ export function setupUpdater(): void {
   const settings = loadSettings();
   const source = settings.updateSource || {
     type: 'github',
-    owner: 'your-org',
-    repo: 'aln-data',
+    owner: 'bzJing925',
+    repo: 'resonator-data-platform',
   };
 
   if (source.type === 'github') {
     autoUpdater.setFeedURL({
       provider: 'github',
-      owner: source.owner || 'your-org',
-      repo: source.repo || 'aln-data',
+      owner: source.owner || 'bzJing925',
+      repo: source.repo || 'resonator-data-platform',
     });
   } else if (source.type === 'static' && source.url) {
     autoUpdater.setFeedURL({ provider: 'generic', url: source.url });
