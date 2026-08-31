@@ -83,7 +83,9 @@ def main() -> None:
     token = os.environ.get("GITHUB_TOKEN")
     if not token:
         sys.exit("缺少 GITHUB_TOKEN 环境变量（只读使用，不会写入任何配置）")
-    auth_repo = repo.replace("https://", f"https://x-access-token:{token}@")
+    # replace 限定 1 次：ALN_WEB_REPO 走代理（如 gh-proxy.com/https://github.com/...）
+    # 时原样替换会把 token 嵌进 URL 两次，推送 128。
+    auth_repo = repo.replace("https://", f"https://x-access-token:{token}@", 1)
 
     if not (DEPLOY_DIR / ".git").exists():
         if DEPLOY_DIR.exists():

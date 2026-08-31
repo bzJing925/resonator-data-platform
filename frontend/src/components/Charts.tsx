@@ -816,6 +816,23 @@ export function WaferMap({
  *  Empty xFields or yFields → placeholder.
  * ------------------------------------------------------------------ */
 
+// 全量行中某数值字段的并集量程（带 3% 边距）；无有限值时返回 null。
+// 分面时给同列各块显式共享量程，跨块可比。
+function numericRange(rows, key) {
+  let lo = Infinity, hi = -Infinity;
+  for (const r of rows) {
+    const v = r?.[key];
+    if (isNum(v)) {
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
+  }
+  if (!(lo <= hi)) return null;
+  if (lo === hi) { lo -= 1; hi += 1; }
+  const pad = (hi - lo) * 0.03;
+  return [lo - pad, hi + pad];
+}
+
 // Resolve all distinct values of a categorical field across rows, sorted.
 // When `includeNull` is true, a NULL_KEY sentinel is appended so trace
 // builders can render an "unknown" bucket instead of dropping null rows.
@@ -1216,7 +1233,7 @@ const SWARM_GL_THRESHOLD = 5000;
 //
 // First version: only numeric Y. Categorical Y is reported via a warning
 // so the caller can prompt the user to switch chart.
-function buildSwarmTraces({ rows, xField, yField, zField, axisRef, zCategoryValues, showLegend, xCategoryArray }) {
+function buildSwarmTraces({ rows, totalRowCount, xField, yField, zField, axisRef, zCategoryValues, showLegend, xCategoryArray }) {
   const xKey = xField.name;
   const yKey = yField.name;
   const xref = `x${axisRef}`;
@@ -1226,7 +1243,8 @@ function buildSwarmTraces({ rows, xField, yField, zField, axisRef, zCategoryValu
 
   if (yIsCat) return traces;
 
-  const useGl = rows.length >= SWARM_GL_THRESHOLD;
+  // 阈值按全量行数判定：分面时 rows 只是块内子集，用错会让 N 块各退化成 SVG。
+  const useGl = (totalRowCount ?? rows.length) >= SWARM_GL_THRESHOLD;
   const traceType = useGl ? 'scattergl' : 'scatter';
   const markerLine = useGl ? undefined : { width: 0.5, color: '#ffffff80' };
 
@@ -1516,31 +1534,35 @@ const PERF_GL_THRESHOLD = 50000;
 // We surface a warning and clamp the categoryarray to the head.
 const X_CATEGORY_TICK_LIMIT = 80;
 
-export function UnifiedChartGrid({
-  chartType,
-  rows,
-  xFields,
-  yFields,
-  zField,
-  height = 350,
-  width = null,
-  onPerformanceWarn,
-  onWarn,
-  onPointClick,
-  onSelection,
-}: {
+// 分面模式（facetZ）下 Z 值个数上限：超出截断 + 警告，
+// 防止几十个竖排子图把单张 Plotly 图撑到不可用。
+const MAX_Z_FACETS = 24;
+
+// buildUnifiedSpec 的参数；UnifiedChartGrid 的 props = UnifiedSpecArgs + 回调
+interface UnifiedSpecArgs {
   chartType: string;
   rows: Record<string, unknown>[];
   xFields: ChartField[];
   yFields: ChartField[];
   zField?: ChartField | null;
+  facetZ?: boolean;
   height?: number;
   width?: number | null;
-  onPerformanceWarn?: (warn: { rowCount: number; threshold: number }) => void;
-  onWarn?: (warn: unknown) => void;
-  onPointClick?: (d: unknown) => void;
-  onSelection?: (e: unknown) => void;
-}) {
+}
+
+// Pure chart-spec builder extracted from UnifiedChartGrid's useMemo so the
+// trace/layout computation can be unit-tested without rendering Plotly.
+// Behavior must stay identical to the original inline computation.
+export function buildUnifiedSpec({
+  chartType,
+  rows,
+  xFields,
+  yFields,
+  zField,
+  facetZ = false, // true 且 Z 为类别字段时：每个 Z 值一块竖排子图（分面），块内不再颜色编码
+  height = 350,
+  width = null,
+}: UnifiedSpecArgs) {
   const cols = (xFields || []).length;
   const nRows = (yFields || []).length;
   const builder = BUILDER_MAP[chartType];
@@ -1550,56 +1572,74 @@ export function UnifiedChartGrid({
       ? `未知图表类型：${String(chartType)}`
       : null;
 
-  // Memoize the heavy trace+layout computation so it only re-runs when
-  // the data or field configuration actually changes.
-  const { allTraces, layout, pendingWarns, perfWarn } = useMemo(() => {
-    const pw = [];
-    const effZ = zField && Z_NUMERIC_UNSUPPORTED.has(chartType) && !zField.isCategorical
-      ? null
-      : zField || null;
-    if (zField && Z_NUMERIC_UNSUPPORTED.has(chartType) && !zField.isCategorical) {
-      pw.push({ kind: 'z_numeric_dropped', chartType, zField: zField.name });
+  const pw = [];
+  // box/violin/swarm/line 不支持数值 Z —— 丢弃并告警，两处判定必须同源。
+  const dropNumericZ = !!zField && Z_NUMERIC_UNSUPPORTED.has(chartType) && !zField.isCategorical;
+  const effZ = dropNumericZ ? null : zField || null;
+  if (dropNumericZ && zField) {
+    pw.push({ kind: 'z_numeric_dropped', chartType, zField: zField.name });
+  }
+
+  // ── 按 Z 值分面：仅类别 Z；数值 Z、未开 facetZ 或空数据时 nZ=1，退化为现状 ──
+  const faceting = !!facetZ && !!effZ && !!effZ.isCategorical && rows.length > 0;
+  let zFacetValues: any[] = [null];
+  if (faceting && effZ) {
+    const all = distinctSortedValues(rows, effZ.name, { includeNull: true });
+    if (all.length > MAX_Z_FACETS) {
+      zFacetValues = all.slice(0, MAX_Z_FACETS);
+      pw.push({ kind: 'z_facets_clamped', zField: effZ.name, total: all.length, shown: MAX_Z_FACETS });
+    } else {
+      zFacetValues = all;
     }
+  }
+  const nZ = faceting ? zFacetValues.length : 1;
+  const totalRows = nRows * nZ;
 
-    const useGl = rows.length >= PERF_GL_THRESHOLD;
-    const pWarn = rows.length >= PERF_GL_THRESHOLD
-      ? { rowCount: rows.length, threshold: PERF_GL_THRESHOLD }
-      : null;
+  const useGl = rows.length >= PERF_GL_THRESHOLD;
+  const pWarn = rows.length >= PERF_GL_THRESHOLD
+    ? { rowCount: rows.length, threshold: PERF_GL_THRESHOLD }
+    : null;
 
-    const zCategoryValues = effZ && effZ.isCategorical
-      ? distinctSortedValues(rows, effZ.name, { includeNull: true })
-      : null;
+  const zCategoryValues = effZ && effZ.isCategorical
+    ? distinctSortedValues(rows, effZ.name, { includeNull: true })
+    : null;
 
-    const hasNumericZ = effZ && !effZ.isCategorical && chartType === 'scatter';
-    const outTraces: any[] = [];
-    const outLayout: any = {
-      ...baseLayout,
-      grid: {
-        rows: nRows,
-        columns: cols,
-        pattern: 'independent',
-        xgap: 0.08,
-        ygap: 0.16,
-        roworder: 'top to bottom',
-      },
-      margin: { l: 60, r: hasNumericZ ? 120 : 60, t: 60, b: 60 },
-      height: nRows * height + 100,
-      annotations: [],
-      showlegend: !!effZ && effZ.isCategorical,
-      legend: { orientation: 'h', y: 1.04, x: 0 },
-      font: { ...baseLayout.font, size: 11 },
-      boxmode: 'group',
-      violinmode: 'group',
-    };
-    if (width) outLayout.width = width;
+  const hasNumericZ = effZ && !effZ.isCategorical && chartType === 'scatter';
+  const outTraces: any[] = [];
+  const outLayout: any = {
+    ...baseLayout,
+    grid: {
+      rows: totalRows,
+      columns: cols,
+      pattern: 'independent',
+      xgap: 0.08,
+      // plotly 要求 (rows-1)*ygap < 1；分面时行数常超 7，
+      // 按总行数收缩使像素间距近似恒定（≈112px/行高350px）。
+      ygap: faceting ? Math.min(0.16, 0.32 / totalRows) : 0.16,
+      roworder: 'top to bottom',
+    },
+    margin: { l: 60, r: hasNumericZ ? 120 : 60, t: 60, b: 60 },
+    height: totalRows * height + 100,
+    annotations: [],
+    showlegend: !!effZ && effZ.isCategorical && !faceting,
+    legend: { orientation: 'h', y: 1.04, x: 0 },
+    font: { ...baseLayout.font, size: 11 },
+    boxmode: 'group',
+    violinmode: 'group',
+  };
+  if (width) outLayout.width = width;
 
-    const COLOR_OWNER_CELL = 1;
+  const COLOR_OWNER_CELL = 1;
 
-    if (!placeholder) for (let r = 0; r < nRows; r++) {
+  if (!placeholder) for (let zi = 0; zi < nZ; zi++) {
+    const zv = faceting ? zFacetValues[zi] : null;
+    const cellRows = faceting && effZ ? rowsForZ(rows, effZ.name, zv) : rows;
+
+    for (let r = 0; r < nRows; r++) {
       const yField = yFields[r];
       for (let c = 0; c < cols; c++) {
         const xField = xFields[c];
-        const cellIdx = r * cols + c + 1;
+        const cellIdx = (zi * nRows + r) * cols + c + 1;
         const sfx = axisSuffix(cellIdx);
         const xAxisKey = `xaxis${sfx}`;
         const yAxisKey = `yaxis${sfx}`;
@@ -1616,6 +1656,8 @@ export function UnifiedChartGrid({
           || ((chartType === 'box' || chartType === 'violin' || chartType === 'swarm') && !yIsCat);
         let xCategoryArray = null;
         if (xAsCategory) {
+          // 类目轴的 tick 集合始终按全量 rows 计算：各 Z 块共享同一套
+          // 类目顺序，避免块间 tick 错位、缺失类目整块塌掉。
           const allCats = distinctSortedValues(rows, xField.name).map(String);
           if (allCats.length > X_CATEGORY_TICK_LIMIT) {
             xCategoryArray = allCats.slice(0, X_CATEGORY_TICK_LIMIT);
@@ -1638,6 +1680,21 @@ export function UnifiedChartGrid({
             xLayout.type = 'category';
             xLayout.categoryorder = 'array';
             xLayout.categoryarray = xCategoryArray;
+          }
+        }
+
+        // 分面 small-multiples：X 刻度与轴标题只显示在最底部一块；数值 X
+        // 用显式并集 range 让同列各块量程一致（类目轴 categoryarray 本就
+        // 全量共享）。plotly 每根轴标签/标题逐轴独立渲染，按轴隐藏即可。
+        if (faceting) {
+          const isBottomOfColumn = zi === nZ - 1 && r === nRows - 1;
+          if (!isBottomOfColumn) {
+            xLayout.showticklabels = false;
+            xLayout.title = undefined;
+          }
+          if (!xAsCategory) {
+            const xr = numericRange(rows, xField.name);
+            if (xr) xLayout.range = xr;
           }
         }
 
@@ -1672,14 +1729,15 @@ export function UnifiedChartGrid({
         }
 
         const cellTraces = builder({
-          rows,
+          rows: cellRows,
+          totalRowCount: rows.length, // 供 GL/SVG 阈值按全量数据规模判定（分面时 rows 只是块内行数）
           xField,
           yField,
-          zField: effZ,
+          zField: faceting ? null : effZ,
           axisRef: sfx,
           useGl,
           zCategoryValues,
-          showLegend: cellIdx === COLOR_OWNER_CELL,
+          showLegend: !faceting && cellIdx === COLOR_OWNER_CELL,
           cellGroup: `cell${cellIdx}`,
           xCategoryArray,
         });
@@ -1687,20 +1745,67 @@ export function UnifiedChartGrid({
       }
     }
 
-    return { allTraces: outTraces, layout: outLayout, pendingWarns: pw, perfWarn: pWarn };
-  }, [chartType, rows, xFields, yFields, zField, height, width, placeholder, cols, nRows, builder]);
+    // 块级标题：每个 Z 值块顶部居中。锚定该块首 cell 的 y 域，
+    // y>1 表示在域上方（y=1.14 为经验起始值，目视偏了再调）。
+    if (faceting && effZ) {
+      const sfx0 = axisSuffix(zi * nRows * cols + 1);
+      outLayout.annotations.push({
+        xref: 'paper',
+        x: 0.5,
+        xanchor: 'center',
+        yref: `y${sfx0} domain`,
+        y: 1.14,
+        yanchor: 'bottom',
+        text: `${axisTitle(effZ)} = ${zv === NULL_KEY ? '∅（缺失）' : String(zv)}`,
+        showarrow: false,
+        font: { size: 13, color: '#E7E9ED' },
+      });
+    }
+  }
 
-  // Dispatch collected warnings AFTER render commits.
+  // 同一警告在 (zi × r × c) 循环里按块重复 push（分面时最多 nZ 份）——
+  // emit 是整体替换语义、父组件不再去重，这里按内容去重后再返回。
+  const dedupedWarns = [...new Map(pw.map((w) => [JSON.stringify(w), w])).values()];
+  return { allTraces: outTraces, layout: outLayout, pendingWarns: dedupedWarns, perfWarn: pWarn, placeholder };
+}
+
+export function UnifiedChartGrid({
+  chartType,
+  rows,
+  xFields,
+  yFields,
+  zField,
+  facetZ = false,
+  height = 350,
+  width = null,
+  onWarningsChange,
+  onPointClick,
+  onSelection,
+}: UnifiedSpecArgs & {
+  onWarningsChange?: (warns: any[]) => void;
+  onPointClick?: (d: unknown) => void;
+  onSelection?: (e: unknown) => void;
+}) {
+  // Memoize the heavy trace+layout computation so it only re-runs when
+  // the data or field configuration actually changes.
+  const { allTraces, layout, pendingWarns, perfWarn, placeholder } = useMemo(
+    () => buildUnifiedSpec({ chartType, rows, xFields, yFields, zField, facetZ, height, width }),
+    [chartType, rows, xFields, yFields, zField, facetZ, height, width],
+  );
+
+  // 警告下发用「整体替换」语义：把当前完整警告数组交给父组件替换（而非逐条
+  // 追加），父组件因此不需要 reset effect —— 旧实现的子先父后 passive
+  // effect 顺序会在"rows 变而警告内容不变"时把警告永久清空。deps 含 rows：
+  // rows 引用变而 warnsKey 相同（连续两次相同查询）时也必须重发 —— 父组件
+  // 在 run() 开头已清空，靠这次重发恢复（探针实证：缺 rows 则警告永久丢失）。
   const warnsKey = JSON.stringify(pendingWarns);
+  const perfKey = perfWarn ? perfWarn.rowCount : 0;
   useEffect(() => {
-    if (!onWarn) return;
-    for (const w of pendingWarns) onWarn(w);
+    if (!onWarningsChange) return;
+    const ws = perfWarn ? [...pendingWarns, { kind: 'perf_gl', ...perfWarn }] : pendingWarns;
+    queueMicrotask(() => onWarningsChange(ws));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [warnsKey, onWarn]);
-  useEffect(() => {
-    if (perfWarn && onPerformanceWarn) onPerformanceWarn(perfWarn);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [perfWarn?.rowCount, onPerformanceWarn]);
+  }, [warnsKey, perfKey, rows, onWarningsChange]);
 
   const handleClick = useCallback((e) => {
     if (!onPointClick) return;

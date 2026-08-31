@@ -151,6 +151,12 @@ const CHART_TYPES = [
   { key: 'wafer',   label: 'Wafer 版图', icon: 'wafer' },
 ];
 
+// Z 展示方式：facet = 每个 Z 值一组竖排子图；color = 原颜色编码。
+const Z_MODE_OPTIONS = [
+  { key: 'facet', label: '按值分图' },
+  { key: 'color', label: '颜色编码（原效果）' },
+];
+
 // Sentinel for "no facet" radio in wafer mode.
 const NO_FACET = '__none__';
 
@@ -178,6 +184,7 @@ const EXPLORE_INITIAL_STATE = {
   xFields: ['eg'],
   yFields: [{ name: 'qs', aggregation: 'all' }],
   zField: null,
+  zMode: 'facet',
   waferZ: { name: 'k2eff_pct', aggregation: 'mean' },
   waferFacet: NO_FACET,
   filters: {},
@@ -200,6 +207,7 @@ export default function Explore() {
   // Normalize persisted axis selections against the current allowed field set.
   const state = useMemo(() => ({
     ...rawState,
+    zMode: rawState.zMode === 'color' ? 'color' : 'facet',
     xFields: normalizeAxisSelection(
       rawState.xFields,
       X_AXIS_FIELD_SET,
@@ -217,6 +225,7 @@ export default function Explore() {
     xFields,
     yFields,
     zField,
+    zMode,
     waferZ,
     waferFacet,
     filters,
@@ -231,6 +240,7 @@ export default function Explore() {
   const setXFields = useCallback((v) => setRawState((s) => ({ ...s, xFields: typeof v === 'function' ? v(s.xFields) : v })), [setRawState]);
   const setYFields = useCallback((v) => setRawState((s) => ({ ...s, yFields: typeof v === 'function' ? v(s.yFields) : v })), [setRawState]);
   const setZField = useCallback((v) => setRawState((s) => ({ ...s, zField: typeof v === 'function' ? v(s.zField) : v })), [setRawState]);
+  const setZMode = useCallback((v) => setRawState((s) => ({ ...s, zMode: typeof v === 'function' ? v(s.zMode) : v })), [setRawState]);
   const setWaferZ = useCallback((v) => setRawState((s) => ({ ...s, waferZ: typeof v === 'function' ? v(s.waferZ) : v })), [setRawState]);
   const setWaferFacet = useCallback((v) => setRawState((s) => ({ ...s, waferFacet: typeof v === 'function' ? v(s.waferFacet) : v })), [setRawState]);
   const setFilters = useCallback((v) => setRawState((s) => ({ ...s, filters: typeof v === 'function' ? v(s.filters) : v })), [setRawState]);
@@ -288,6 +298,9 @@ export default function Explore() {
     const m = enrichField(zField.name, fields);
     return m ? { ...m, aggregation: zField.aggregation || 'all' } : null;
   }, [zField, fields]);
+
+  // 分面生效条件：用户选了「按值分图」且 Z 是类别字段（数值 Z 永不进入分面）。
+  const faceting = zMode === 'facet' && !!zMeta?.isCategorical;
   const waferZMeta = useMemo(() => {
     if (!waferZ) return null;
     const m = enrichField(waferZ.name, fields);
@@ -329,6 +342,7 @@ export default function Explore() {
   const run = async () => {
     setLoading(true);
     setError(null);
+    setChartWarnings([]);
     try {
       // ── Wafer aggregate branch: collapse multiple devices per (x, y) cell.
       if (isWafer && useAggregate) {
@@ -502,20 +516,24 @@ export default function Explore() {
   }, [chartType, xMeta]);
 
   // Runtime warnings emitted by UnifiedChartGrid (numeric Z dropped, X
-  // tick count clamped, etc). Reset on each query.
+  // tick count clamped, etc). 整体替换语义：图表把完整警告数组推给
+  // setChartWarnings，无需逐条合并。清空时机：run() 开头 + 切换图表类型
+  // （切到 wafer 时 UnifiedChartGrid 卸载、无人再 emit，残留靠这里清）。
+  // chartType 是字符串，deps 身份稳定。
   const [chartWarnings, setChartWarnings] = useState([]);
-  useEffect(() => { setChartWarnings([]); }, [rows, chartType, xFields, yFields, zField]);
-  const onChartWarn = useCallback((w) => {
-    setChartWarnings((prev) => {
-      if (prev.some((p) => p.kind === w.kind && p.xField === w.xField)) return prev;
-      return [...prev, w];
-    });
-  }, []);
+  useEffect(() => { setChartWarnings([]); }, [chartType]);
 
   // Format a single warning into a user-facing string.
   const formatChartWarning = (w) => {
     if (w.kind === 'z_numeric_dropped') {
-      return `当前图表（散点图）不支持数值 Z（"${w.zField}"）做颜色编码，已忽略 — 请改选类别字段`;
+      const ct = CHART_TYPES.find((c) => c.key === w.chartType)?.label || w.chartType;
+      return `当前图表（${ct}）不支持数值 Z（"${w.zField}"）做颜色编码，已忽略 — 请改选类别字段`;
+    }
+    if (w.kind === 'z_facets_clamped') {
+      return `Z 字段 "${w.zField}" 共 ${w.total} 个不同值，分图模式仅显示前 ${w.shown} 个 — 建议改用颜色编码或加筛选条件缩小范围`;
+    }
+    if (w.kind === 'perf_gl') {
+      return `数据量 ${w.rowCount} 行超过 ${w.threshold} 阈值，已自动切换 WebGL 加速渲染`;
     }
     if (w.kind === 'x_categories_clamped') {
       return `X 字段 "${w.xField}" 共 ${w.total} 个不同值，超出箱型图/小提琴图/蜂群图渲染上限，仅显示前 ${w.shown} 个 — 建议改用散点图或选数值更少的 X`;
@@ -749,8 +767,8 @@ export default function Explore() {
                       xFields={xMeta}
                       yFields={yMeta}
                       zField={zMeta}
-                      onPerformanceWarn={onChartWarn}
-                      onWarn={onChartWarn}
+                      facetZ={faceting}
+                      onWarningsChange={setChartWarnings}
                       onPointClick={handlePointClick}
                       onSelection={handleSelection}
                     />
@@ -783,6 +801,9 @@ export default function Explore() {
           setYFields={setYFields}
           zField={zField}
           setZField={setZField}
+          zMode={zMode}
+          setZMode={setZMode}
+          zMeta={zMeta}
           waferZ={waferZ}
           setWaferZ={setWaferZ}
           waferFacet={waferFacet}
@@ -815,6 +836,7 @@ function Inspector({
   xFields, setXFields,
   yFields, setYFields,
   zField, setZField,
+  zMode, setZMode, zMeta,
   waferZ, setWaferZ,
   waferFacet, setWaferFacet,
   xMeta, yMeta, violinXWarning, aggregateXWarning, yzFieldConflict,
@@ -824,8 +846,11 @@ function Inspector({
   const xAxisOptions = useMemo(() => axisFieldOptions(fields, X_AXIS_FIELD_NAMES), [fields]);
   const yAxisOptions = useMemo(() => axisFieldOptions(fields, Y_AXIS_FIELD_NAMES), [fields]);
 
-  // Grid preview text (X cols × Y rows).
-  const gridText = `将渲染 ${yMeta.length || '?'} 行 × ${xMeta.length || '?'} 列 = ${(yMeta.length || 0) * (xMeta.length || 0) || '?'} 个子图`;
+  // Grid preview text (X cols × Y rows; facet mode adds a Z-block outer loop).
+  const zFacetActive = !!zField && zMode === 'facet' && !!zMeta?.isCategorical;
+  const gridText = zFacetActive
+    ? `按 Z 值分图：每个 Z 值渲染 ${yMeta.length || '?'} 行 × ${xMeta.length || '?'} 列子图，竖向排列`
+    : `将渲染 ${yMeta.length || '?'} 行 × ${xMeta.length || '?'} 列 = ${(yMeta.length || 0) * (xMeta.length || 0) || '?'} 个子图`;
 
   return (
     <div className="panel right">
@@ -904,6 +929,32 @@ function Inspector({
             </div>
             <div className="section">
               <div className="section-title">颜色 / 分组（Z，单选）</div>
+              {zField && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                  <span style={{ fontSize: 10.5, color: 'var(--fg-3)' }}>展示方式：</span>
+                  {zMeta?.isCategorical ? (
+                    Z_MODE_OPTIONS.map((o) => (
+                      <label
+                        key={o.key}
+                        className={`explore-fieldchip${zMode === o.key ? ' checked' : ''} radio`}
+                      >
+                        <input
+                          type="radio"
+                          checked={zMode === o.key}
+                          onChange={() => setZMode(o.key)}
+                          style={{ position: 'absolute', opacity: 0, pointerEvents: 'none' }}
+                        />
+                        <span className="explore-fieldchip-radio" aria-hidden>
+                          {zMode === o.key && <span className="dot" />}
+                        </span>
+                        <span className="explore-fieldchip-label">{o.label}</span>
+                      </label>
+                    ))
+                  ) : (
+                    <span className="hint" style={{ fontSize: 10.5 }}>数值 Z 仅支持颜色编码</span>
+                  )}
+                </div>
+              )}
               <FieldRadioWithAgg
                 hint="可选"
                 fields={fields}
