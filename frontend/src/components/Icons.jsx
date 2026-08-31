@@ -170,6 +170,50 @@ const I = {
       }
     />
   ),
+  folder: (p) => (
+    <Icon
+      {...p}
+      d={
+        <g>
+          <path d="M4 6h5l2 2h9a1 1 0 011 1v9a1 1 0 01-1 1H4a1 1 0 01-1-1V7a1 1 0 011-1z" />
+        </g>
+      }
+    />
+  ),
+  file: (p) => <Icon {...p} d="M14 3H6a1 1 0 00-1 1v16a1 1 0 001 1h12a1 1 0 001-1V8z M14 3v5h5" />,
+  grid: (p) => (
+    <Icon
+      {...p}
+      d={
+        <g>
+          <rect x="3" y="3" width="7" height="7" rx="1" />
+          <rect x="14" y="3" width="7" height="7" rx="1" />
+          <rect x="3" y="14" width="7" height="7" rx="1" />
+          <rect x="14" y="14" width="7" height="7" rx="1" />
+        </g>
+      }
+    />
+  ),
+  list: (p) => (
+    <Icon
+      {...p}
+      d={
+        <g>
+          <path d="M4 7h16M4 12h16M4 17h16" />
+        </g>
+      }
+    />
+  ),
+  edit: (p) => (
+    <Icon
+      {...p}
+      d={
+        <g>
+          <path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z" />
+        </g>
+      }
+    />
+  ),
   check: (p) => <Icon {...p} d="M5 13l4 4L19 7" />,
   alert: (p) => (
     <Icon

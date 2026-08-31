@@ -15,9 +15,9 @@ import numpy as np
 
 if TYPE_CHECKING:
     import torch
+
     from app.ml.sparse.reconstructor import SparseReconstructor
     from app.ml.sparse.sampler import AdaptiveSampler
-    from app.models import Device
 
 log = logging.getLogger("aln")
 
@@ -35,7 +35,7 @@ def _get_checkpoint_dir(piezo: str) -> Path:
     return Path(__file__).parent.parent / "checkpoints" / "sparse" / f"{piezo}nm"
 
 
-def _init_device() -> "torch.device":
+def _init_device() -> torch.device:
     import torch
     if torch.backends.mps.is_available():
         return torch.device("mps")
@@ -69,6 +69,7 @@ def load_models(piezo: str = "308", force: bool = False) -> bool:
         return False
 
     import torch
+
     from app.ml.sparse.reconstructor import SparseReconstructor
     from app.ml.sparse.sampler import AdaptiveSampler
 
@@ -78,7 +79,7 @@ def load_models(piezo: str = "308", force: bool = False) -> bool:
     # 读取配置
     config = {"d_model": 64, "n_encoder_layers": 4, "n_heads": 4}
     if config_path.exists():
-        with open(config_path, "r", encoding="utf-8") as f:
+        with open(config_path, encoding="utf-8") as f:
             config.update(json.load(f))
 
     # 加载重建网络
@@ -107,7 +108,7 @@ def load_models(piezo: str = "308", force: bool = False) -> bool:
 
 def _s1p_to_z11_db(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
     """读取 S1P，返回插值到 1001 点的 (freq_ghz, z11_db)。
-    
+
     必须与训练时 dataset.py 中的 s1p_to_z11_db 保持一致（统一 1001 频点）。
     """
     from app.ml.sparse.dataset import s1p_to_z11_db as _dataset_s1p_to_z11
@@ -159,7 +160,6 @@ def predict_z11_sparse(
 
         # 2. 提取/准备条件参数
         if cond is None:
-            from app.core.extract import extract_resonator_params
             from app.ml.sparse.dataset import extract_five_params
             cond = extract_five_params(s1p_path)
 
@@ -186,7 +186,10 @@ def predict_z11_sparse(
             fs_t = torch.tensor([cond["fs"]], dtype=torch.float32, device=_DEVICE)
             fp_t = torch.tensor([cond["fp"]], dtype=torch.float32, device=_DEVICE)
             with torch.no_grad():
-                p_norm, _, k_pred = sampler(z_t, rid_t, freq=freq_t, fs=fs_t, fp=fp_t, target_k=target_k, use_gumbel=False)
+                p_norm, _, k_pred = sampler(
+                    z_t, rid_t, freq=freq_t, fs=fs_t, fp=fp_t,
+                    target_k=target_k, use_gumbel=False,
+                )
                 k_val = int(k_pred[0].item())
                 mask, k_actual = sampler.sample_points(p_norm, k=k_val)
                 sample_idx = torch.where(mask[0])[0].cpu().numpy()
@@ -194,7 +197,10 @@ def predict_z11_sparse(
         else:
             # 固定规则采样
             from app.ml.sparse.dataset import fixed_rule_sample
-            sf, sz = fixed_rule_sample(freq, z_db, region_mask, target_k, fs=cond["fs"], fp=cond["fp"])
+            sf, sz = fixed_rule_sample(
+                freq, z_db, region_mask, target_k,
+                fs=cond["fs"], fp=cond["fp"],
+            )
             sample_idx = np.searchsorted(freq, sf)
             sample_idx = np.clip(sample_idx, 0, len(freq) - 1)
 
@@ -202,7 +208,10 @@ def predict_z11_sparse(
         if len(sample_idx) == 0:
             log.warning(f"采样点为空，回退到固定规则采样: {s1p_path}")
             from app.ml.sparse.dataset import fixed_rule_sample
-            sf, sz = fixed_rule_sample(freq, z_db, region_mask, target_k if target_k > 0 else 300, fs=cond["fs"], fp=cond["fp"])
+            sf, sz = fixed_rule_sample(
+                freq, z_db, region_mask, target_k if target_k > 0 else 300,
+                fs=cond["fs"], fp=cond["fp"],
+            )
             sample_idx = np.searchsorted(freq, sf)
             sample_idx = np.clip(sample_idx, 0, len(freq) - 1)
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -80,7 +81,8 @@ def _bodeq_raw_array(s: np.ndarray, freq: np.ndarray) -> tuple[np.ndarray, int]:
     s_mag = np.abs(s)
 
     denominator = 1 - s_mag**2
-    valid_mask = (denominator > 1e-6) & (denominator < 1.0)
+    # 仅排除 |s| 极接近 1 导致除零的点；|s| = 0 时分子也为 0，BodeQ = 0 是合法值。
+    valid_mask = denominator > 1e-6
     numerator = omega * group_delay * s_mag
 
     bodeq_raw = np.full_like(denominator, np.nan, dtype=float)
@@ -89,15 +91,25 @@ def _bodeq_raw_array(s: np.ndarray, freq: np.ndarray) -> tuple[np.ndarray, int]:
     return bodeq_raw, int(np.count_nonzero(valid_mask))
 
 
-def _smooth_bodeq(bodeq_raw: np.ndarray, freq: np.ndarray, cfg: AlgorithmConfig) -> np.ndarray:
-    """Savitzky-Golay 平滑 BodeQ 曲线（窗口随长度缩放）。"""
-    from scipy.signal import savgol_filter
+def _interpolate_nan(arr: np.ndarray, freq: np.ndarray) -> np.ndarray:
+    """对数组中的 NaN 用相邻有限值线性插值填充（边缘保持 NaN）。"""
+    finite = np.isfinite(arr)
+    if not finite.any():
+        return arr
+    filled = arr.copy()
+    filled[~finite] = np.interp(freq[~finite], freq[finite], arr[finite])
+    return filled
 
+
+def _smooth_bodeq(bodeq_raw: np.ndarray, freq: np.ndarray, cfg: AlgorithmConfig) -> np.ndarray:
+    """Savitzky-Golay 平滑 BodeQ 曲线（窗口随长度缩放，自动处理 NaN）。"""
+    from scipy.signal import savgol_filter
     window_size = min(cfg.savgol_window, len(freq) // 10 * 2 + 1)
     if window_size <= 5:
         return bodeq_raw
     try:
-        return savgol_filter(bodeq_raw, window_length=window_size, polyorder=cfg.savgol_polyorder)
+        filled = _interpolate_nan(bodeq_raw, freq)
+        return savgol_filter(filled, window_length=window_size, polyorder=cfg.savgol_polyorder)
     except Exception as exc:
         raise ExtractError(f"BodeQ Savitzky-Golay 平滑失败: {exc}") from exc
 
@@ -259,9 +271,7 @@ def calc_bodeq_curve(
 
 
 # ── 3. 相位法 Q ───────────────────────────────────────────────────────
-def calc_q_phase(
-    z: np.ndarray, freq: np.ndarray, fs_idx: int, fp_idx: int
-) -> tuple[float, float]:
+def calc_q_phase(z: np.ndarray, freq: np.ndarray, fs_idx: int, fp_idx: int) -> tuple[float, float]:
     """从阻抗相位斜率计算 Qs / Qp。"""
     z_phase = np.angle(z)
     phase_deriv = np.gradient(z_phase, freq)
@@ -481,9 +491,7 @@ def extract_resonator_params(
     fp = float(freq[fp_idx])
 
     if fs >= fp:
-        raise ExtractError(
-            f"{filename} 谐振点异常 (fs={fs / 1e9:.3f}GHz, fp={fp / 1e9:.3f}GHz)"
-        )
+        raise ExtractError(f"{filename} 谐振点异常 (fs={fs / 1e9:.3f}GHz, fp={fp / 1e9:.3f}GHz)")
 
     zs = float(z_mag[fs_idx])
     zp = float(z_mag[fp_idx])

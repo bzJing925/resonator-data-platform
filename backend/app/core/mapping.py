@@ -42,7 +42,12 @@ class MappingEntry:
 def load_mapping(path: str | Path) -> dict[str, MappingEntry]:
     """从 xlsx/csv 加载对照表，返回 {mark: MappingEntry}。"""
     import pandas as pd
+
+    if isinstance(path, bytes):
+        path = path.decode("utf-8")
     path = Path(path)
+    if not path.exists():
+        return {}
     if path.suffix.lower() == ".csv":
         df = pd.read_csv(path, header=None, dtype=str)
     else:

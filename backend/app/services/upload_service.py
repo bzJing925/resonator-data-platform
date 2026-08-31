@@ -11,15 +11,25 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
+from celery import chain
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
 from app.models import Batch, Mapping, UploadTask
-from app.workers.extract_batch import extract_batch_task
 from app.workers.compute_batch import compute_batch_task
+from app.workers.extract_batch import extract_batch_task
+from app.workers.pipeline_batch import pipeline_batch_task, should_use_pipeline
 
 logger = logging.getLogger(__name__)
+
+
+class MappingNotFoundError(Exception):
+    """请求的对照表 ID 不存在。"""
+
+
+class TaskDispatchError(Exception):
+    """Celery 任务投递失败（如 broker 不可达）。"""
 
 
 def _dispatch_chain(
@@ -33,11 +43,22 @@ def _dispatch_chain(
     deembed: bool = False,
     deembed_method: str = "default",
     process_type: str = "AUTO",
-) -> str | None:
-    """投递 extract_batch → compute_batch，返回 celery_task_id 或 None。"""
-    from celery import chain
-
-    try:
+) -> str:
+    """根据批次特征选择 pipeline 或 legacy 链路，投递 Celery 任务。"""
+    if should_use_pipeline(zip_path, deembed):
+        result = pipeline_batch_task.apply_async(
+            kwargs={
+                "upload_task_id": task.id,
+                "zip_path": str(zip_path),
+                "batch_no": batch_no,
+                "mapping_id": mapping_id,
+                "f_start_ghz": f_start_ghz,
+                "f_end_ghz": f_end_ghz,
+                "deembed_method": deembed_method if deembed else "default",
+                "process_type": process_type,
+            }
+        )
+    else:
         result = chain(
             extract_batch_task.s(
                 upload_task_id=task.id,
@@ -52,17 +73,7 @@ def _dispatch_chain(
             ),
             compute_batch_task.s(),
         ).apply_async()
-        return result.id
-    except ImportError as exc:
-        import traceback
-
-        task.error_msg = f"Celery 导入失败: {exc}\n{traceback.format_exc()}"
-        return None
-    except Exception as exc:
-        task.status = "failed"
-        task.error_msg = f"任务投递失败: {exc!s}"
-        task.finished_at = datetime.now(UTC)
-        return None
+    return result.id
 
 
 def create_batch_and_dispatch(
@@ -83,8 +94,6 @@ def create_batch_and_dispatch(
 
     若 batch_no 已存在，返回 None（调用方应视为重复并跳过/报错）。
     """
-    settings = get_settings()
-
     existing = db.scalar(select(Batch).where(Batch.batch_no == batch_no))
     if existing is not None:
         logger.warning("批次 %s 已存在，跳过重复 %s", batch_no, source)
@@ -92,7 +101,7 @@ def create_batch_and_dispatch(
 
     mapping = db.get(Mapping, mapping_id)
     if mapping is None:
-        raise ValueError(f"对照表 {mapping_id} 不存在")
+        raise MappingNotFoundError(f"对照表 {mapping_id} 不存在")
 
     task = UploadTask(
         batch_no=batch_no,
@@ -122,17 +131,24 @@ def create_batch_and_dispatch(
     db.commit()
     db.refresh(task)
 
-    celery_task_id = _dispatch_chain(
-        task,
-        zip_path,
-        batch_no,
-        mapping_id,
-        f_start_ghz=f_start_ghz,
-        f_end_ghz=f_end_ghz,
-        deembed=deembed,
-        deembed_method=deembed_method,
-        process_type=process_type,
-    )
+    try:
+        celery_task_id = _dispatch_chain(
+            task,
+            zip_path,
+            batch_no,
+            mapping_id,
+            f_start_ghz=f_start_ghz,
+            f_end_ghz=f_end_ghz,
+            deembed=deembed,
+            deembed_method=deembed_method,
+            process_type=process_type,
+        )
+    except Exception as exc:
+        task.status = "failed"
+        task.error_msg = f"任务投递失败: {exc!s}"
+        task.finished_at = datetime.now(UTC)
+        db.commit()
+        raise TaskDispatchError(f"Celery 任务投递失败: {exc!s}") from exc
 
     if celery_task_id:
         task.celery_task_id = celery_task_id

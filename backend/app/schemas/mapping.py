@@ -6,6 +6,8 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
+from app.schemas.common import PaginatedResponse
+
 
 class MappingListItem(BaseModel):
     id: int
@@ -26,8 +28,5 @@ class MappingEntryItem(BaseModel):
     has_pf: bool
 
 
-class MappingEntriesResponse(BaseModel):
-    total: int
-    page: int
-    size: int
-    items: list[MappingEntryItem]
+class MappingEntriesResponse(PaginatedResponse[MappingEntryItem]):
+    pass

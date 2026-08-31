@@ -1,7 +1,8 @@
-import React, { memo, useEffect, useState } from 'react';
+import React, { memo, useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import I from '../components/Icons.jsx';
 import { listBatches, deleteBatch } from '../api/endpoints.js';
+import { usePageState } from '../contexts/PageStateContext.jsx';
 
 const BatchRow = memo(function BatchRow({ batch, onDelete }) {
   const b = batch;
@@ -48,13 +49,18 @@ const BatchRow = memo(function BatchRow({ batch, onDelete }) {
   );
 });
 
+const BATCHES_INITIAL_STATE = { page: 1, search: '' };
+
 export default function Batches() {
-  const [page, setPage] = useState(1);
+  const [state, setState] = usePageState('batches', BATCHES_INITIAL_STATE);
+  const { page, search } = state;
+  const setPage = useCallback((v) => setState((s) => ({ ...s, page: typeof v === 'function' ? v(s.page) : v })), [setState]);
+  const setSearch = useCallback((v) => setState((s) => ({ ...s, search: typeof v === 'function' ? v(s.search) : v })), [setState]);
+
   const [size] = useState(20);
   const [data, setData] = useState({ items: [], total: 0, page: 1, size: 20 });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [search, setSearch] = useState('');
 
   // load 接受外部 cancelled flag —— useEffect 重跑时能让旧请求丢弃结果，
   // 避免分页/size 快速切换时慢请求覆盖快请求结果。

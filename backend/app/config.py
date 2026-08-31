@@ -19,9 +19,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """运行时配置（来自环境变量 / .env）。"""
 
-    # 桌面版通过 DOTENV_PATH 指向打包进来的 .env；开发环境默认使用当前目录 .env
+    # 桌面版通过 DOTENV_PATH 指向打包进来的 .env；
+    # 开发环境默认加载项目根目录（backend/..）下的 .env，避免从 backend/ 启动时找不到。
+    _repo_root = Path(__file__).resolve().parent.parent.parent
     model_config = SettingsConfigDict(
-        env_file=os.environ.get("DOTENV_PATH", ".env"),
+        env_file=os.environ.get("DOTENV_PATH", str(_repo_root / ".env")),
         extra="ignore",
     )
 
@@ -44,6 +46,13 @@ class Settings(BaseSettings):
 
     # 数据保留策略
     KEEP_RAW_ZIP: bool = False  # 解压分析成功后是否保留原 zip
+
+    # 边解压边计算流水线
+    PIPELINE_ENABLED: bool = True          # 是否启用新链路
+    PIPELINE_WORKERS: int = 0              # 0 = os.cpu_count()
+    PIPELINE_SCAN_INTERVAL: float = 1.0    # 文件扫描间隔（秒）
+    PIPELINE_COMPRESS_RAW: bool = True     # 提参后是否 gzip 原始 snp
+    PIPELINE_KEEP_DEEMBED_TEMP: bool = False  # 是否保留去嵌中间 *_de.s1p
 
     # 日志
     LOG_LEVEL: str = "INFO"

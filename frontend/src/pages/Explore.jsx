@@ -5,6 +5,7 @@ import useFields, { displayLabel } from '../hooks/useFields.js';
 import { queryDevices, queryAggregate, exportCsv } from '../api/endpoints.js';
 import DeviceModal from '../components/DeviceModal.jsx';
 import FilterPanel from '../components/FilterPanel.jsx';
+import { usePageState } from '../contexts/PageStateContext.jsx';
 
 // Aggregation options for numeric Y/Z fields.
 //   'all' is a UI sentinel meaning "no aggregation, plot raw rows".
@@ -165,85 +166,81 @@ function enrichField(name, fields) {
   return { name, label: name, unit: '', section: 'other', isCategorical: false };
 }
 
-// localStorage key for Explore page state persistence
-const EXPLORE_STATE_KEY = 'aln_explore_state_v1';
-
-function loadExploreState() {
-  try {
-    const raw = localStorage.getItem(EXPLORE_STATE_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch {
-    // ignore corrupt storage
-  }
-  return null;
-}
-
-function saveExploreState(state) {
-  try {
-    localStorage.setItem(EXPLORE_STATE_KEY, JSON.stringify(state));
-  } catch {
-    // ignore quota exceeded
-  }
-}
+const EXPLORE_INITIAL_STATE = {
+  chartType: 'scatter',
+  xFields: ['eg'],
+  yFields: [{ name: 'qs', aggregation: 'all' }],
+  zField: null,
+  waferZ: { name: 'k2eff_pct', aggregation: 'mean' },
+  waferFacet: NO_FACET,
+  filters: {},
+  limit: 50000,
+  rows: [],
+  stats: null,
+  hiddenIds: new Set(),
+  prevHiddenIds: null,
+};
 
 export default function Explore() {
   const { data: fields, loading: fLoading, error: fErr } = useFields();
 
-  // Load persisted state on mount, fallback to defaults
-  const persisted = loadExploreState();
-  const defaultXFields = ['eg'];
-  const defaultYFields = [{ name: 'qs', aggregation: 'all' }];
-
-  // Persisted across chart-type switches (don't reset on chartType change).
-  const [chartType, setChartType] = useState(persisted?.chartType || 'scatter');
-  const [xFields, setXFields] = useState(
-    normalizeAxisSelection(persisted?.xFields, X_AXIS_FIELD_SET, defaultXFields),
+  const [rawState, setRawState] = usePageState(
+    'explore',
+    EXPLORE_INITIAL_STATE,
+    { dataKeys: ['rows'], maxDataBytes: 1024 * 1024 },
   );
-  // Y fields: list of { name, aggregation } where aggregation is one of
-  // AGG_OPTIONS keys. Default 'all' = no aggregation (plot raw rows).
-  const [yFields, setYFields] = useState(
-    normalizeYSelection(persisted?.yFields, Y_AXIS_FIELD_SET, defaultYFields),
-  );
-  // Z field: { name, aggregation } | null. Same convention as Y.
-  const [zField, setZField] = useState(persisted?.zField || null);
 
-  // wafer-only state. waferZ carries an aggregation just like yFields,
-  // because multiple devices can share the same (x, y) cell — without
-  // aggregation the last-drawn point silently wins.
-  const [waferZ, setWaferZ] = useState(persisted?.waferZ || { name: 'k2eff_pct', aggregation: 'mean' });
-  const [waferFacet, setWaferFacet] = useState(persisted?.waferFacet || NO_FACET);
+  // Normalize persisted axis selections against the current allowed field set.
+  const state = useMemo(() => ({
+    ...rawState,
+    xFields: normalizeAxisSelection(
+      rawState.xFields,
+      X_AXIS_FIELD_SET,
+      EXPLORE_INITIAL_STATE.xFields,
+    ),
+    yFields: normalizeYSelection(
+      rawState.yFields,
+      Y_AXIS_FIELD_SET,
+      EXPLORE_INITIAL_STATE.yFields,
+    ),
+  }), [rawState]);
 
-  // Filters / query state.
-  const [filters, setFilters] = useState(persisted?.filters || {});
-  const [limit, setLimit] = useState(50000);
-  const [rows, setRows] = useState([]);
-  const [stats, setStats] = useState(null);
+  const {
+    chartType,
+    xFields,
+    yFields,
+    zField,
+    waferZ,
+    waferFacet,
+    filters,
+    limit,
+    rows,
+    stats,
+    hiddenIds,
+    prevHiddenIds,
+  } = state;
+
+  const setChartType = useCallback((v) => setRawState((s) => ({ ...s, chartType: typeof v === 'function' ? v(s.chartType) : v })), [setRawState]);
+  const setXFields = useCallback((v) => setRawState((s) => ({ ...s, xFields: typeof v === 'function' ? v(s.xFields) : v })), [setRawState]);
+  const setYFields = useCallback((v) => setRawState((s) => ({ ...s, yFields: typeof v === 'function' ? v(s.yFields) : v })), [setRawState]);
+  const setZField = useCallback((v) => setRawState((s) => ({ ...s, zField: typeof v === 'function' ? v(s.zField) : v })), [setRawState]);
+  const setWaferZ = useCallback((v) => setRawState((s) => ({ ...s, waferZ: typeof v === 'function' ? v(s.waferZ) : v })), [setRawState]);
+  const setWaferFacet = useCallback((v) => setRawState((s) => ({ ...s, waferFacet: typeof v === 'function' ? v(s.waferFacet) : v })), [setRawState]);
+  const setFilters = useCallback((v) => setRawState((s) => ({ ...s, filters: typeof v === 'function' ? v(s.filters) : v })), [setRawState]);
+  const setLimit = useCallback((v) => setRawState((s) => ({ ...s, limit: typeof v === 'function' ? v(s.limit) : v })), [setRawState]);
+  const setRows = useCallback((v) => setRawState((s) => ({ ...s, rows: typeof v === 'function' ? v(s.rows) : v })), [setRawState]);
+  const setStats = useCallback((v) => setRawState((s) => ({ ...s, stats: typeof v === 'function' ? v(s.stats) : v })), [setRawState]);
+  const setHiddenIds = useCallback((v) => setRawState((s) => ({ ...s, hiddenIds: typeof v === 'function' ? v(s.hiddenIds) : v })), [setRawState]);
+  const setPrevHiddenIds = useCallback((v) => setRawState((s) => ({ ...s, prevHiddenIds: typeof v === 'function' ? v(s.prevHiddenIds) : v })), [setRawState]);
+
+  // Transient UI state that does not need to survive route switches.
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [activeDevice, setActiveDevice] = useState(null);
   const [exporting, setExporting] = useState(false);
 
   // 图上框选隐藏点：纯客户端、跨 chart type 全局。
-  //   - hiddenIds:    当前被隐藏的 row.id 集合
-  //   - prevHiddenIds: 单步撤销栈（null = 无可撤销）
-  //   - shiftHeldRef: 全局 Shift 键状态。Plotly 的 onSelected 事件不带
-  //                   modifier，需要我们自己跟。
-  const [hiddenIds, setHiddenIds] = useState(() => new Set());
-  const [prevHiddenIds, setPrevHiddenIds] = useState(null);
   const shiftHeldRef = useRef(false);
-
-  // Persist toolbar selections to localStorage so they survive tab switches / reloads.
-  useEffect(() => {
-    saveExploreState({
-      chartType,
-      xFields,
-      yFields,
-      zField,
-      waferZ,
-      waferFacet,
-      filters,
-    });
-  }, [chartType, xFields, yFields, zField, waferZ, waferFacet, filters]);
 
   useEffect(() => {
     const down = (e) => { if (e.key === 'Shift') shiftHeldRef.current = true; };

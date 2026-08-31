@@ -6,11 +6,8 @@
 
 from __future__ import annotations
 
-import pytest
-
 from app.api.query import _SAMPLE_THRESHOLD
 from app.schemas.query import QueryRequest
-
 
 # ── 降采样阈值常量 ───────────────────────────────────────────────────────
 

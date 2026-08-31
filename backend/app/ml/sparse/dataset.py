@@ -20,7 +20,9 @@ from app.ml.sparse.region_partition import partition_regions
 log = logging.getLogger("aln")
 
 
-def s1p_to_z11_db(path: str | Path, target_n_freq: int = 1001) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+def s1p_to_z11_db(
+    path: str | Path, target_n_freq: int = 1001
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
     """读取 S1P/S2P，返回插值后的 (freq_ghz, z_db)。
 
     使用 skrf 读取阻抗参数 Z，转为 dB，再插值到统一频点数。
@@ -193,9 +195,15 @@ def fixed_rule_sample(
         gauss = np.exp(-np.minimum(d_fs, d_fp) ** 2)
         main_weights[region_mask["main"]] = gauss[region_mask["main"]]
 
-    f_main, z_main = _weighted_sample_from_mask(freq, z_db, region_mask["main"], actual["main"], main_weights)
-    f_spur, z_spur = _weighted_sample_from_mask(freq, z_db, region_mask["spurious"], actual["spurious"])
-    f_smooth, z_smooth = _weighted_sample_from_mask(freq, z_db, region_mask["smooth"], actual["smooth"])
+    f_main, z_main = _weighted_sample_from_mask(
+        freq, z_db, region_mask["main"], actual["main"], main_weights
+    )
+    f_spur, z_spur = _weighted_sample_from_mask(
+        freq, z_db, region_mask["spurious"], actual["spurious"]
+    )
+    f_smooth, z_smooth = _weighted_sample_from_mask(
+        freq, z_db, region_mask["smooth"], actual["smooth"]
+    )
 
     f_all = np.concatenate([f_main, f_spur, f_smooth])
     z_all = np.concatenate([z_main, z_spur, z_smooth])
@@ -234,7 +242,9 @@ def _load_file_worker(args: tuple[str, int]) -> list[dict] | None:
             region_ids[region_mask["main"]] = 0
             region_ids[region_mask["spurious"]] = 1
             region_ids[region_mask["smooth"]] = 2
-            sf, sz = fixed_rule_sample(freq, z_db, region_mask, target_k, fs=params["fs"], fp=params["fp"])
+            sf, sz = fixed_rule_sample(
+                freq, z_db, region_mask, target_k, fs=params["fs"], fp=params["fp"]
+            )
             z_baseline = baseline_interpolate(sf, sz, freq)
             return [{
                 "cond": np.array([params["fs"], params["fp"], params["Qs"],
@@ -258,7 +268,9 @@ def _load_file_worker(args: tuple[str, int]) -> list[dict] | None:
                 region_ids[region_mask["main"]] = 0
                 region_ids[region_mask["spurious"]] = 1
                 region_ids[region_mask["smooth"]] = 2
-                sf, sz = fixed_rule_sample(freq, z_db, region_mask, target_k, fs=params["fs"], fp=params["fp"])
+                sf, sz = fixed_rule_sample(
+                    freq, z_db, region_mask, target_k, fs=params["fs"], fp=params["fp"]
+                )
                 z_baseline = baseline_interpolate(sf, sz, freq)
                 samples.append({
                     "cond": np.array([params["fs"], params["fp"], params["Qs"],
@@ -316,7 +328,10 @@ class SparseReconDataset(Dataset):
             print("SparseReconDataset: 未找到任何 S1P/S2P 文件")
             return
 
-        print(f"SparseReconDataset: 发现 {len(all_files)} 个文件，使用 {num_workers} 进程并行加载...")
+        print(
+            f"SparseReconDataset: 发现 {len(all_files)} 个文件，"
+            f"使用 {num_workers} 进程并行加载..."
+        )
 
         from concurrent.futures import ProcessPoolExecutor, as_completed
 
@@ -377,11 +392,11 @@ def collate_fn(batch: list[dict]) -> dict[str, torch.Tensor]:
 
     # padding 稀疏点序列
     max_k = max(b["samples"].shape[0] for b in batch)
-    B = len(batch)
+    b = len(batch)
     d_model = batch[0]["samples"].shape[1]  # 2
 
-    padded_samples = torch.zeros(B, max_k, d_model)
-    sample_mask = torch.ones(B, max_k, dtype=torch.bool)  # True = padding
+    padded_samples = torch.zeros(b, max_k, d_model)
+    sample_mask = torch.ones(b, max_k, dtype=torch.bool)  # True = padding
 
     for i, b in enumerate(batch):
         k = b["samples"].shape[0]

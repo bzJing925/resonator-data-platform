@@ -10,7 +10,6 @@ import math
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 
 class SinusoidalEmbedding(nn.Module):
@@ -113,7 +112,7 @@ class SparseReconstructor(nn.Module):
         cond: torch.Tensor,
         mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        B, K, _ = samples.shape
+        b, k, _ = samples.shape
         freq = samples[..., 0]
         zval = samples[..., 1:2]
 
@@ -136,20 +135,20 @@ class SparseReconstructor(nn.Module):
         z_baseline: torch.Tensor | None = None,
         sample_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        B = cond.shape[0]
+        b = cond.shape[0]
 
         c = self.cond_proj(cond)
         h = self._encode_samples(samples, c, sample_mask)
 
         if freq_target.dim() == 1:
-            freq_target = freq_target.unsqueeze(0).expand(B, -1)
-        N = freq_target.shape[1]
+            freq_target = freq_target.unsqueeze(0).expand(b, -1)
+        n = freq_target.shape[1]
 
         freq_t_norm = freq_target / self.max_freq
         q_pos = self.freq_embed(freq_t_norm)
         q = torch.cat([
             q_pos,
-            torch.zeros(B, N, self.d_model // 2, device=q_pos.device),
+            torch.zeros(b, n, self.d_model // 2, device=q_pos.device),
         ], dim=-1)
         q = q + c.unsqueeze(1)
         q = self.query_norm(q)
@@ -164,7 +163,7 @@ class SparseReconstructor(nn.Module):
         out = self.output_norm(out)
 
         # 预测残差
-        z_residual = self.residual_head(out).squeeze(-1)  # (B, N)
+        z_residual = self.residual_head(out).squeeze(-1)  # (b, n)
 
         # 残差缩放
         scale = torch.sigmoid(self.residual_scale)
@@ -173,7 +172,7 @@ class SparseReconstructor(nn.Module):
         # 加上基线插值（如果有）
         if z_baseline is not None:
             if z_baseline.dim() == 1:
-                z_baseline = z_baseline.unsqueeze(0).expand(B, -1)
+                z_baseline = z_baseline.unsqueeze(0).expand(b, -1)
             z_pred = z_pred + z_baseline
 
         return z_pred

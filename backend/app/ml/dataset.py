@@ -115,7 +115,7 @@ def generate_synthetic_batch(
     base_fp = base_fs + rng.uniform(0.25, 0.45)
 
     devices: list[dict] = []
-    for i in range(n_devices):
+    for _i in range(n_devices):
         # 器件级偏移（微结构差异）
         fs_offset = rng.normal(0.0, 0.02)
         fp_offset = rng.normal(0.0, 0.03)
@@ -176,8 +176,6 @@ class SyntheticSpectrumDataset(Dataset):
         self.latent_dim = latent_dim
         self.devices: list[dict] = []
         self.batch_meta: dict[int, dict] = {}
-
-        rng = np.random.default_rng(42)
 
         for b in range(n_batches):
             batch_devices = generate_synthetic_batch(
@@ -270,6 +268,7 @@ class RealSpectrumDataset(Dataset):
         # 延迟导入，避免无 sqlalchemy 时报错
         try:
             from sqlalchemy import create_engine, select
+
             from app.models import Batch, Device
         except ImportError as exc:
             raise ImportError(
@@ -414,9 +413,10 @@ class RealS1PBatchDataset(Dataset):
         self.devices: list[dict] = []
         self.batch_meta: dict[int, dict] = {}
 
-        from app.ml.s1p_parser import parse_s1p
-        from app.ml.filename_parser import parse_filename_params
         import re
+
+        from app.ml.filename_parser import parse_filename_params
+        from app.ml.s1p_parser import parse_s1p
 
         s1p_dir = Path(s1p_dir)
         files = sorted(s1p_dir.glob("*.s1p"))

@@ -1385,3 +1385,279 @@ textarea {
     transform: rotate(360deg);
   }
 }
+
+/* =============================================================================
+   FileManager - Finder 风格文件管理器
+   ============================================================================= */
+.file-manager {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  overflow: hidden;
+  min-height: 320px;
+}
+
+.file-manager-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel-2);
+}
+
+.file-manager-toolbar .breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.file-manager-toolbar .breadcrumb .sep {
+  color: var(--fg-4);
+}
+
+.file-manager-toolbar .view-toggle {
+  display: flex;
+  gap: 2px;
+}
+
+.file-manager-toolbar .view-toggle button.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.file-manager-body {
+  flex: 1;
+  position: relative;
+  padding: 12px;
+  overflow: auto;
+  user-select: none;
+}
+
+.file-manager-body.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 12px;
+  align-content: flex-start;
+}
+
+.file-manager-body.list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.file-item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.file-manager-body.list .file-item {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+}
+
+.file-item:hover {
+  background: var(--bg-panel-2);
+}
+
+.file-item.selected {
+  background: var(--accent-soft);
+  outline: 1px solid var(--accent);
+}
+
+.file-item.drag-over {
+  background: var(--pass-soft);
+  outline: 2px dashed var(--pass);
+}
+
+.file-icon-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+}
+
+.file-manager-body.list .file-icon-wrap {
+  width: 24px;
+  height: 24px;
+}
+
+.file-icon {
+  color: var(--fg-3);
+}
+
+.file-icon.folder {
+  color: #f5c542;
+}
+
+.file-icon.s1p,
+.file-icon.s2p {
+  color: var(--accent);
+}
+
+.computed-dot {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--pass);
+  border: 1px solid var(--bg-panel);
+}
+
+.file-info {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  margin-top: 6px;
+}
+
+.file-manager-body.list .file-info {
+  flex-direction: row;
+  align-items: center;
+  margin-top: 0;
+  flex: 1;
+  gap: 12px;
+}
+
+.file-name {
+  font-size: 12px;
+  text-align: center;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-manager-body.list .file-name {
+  text-align: left;
+  flex: 1;
+}
+
+.file-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--fg-4);
+}
+
+.badge.computed {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--pass-soft);
+  color: var(--pass);
+}
+
+.grid-badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+}
+
+.lasso {
+  position: absolute;
+  border: 1px dashed var(--accent);
+  background: var(--accent-soft);
+  pointer-events: none;
+  z-index: 10;
+}
+
+.empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-4);
+  font-size: 14px;
+}
+
+.context-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 140px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: none;
+  background: transparent;
+  color: var(--fg-1);
+  font-size: 13px;
+  text-align: left;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.ctx-item:hover {
+  background: var(--bg-panel-2);
+}
+
+.ctx-item.danger {
+  color: var(--fail);
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  min-width: 320px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+}
+
+.modal-head {
+  padding: 12px 16px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-body {
+  padding: 16px;
+}
+
+.modal-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+}

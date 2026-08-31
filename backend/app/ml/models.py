@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+import torch.nn.functional as f
 
 
 class SpectralVAE(nn.Module):
@@ -69,7 +69,6 @@ class SpectralVAE(nn.Module):
 
         # 计算反 flatten 后的 (C, L)
         with torch.no_grad():
-            dummy_flat = torch.zeros(1, self._flatten_dim)
             # 需要推断 (C, L)：从 enc_conv 最后一层输出推导
             dummy_conv = self.enc_conv(dummy)
             self._dec_channels = dummy_conv.shape[1]
@@ -111,7 +110,7 @@ class SpectralVAE(nn.Module):
         out = self.dec_upsample(h)
         # 长度对齐
         if out.shape[-1] != self._target_len:
-            out = F.interpolate(
+            out = f.interpolate(
                 out, size=self._target_len, mode="linear", align_corners=False
             )
         return out

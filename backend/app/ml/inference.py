@@ -22,6 +22,7 @@ import numpy as np
 
 if TYPE_CHECKING:
     import torch
+
     from app.ml.models import ResidualNet, SpectralVAE
     from app.models import Device
 
@@ -48,7 +49,7 @@ def _get_checkpoint_dir() -> Path:
     return Path(__file__).parent / "checkpoints"
 
 
-def _init_device() -> "torch.device":
+def _init_device() -> torch.device:
     """选择最优推理设备。"""
     import torch
     if torch.backends.mps.is_available():
@@ -82,9 +83,13 @@ def load_models(force: bool = False) -> bool:
 
     _DEVICE = _init_device()
 
+    import torch
+
+    from app.ml.models import ResidualNet, SpectralVAE
+
     # 读取元数据推断维度
     if base_latents_path.exists():
-        with open(base_latents_path, "r", encoding="utf-8") as f:
+        with open(base_latents_path, encoding="utf-8") as f:
             base_meta = json.load(f)
         # 取第一个 batch 的 z_base 长度作为 latent_dim
         first_key = next(iter(base_meta))
@@ -92,14 +97,12 @@ def load_models(force: bool = False) -> bool:
         _Z_BASE = torch.tensor(base_meta[first_key]["z_base"], dtype=torch.float32)
 
     if params_norm_path.exists():
-        with open(params_norm_path, "r", encoding="utf-8") as f:
+        with open(params_norm_path, encoding="utf-8") as f:
             norm_stats = json.load(f)
         _PARAMS_MEAN = torch.tensor(norm_stats["mean"], dtype=torch.float32)
         _PARAMS_STD = torch.tensor(norm_stats["std"], dtype=torch.float32)
 
     import torch
-    import torch.nn.functional as F
-    from app.ml.models import ResidualNet, SpectralVAE
 
     # 构造模型并加载权重
     _VAE = SpectralVAE(n_freq=_N_FREQ, latent_dim=_LATENT_DIM).to(_DEVICE)
@@ -128,7 +131,7 @@ def load_models(force: bool = False) -> bool:
     return True
 
 
-def _device_to_param_tensor(device: "Device") -> "torch.Tensor | None":
+def _device_to_param_tensor(device: Device) -> torch.Tensor | None:
     """将 ORM Device 转换为 ResidualNet 输入张量 (6,)。
 
     需要字段: area_um2, x, y, eg, fl, ag。
@@ -148,7 +151,7 @@ def _device_to_param_tensor(device: "Device") -> "torch.Tensor | None":
     return torch.tensor([float(v) for v in vals], dtype=torch.float32)
 
 
-def predict_s11_db(device: "Device") -> tuple[list[float], list[float]] | None:
+def predict_s11_db(device: Device) -> tuple[list[float], list[float]] | None:
     """通过 PINN 快速预测器件的 S11_dB 频谱。
 
     Args:

@@ -6,6 +6,8 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
+from app.schemas.common import PaginatedResponse
+
 
 class BatchListItem(BaseModel):
     batch_no: str
@@ -19,11 +21,8 @@ class BatchListItem(BaseModel):
     uploaded_at: datetime
 
 
-class BatchListResponse(BaseModel):
-    total: int
-    page: int
-    size: int
-    items: list[BatchListItem]
+class BatchListResponse(PaginatedResponse[BatchListItem]):
+    pass
 
 
 class BatchStats(BaseModel):

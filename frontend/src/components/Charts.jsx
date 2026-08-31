@@ -334,7 +334,7 @@ export function LineChart({ x, y, xLabel, yLabel, name, color, markers = [], ser
   const traces = useMemo(() => {
     if (series && series.length) {
       return series.map((s, i) => ({
-        type: 'scatter',
+        type: 'scattergl',
         mode: s.mode || 'lines+markers',
         x: s.x || x,
         y: s.y,
@@ -350,7 +350,7 @@ export function LineChart({ x, y, xLabel, yLabel, name, color, markers = [], ser
       }));
     }
     return [{
-      type: 'scatter',
+      type: 'scattergl',
       mode: 'lines',
       x,
       y,

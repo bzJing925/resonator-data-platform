@@ -28,8 +28,8 @@ import torch
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from app.ml.dataset import RealS1PBatchDataset
-from app.ml.models import ResidualNet, SpectralVAE
+from app.ml.dataset import RealS1PBatchDataset  # noqa: E402
+from app.ml.models import ResidualNet, SpectralVAE  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -85,12 +85,12 @@ def main() -> None:
     vae.eval()
     residual_net.eval()
 
-    with open(ckpt / "params_norm.json", "r") as f:
+    with open(ckpt / "params_norm.json") as f:
         norm = json.load(f)
-    params_mean = torch.tensor(norm["mean"], dtype=torch.float32, device=device)
-    params_std = torch.tensor(norm["std"], dtype=torch.float32, device=device)
+    _ = torch.tensor(norm["mean"], dtype=torch.float32, device=device)
+    _ = torch.tensor(norm["std"], dtype=torch.float32, device=device)
 
-    with open(ckpt / "base_latents.json", "r") as f:
+    with open(ckpt / "base_latents.json") as f:
         base_meta = json.load(f)
     # 收集所有 batch 的 z_base
     z_bases = {}
@@ -134,7 +134,7 @@ def main() -> None:
     for bs in batch_sizes:
         if bs > len(dataset):
             continue
-        specs = torch.stack([dataset[i]["spectrum"] for i in range(bs)]).to(device)
+        _ = torch.stack([dataset[i]["spectrum"] for i in range(bs)]).to(device)
         params_batch = torch.stack([dataset[i]["params"] for i in range(bs)]).to(device)
         bids = [int(dataset[i]["batch_id"].item()) for i in range(bs)]
         z_base_batch = torch.stack([z_bases[b] for b in bids])
@@ -196,7 +196,7 @@ def main() -> None:
     print(f"  MAE 均值: {all_mae.mean():.4f} dB")
 
     # 按 area 统计
-    print(f"\n  按 Area 分组 RMSE:")
+    print("\n  按 Area 分组 RMSE:")
     for area in sorted(area_rmse.keys()):
         vals = np.array(area_rmse[area])
         print(f"    Area {area}: mean={vals.mean():.4f}, max={vals.max():.4f}, n={len(vals)}")
@@ -218,7 +218,7 @@ def main() -> None:
         freq = np.linspace(4.0, 7.0, args.n_freq)
         t0 = time.perf_counter()
         fig, axes = plt.subplots(2, 2, figsize=(12, 8))
-        for ax, idx in zip(axes.flat, [0, 1, 2, 3]):
+        for ax, idx in zip(axes.flat, [0, 1, 2, 3], strict=False):
             item = dataset[idx]
             spec = item["spectrum"].squeeze().numpy()
             params = item["params"].unsqueeze(0).to(device)

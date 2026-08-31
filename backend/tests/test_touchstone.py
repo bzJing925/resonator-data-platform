@@ -30,10 +30,8 @@ def test_extract_drops_blank_lines(tmp_path: Path) -> None:
     body = _GOOD_HEADER + _GOOD_DATA_ROW * 3 + "\n\n"
     s2p = _make_s2p(tmp_path, body)
     res = split_s2p_to_s1p(s2p, tmp_path / "s11", tmp_path / "s22")
-    # _split_header_data 把第一条 data 行吃进 header；剩下 2 条被实际写入。
     s11_lines = [ln for ln in res.s11_path.read_text().splitlines() if ln.strip()]
     s22_lines = [ln for ln in res.s22_path.read_text().splitlines() if ln.strip()]
-    # header 行进入 s11/s22 的 header，data 行进入 body —— 不便逐字数；
     # 关键是 S11/S22 行数要一致（核心不变量）。
     assert len(s11_lines) == len(s22_lines)
 

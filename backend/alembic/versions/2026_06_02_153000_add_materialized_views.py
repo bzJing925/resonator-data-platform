@@ -5,15 +5,15 @@ Revises: 2026_06_02_152756
 Create Date: 2026-06-02 15:30:00
 
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = '2026_06_02_153000'
-down_revision: Union[str, None] = '2026_06_02_152756'
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = '2026_06_02_152756'
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -28,7 +28,11 @@ def upgrade() -> None:
             COUNT(*) AS total_count,
             COUNT(*) FILTER (WHERE d.pf = 'Y') AS pass_count,
             ROUND(AVG(d.fs_ghz)::numeric, 6) AS avg_fs_ghz,
-            ROUND((PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY d.fs_ghz))::numeric, 6) AS median_fs_ghz,
+            ROUND(
+                (PERCENTILE_CONT(0.5) WITHIN GROUP (
+                    ORDER BY d.fs_ghz
+                ))::numeric, 6
+            ) AS median_fs_ghz,
             ROUND(AVG(d.qs)::numeric, 3) AS avg_qs,
             ROUND(AVG(d.k2eff_pct)::numeric, 4) AS avg_k2eff_pct,
             ROUND(MIN(d.fs_ghz)::numeric, 6) AS min_fs_ghz,

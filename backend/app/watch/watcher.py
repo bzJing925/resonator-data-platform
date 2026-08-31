@@ -106,18 +106,29 @@ async def watch_uploads() -> None:
         return
 
     watch_dir = settings.watch_dir
-    watch_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        watch_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        logger.error(
+            "无法创建监听目录 %s: %s；目录监听功能已禁用，请检查 DATA_ROOT/WATCH_DIR 是否可写",
+            watch_dir,
+            exc,
+        )
+        return
     logger.info("启动目录监听: %s", watch_dir)
 
     # 先处理已存在的文件
     await _scan_existing(watch_dir)
 
-    async for changes in watchfiles.awatch(watch_dir):
-        for change, raw_path in changes:
-            path = Path(raw_path)
-            if change == watchfiles.Change.deleted:
-                continue
-            if not _is_zip(path):
-                continue
-            # 异步处理，避免阻塞 watch loop
-            asyncio.create_task(_process_zip(path))
+    try:
+        async for changes in watchfiles.awatch(watch_dir):
+            for change, raw_path in changes:
+                path = Path(raw_path)
+                if change == watchfiles.Change.deleted:
+                    continue
+                if not _is_zip(path):
+                    continue
+                # 异步处理，避免阻塞 watch loop
+                asyncio.create_task(_process_zip(path))
+    except Exception:
+        logger.exception("目录监听异常退出: %s", watch_dir)

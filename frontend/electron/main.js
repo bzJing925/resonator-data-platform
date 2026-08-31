@@ -25,6 +25,7 @@ const isDev = !isPackaged;
 let mainWindow = null;
 let splashWindow = null;
 let backendProcess = null;
+let workerProcess = null;
 let backendReady = false;
 
 function createSplashWindow() {
@@ -115,6 +116,46 @@ function waitForBackend(maxAttempts = 300, intervalMs = 200) {
   });
 }
 
+function resolveBackendCommand() {
+  const projectRoot = path.resolve(__dirname, '..', '..');
+  if (isPackaged) {
+    const backendDir = path.join(process.resourcesPath, 'backend');
+    const oneFile =
+      process.platform === 'win32'
+        ? path.join(backendDir, 'aln-backend.exe')
+        : path.join(backendDir, 'aln-backend');
+    const oneDir =
+      process.platform === 'win32'
+        ? path.join(backendDir, 'aln-backend', 'aln-backend.exe')
+        : path.join(backendDir, 'aln-backend', 'aln-backend');
+    return {
+      command: fs.existsSync(oneDir) ? oneDir : oneFile,
+      cwd: path.dirname(fs.existsSync(oneDir) ? oneDir : oneFile),
+    };
+  }
+  return {
+    command: 'python',
+    cwd: path.join(projectRoot, 'backend'),
+  };
+}
+
+function buildBackendEnv() {
+  // matplotlib 会在 MPLCONFIGDIR 下缓存字体；PyInstaller 每次启动的临时目录不同，
+  // 不固定该目录会导致每次启动都重建字体缓存（耗时 60~90 秒）。
+  const mplDir = path.join(os.homedir(), '.aln-data', 'matplotlib-cache');
+  fs.mkdirSync(mplDir, { recursive: true });
+
+  return {
+    ...process.env,
+    ALN_DESKTOP: '1',
+    MPLCONFIGDIR: mplDir,
+    // 桌面版强制数据根目录为用户目录，与 desktop_entry.py 双重保险
+    DATA_ROOT: path.join(os.homedir(), '.aln-data', 'data'),
+    // worker 进程需要知道后端监听端口，避免与开发环境冲突
+    ALN_BACKEND_PORT: String(BACKEND_PORT),
+  };
+}
+
 async function startBackend() {
   try {
     await waitForBackend(8, 100);
@@ -126,42 +167,9 @@ async function startBackend() {
     console.log('[main] 后端未运行，准备启动...');
   }
 
-  const projectRoot = path.resolve(__dirname, '..', '..');
-  let command;
-  let args;
-  let cwd;
-
-  if (isPackaged) {
-    const backendDir = path.join(process.resourcesPath, 'backend');
-    const oneFile =
-      process.platform === 'win32'
-        ? path.join(backendDir, 'aln-backend.exe')
-        : path.join(backendDir, 'aln-backend');
-    const oneDir =
-      process.platform === 'win32'
-        ? path.join(backendDir, 'aln-backend', 'aln-backend.exe')
-        : path.join(backendDir, 'aln-backend', 'aln-backend');
-    command = fs.existsSync(oneDir) ? oneDir : oneFile;
-    args = [];
-    cwd = path.dirname(command);
-  } else {
-    command = 'python';
-    args = ['-m', 'uvicorn', 'app.main:app', '--host', BACKEND_HOST, '--port', String(BACKEND_PORT)];
-    cwd = path.join(projectRoot, 'backend');
-  }
-
-  // matplotlib 会在 MPLCONFIGDIR 下缓存字体；PyInstaller 每次启动的临时目录不同，
-  // 不固定该目录会导致每次启动都重建字体缓存（耗时 60~90 秒）。
-  const mplDir = path.join(os.homedir(), '.aln-data', 'matplotlib-cache');
-  fs.mkdirSync(mplDir, { recursive: true });
-
-  const backendEnv = {
-    ...process.env,
-    ALN_DESKTOP: '1',
-    MPLCONFIGDIR: mplDir,
-    // 桌面版强制数据根目录为用户目录，与 desktop_entry.py 双重保险
-    DATA_ROOT: path.join(os.homedir(), '.aln-data', 'data'),
-  };
+  const { command, cwd } = resolveBackendCommand();
+  const args = isPackaged ? [] : ['-m', 'uvicorn', 'app.main:app', '--host', BACKEND_HOST, '--port', String(BACKEND_PORT)];
+  const backendEnv = buildBackendEnv();
 
   console.log('[main] 启动后端:', command, args.join(' '));
   backendProcess = spawn(command, args, {
@@ -197,6 +205,41 @@ async function startBackend() {
   }
 }
 
+async function startWorker() {
+  if (isDev) {
+    // 开发环境依赖用户手动启动 Celery worker
+    console.log('[main] 开发模式：请手动运行 celery -A app.workers worker --loglevel=info');
+    return;
+  }
+
+  const { command, cwd } = resolveBackendCommand();
+  const workerEnv = buildBackendEnv();
+
+  console.log('[main] 启动 worker:', command, '--worker');
+  workerProcess = spawn(command, ['--worker'], {
+    cwd,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    detached: false,
+    env: workerEnv,
+  });
+
+  workerProcess.on('error', (err) => {
+    console.error('[main] worker 进程启动失败:', err.message);
+  });
+
+  workerProcess.on('exit', (code) => {
+    console.log(`[main] worker 进程退出，code=${code}`);
+    workerProcess = null;
+  });
+
+  if (workerProcess.stdout) {
+    workerProcess.stdout.on('data', (d) => console.log('[worker]', d.toString().trim()));
+  }
+  if (workerProcess.stderr) {
+    workerProcess.stderr.on('data', (d) => console.error('[worker]', d.toString().trim()));
+  }
+}
+
 function notifyBackendReady() {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('backend:ready');
@@ -212,6 +255,18 @@ function stopBackend() {
       backendProcess.kill('SIGTERM');
     }
     backendProcess = null;
+  }
+}
+
+function stopWorker() {
+  if (workerProcess) {
+    console.log('[main] 停止 worker...');
+    if (process.platform === 'win32') {
+      spawn('taskkill', ['/pid', workerProcess.pid, '/f', '/t']);
+    } else {
+      workerProcess.kill('SIGTERM');
+    }
+    workerProcess = null;
   }
 }
 
@@ -251,14 +306,17 @@ app.whenReady().then(async () => {
   // 关键：主窗口立即创建并加载本地前端，不再等待后端
   createMainWindow();
 
-  // 后端在后台启动
-  startBackend().catch((e) => {
-    console.error('[main] 启动后端失败:', e.message);
-  });
+  // 后端在后台启动；就绪后再启动 Celery worker 处理上传任务
+  startBackend()
+    .then(() => startWorker())
+    .catch((e) => {
+      console.error('[main] 启动后端失败:', e.message);
+    });
 });
 
 app.on('window-all-closed', () => {
   stopBackend();
+  stopWorker();
   if (process.platform !== 'darwin') app.quit();
 });
 
@@ -268,6 +326,7 @@ app.on('activate', () => {
 
 app.on('before-quit', () => {
   stopBackend();
+  stopWorker();
 });
 
 // ---------------------------------------------------------------------------

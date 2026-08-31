@@ -97,7 +97,7 @@ def test_failure_path_marks_upload_task_failed(clean_db, staged_files):
         db.close()
 
     # 任务参数里传一个不存在的 mapping_id，让 process_batch_task 第 2 步抛 RuntimeError。
-    with pytest.raises(Exception):
+    with pytest.raises(RuntimeError):
         process_batch_task.apply(
             kwargs=dict(
                 upload_task_id=upload_task_id,

@@ -27,7 +27,6 @@ from app.core.extract import (
     find_resonances,
 )
 
-
 # ── find_resonances ──────────────────────────────────────────────────────
 
 

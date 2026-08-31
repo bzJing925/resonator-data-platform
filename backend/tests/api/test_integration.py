@@ -269,7 +269,7 @@ def test_upload_marks_task_failed_when_broker_unreachable(
     mapping_id = r.json()["id"]
 
     # monkeypatch chain.apply_async 抛 ConnectionError 模拟 broker 不可达
-    from app.api import upload as upload_mod
+    from app.services import upload_service as upload_service_mod
 
     class _ExplodingChain:
         def __init__(self, *args, **kwargs):
@@ -278,7 +278,7 @@ def test_upload_marks_task_failed_when_broker_unreachable(
         def apply_async(self, **kwargs):
             raise ConnectionError("redis is down")
 
-    monkeypatch.setattr(upload_mod, "chain", _ExplodingChain)
+    monkeypatch.setattr(upload_service_mod, "chain", _ExplodingChain)
 
     with sample_zip.open("rb") as f:
         r = client.post(
