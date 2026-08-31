@@ -84,3 +84,30 @@ def test_compute_sparam_curve_invalid_param() -> None:
     net = _make_network()
     with pytest.raises(ValueError, match="不支持的曲线类型"):
         compute_sparam_curve(net, "invalid")  # type: ignore[arg-type]
+
+
+def _make_network_2port(n: int = 5) -> skrf.Network:
+    """构造一个 2-port 测试网络，S11 与 S22 不同。"""
+    freq = np.linspace(1e9, 3e9, n)
+    s = np.zeros((n, 2, 2), dtype=complex)
+    z0 = np.full((n, 2), 50.0)
+    for i in range(n):
+        s[i, 0, 0] = complex(0.5 * np.cos(i * 0.5), 0.3 * np.sin(i * 0.5))
+        s[i, 1, 1] = complex(0.3 * np.cos(i * 0.7), 0.5 * np.sin(i * 0.7))
+    return skrf.Network(f=freq, s=s, z0=z0)
+
+
+def test_compute_sparam_curve_port_s22() -> None:
+    """S22 端口应返回与 S11 不同的值。"""
+    net = _make_network_2port()
+    s11_values = compute_sparam_curve(net, "z_mag_db", "S11")["values"]
+    s22_values = compute_sparam_curve(net, "z_mag_db", "S22")["values"]
+    assert s11_values != s22_values
+
+
+def test_compute_sparam_curve_port_s22_on_1port_raises() -> None:
+    """1-port 网络上请求 S22 应抛 ValueError。"""
+    net = _make_network()
+    with pytest.raises(ValueError, match="S22"):
+        compute_sparam_curve(net, "z_mag_db", "S22")
+
