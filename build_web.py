@@ -80,6 +80,8 @@ def main() -> None:
                  os.environ.get("GIT_AUTHOR_EMAIL", "aln-web-deploy@local")], cwd=DEPLOY_DIR)
             run(["git", "config", "user.name",
                  os.environ.get("GIT_AUTHOR_NAME", "aln-web-deploy")], cwd=DEPLOY_DIR)
+        # clone 会把带 token 的 URL 写进 origin —— 立刻改回裸 URL，token 不落盘
+        run(["git", "remote", "set-url", "origin", repo], cwd=DEPLOY_DIR, check=False)
 
     # 清旧文件（保留 .git），拷新 dist
     for p in DEPLOY_DIR.iterdir():

@@ -15,8 +15,9 @@ import json
 import sys
 from pathlib import Path
 
+import numpy as np
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import ConcatDataset, DataLoader, Dataset
 
 # 把 backend 目录加入路径，以便 import app（同 train_sparse_reconstructor.py）
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -24,6 +25,63 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.ml.surrogate.dataset import SurrogateDataset  # noqa: E402
 from app.ml.surrogate.model import BaselineResidualMLP  # noqa: E402
+
+
+class SimSupplementDataset(Dataset):
+    """仿真补充集：校准伪标签（仅 fs/fp/kt2 有效）+ 样本权重 + 参数掩码。
+
+    与 SurrogateDataset 输出同构（x/y_params/params_base/sparse 占位），
+    另带 w（样本权重）与 pmask（参数有效掩码，Q 系全 0）。
+    归一化统计与基准表直接复用实测数据目录，保证同一空间。
+    """
+
+    def __init__(self, sim_npz: str, real: SurrogateDataset, data_dir: str) -> None:
+        from app.ml.surrogate.baseline import BaselineTable
+
+        with np.load(sim_npz) as z:
+            x_raw = z["x_struct"]  # (M,5) [eg,fl,ag,area,pf]
+            p3 = z["params3"]  # (M,3) [fs,fp,kt2]（校准后）
+        self.x = (torch.from_numpy(x_raw) - real.x_mean) / real.x_std
+        y7 = torch.zeros(len(x_raw), 7)
+        y7[:, :3] = torch.from_numpy(p3)
+        self.y_params = (y7 - real.p_mean) / real.p_std
+        baseline = BaselineTable.load(Path(data_dir) / "baseline.npz")
+        pb = np.stack([baseline.lookup(float(r[3]), float(r[4]))[0] for r in x_raw])
+        self.params_base = (torch.from_numpy(pb).float() - real.p_mean) / real.p_std
+        self.k = real.k
+
+    def __len__(self) -> int:
+        return len(self.x)
+
+    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+        return {
+            "x": self.x[idx],
+            "y_params": self.y_params[idx],
+            "params_base": self.params_base[idx],
+            "y_sparse": torch.zeros(self.k),
+            "sparse_base": torch.zeros(self.k),
+            "group_idx": torch.tensor(-1),
+            "w": torch.tensor(0.0),  # 占位，训练循环里对 sim 行统一乘 sim_weight
+            "pmask": torch.tensor([1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0]),
+            "is_sim": torch.tensor(True),
+        }
+
+
+class _RealWithWeight(Dataset):
+    """给 SurrogateDataset 补 w/pmask/is_sim 字段的薄包装。"""
+
+    def __init__(self, ds: SurrogateDataset) -> None:
+        self.ds = ds
+
+    def __len__(self) -> int:
+        return len(self.ds)
+
+    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+        item = dict(self.ds[idx])
+        item["w"] = torch.tensor(1.0)
+        item["pmask"] = torch.ones(7)
+        item["is_sim"] = torch.tensor(False)
+        return item
 
 
 def _device() -> torch.device:
@@ -42,8 +100,16 @@ def train(
     lr: float = 1e-3,
     lambda_sparse: float = 0.1,
     patience: int = 30,
+    sim_npz: str = "",
+    sim_weight: float = 0.3,
     smoke: bool = False,
+    seed: int | None = None,
+    w_apex: float = 0.0,
 ) -> dict:
+    if seed is not None:
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+    print(f"seed={seed}")
     dev = _device()
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -52,8 +118,13 @@ def train(
     val_ds = SurrogateDataset(data_dir, split="val")
     if smoke:
         epochs = min(epochs, 2)
-    train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=True, drop_last=False)
-    val_dl = DataLoader(val_ds, batch_size=batch_size)
+    train_mix: Dataset = _RealWithWeight(train_ds)
+    if sim_npz:
+        sim_ds = SimSupplementDataset(sim_npz, train_ds, data_dir)
+        train_mix = ConcatDataset([train_mix, sim_ds])
+        print(f"混合训练：实测 {len(train_ds)} + 仿真补充 {len(sim_ds)}（权重 {sim_weight}）")
+    train_dl = DataLoader(train_mix, batch_size=batch_size, shuffle=True, drop_last=False)
+    val_dl = DataLoader(_RealWithWeight(val_ds), batch_size=batch_size)
 
     model = BaselineResidualMLP(in_dim=5, hidden=256, n_res_blocks=2, n_params=7, k=train_ds.k).to(
         dev
@@ -71,10 +142,24 @@ def train(
                 ys = batch["y_sparse"].to(dev)
                 pb = batch["params_base"].to(dev)
                 sb = batch["sparse_base"].to(dev)
+                w = batch["w"].to(dev)
+                w = torch.where(batch["is_sim"].to(dev), w + sim_weight, w)  # sim 行权重
+                pmask = batch["pmask"].to(dev)
                 out_pred = model(x, pb, sb)
-                loss = torch.nn.functional.mse_loss(out_pred["params"], yp) + (
-                    lambda_sparse * torch.nn.functional.mse_loss(out_pred["sparse"], ys)
-                )
+                dparams = (out_pred["params"] - yp) ** 2 * pmask
+                loss_params = (dparams * w.unsqueeze(1)).sum() / (w.unsqueeze(1) * pmask).sum()
+                dsparse = (out_pred["sparse"] - ys) ** 2
+                w_sparse = torch.where(batch["is_sim"].to(dev), torch.zeros_like(w), w)
+                if w_apex > 0:
+                    # 顶点加权：Zp 顶点是 256 点中最难的单点（普通 MSE 下欠预测 3.5dB），
+                    # w = 1 + w_apex·relu(y_n−1) 只加压峰区（低谷为负σ不受影响）
+                    w_s = w_sparse.unsqueeze(1) * (1.0 + w_apex * torch.relu(ys - 1.0))
+                    loss_sparse = (dsparse * w_s).sum() / w_s.sum().clamp_min(1e-12)
+                else:
+                    loss_sparse = (dsparse * w_sparse.unsqueeze(1)).sum() / (
+                        w_sparse.sum() * dsparse.shape[1] + 1e-12
+                    )
+                loss = loss_params + lambda_sparse * loss_sparse
                 if train_mode:
                     opt.zero_grad()
                     loss.backward()
@@ -129,7 +214,16 @@ def main() -> None:
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--lambda-sparse", type=float, default=0.1)
     ap.add_argument("--patience", type=int, default=30)
+    ap.add_argument("--sim-npz", default="", help="仿真补充集（build_sim_supplement.py 产物）")
+    ap.add_argument("--sim-weight", type=float, default=0.3, help="仿真样本权重（Q 已掩码）")
     ap.add_argument("--smoke", action="store_true")
+    ap.add_argument("--seed", type=int, default=None, help="随机种子（默认每次随机）")
+    ap.add_argument(
+        "--w-apex",
+        type=float,
+        default=0.0,
+        help="稀疏头顶点加权（0=普通 MSE）；Zp 顶点是普通 MSE 下欠预测最严重的点",
+    )
     args = ap.parse_args()
     train(
         args.data,
@@ -139,7 +233,11 @@ def main() -> None:
         args.lr,
         args.lambda_sparse,
         args.patience,
+        args.sim_npz,
+        args.sim_weight,
         args.smoke,
+        args.seed,
+        args.w_apex,
     )
 
 

@@ -44,6 +44,9 @@ backend/app/ml/checkpoints/
 backend/surrogate_data/
 backend/checkpoints_surrogate/
 backend/ckpt_s1_run*/
+backend/ckpt_s1_hybrid/
+backend/ckpt_ablation/
+backend/sim_offset_report/
 backend/eval_out/
 backend/pred_demo/
 backend/pred_out/

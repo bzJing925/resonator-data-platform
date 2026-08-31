@@ -23,7 +23,13 @@ _COND_IDX = [0, 1, 3, 4, 2]  # [fs, fp, Qs, Qp, kt2]
 
 
 class SurrogatePredictor:
-    """加载 stage1.pt + stage2.pt + baseline.npz + meta.json 的推理器。"""
+    """加载 stage1.pt + stage2.pt + baseline.npz + meta.json 的推理器。
+
+    可选 Zp 校正器（zp_corrector.joblib，train_zp_corrector.py 产物）：
+    存在时对输出谱峰区施加窄高斯加性校正，使顶点匹配树模型预测
+    （级联 Zp 受 MLP 平滑限制 ~3dB，ExtraTrees 结构→Zp 可达 ~0.6dB）。
+    不传路径时自动探测 stage1 同目录。
+    """
 
     def __init__(
         self,
@@ -33,6 +39,7 @@ class SurrogatePredictor:
         baseline_path: str | Path,
         meta_path: str | Path,
         device: torch.device | None = None,
+        zp_corrector_path: str | Path | None = None,
     ) -> None:
         self.dev = device or (
             torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
@@ -65,6 +72,15 @@ class SurrogatePredictor:
             torch.load(stage2_path, map_location=self.dev, weights_only=True)
         )
         self.stage2.eval()
+
+        if zp_corrector_path is None:
+            auto = Path(stage1_path).parent / "zp_corrector.joblib"
+            zp_corrector_path = auto if auto.exists() else None
+        self.zp_corrector = None
+        if zp_corrector_path is not None:
+            import joblib
+
+            self.zp_corrector = joblib.load(zp_corrector_path)
 
     @torch.no_grad()
     def predict(
@@ -133,10 +149,26 @@ class SurrogatePredictor:
         z_pred = self.stage2(cond, samples, freq_t, z_baseline=zb)[0].cpu().numpy()
         z_pred = z_pred * self.z_std + self.z_mean
 
+        zp_tree_db, zp_corr_db = None, None
+        if self.zp_corrector is not None:
+            zp_tree_db = float(
+                self.zp_corrector.predict(np.array([[eg, fl, area_um2, pf]]))[0]
+            )
+            win = (self.freq >= fp - 0.05) & (self.freq <= fp + 0.05)
+            if win.any():
+                apex_f = float(self.freq[win][int(np.argmax(z_pred[win]))])
+                zp_corr_db = zp_tree_db - float(z_pred[win].max())
+                # σ=12MHz 窄高斯：只抬顶点邻域，不扰动其余谱形
+                z_pred = z_pred + zp_corr_db * np.exp(
+                    -0.5 * ((self.freq - apex_f) / 0.012) ** 2
+                )
+
         return {
             "params": {c: float(params[i]) for i, c in enumerate(_PARAM_COLS)},
             "freq_ghz": self.freq,
             "z_db": z_pred,
             "sample_freq": sample_freq,
             "sample_z": sparse_z,
+            "zp_tree_db": zp_tree_db,
+            "zp_correction_db": zp_corr_db,
         }

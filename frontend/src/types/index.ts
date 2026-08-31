@@ -214,6 +214,8 @@ export interface SurrogateStatus {
   fl_min?: number;
   fl_max?: number;
   areas?: number[];
+  /** 仅由校准仿真伪标签支撑、无实测验证的面积档（前端应显示"仿真外推"注释） */
+  sim_only_areas?: number[];
 }
 
 export interface SurrogatePredictResponse {

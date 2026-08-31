@@ -17,6 +17,7 @@ from collections import Counter
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
+import numpy as np
 from sqlalchemy import create_engine, select
 
 # 把 backend 目录加入路径，以便 import app（同 train_sparse_reconstructor.py）
@@ -33,6 +34,7 @@ from app.ml.surrogate.extract import (  # noqa: E402
     clean_records,
     compute_norm_stats,
     fill_sparse_base,
+    fit_sim_calibrators,
     select_per_cell,
     split_groups,
 )
@@ -89,6 +91,12 @@ def main() -> None:
     ap.add_argument("--out", default="./surrogate_data")
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--limit", type=int, default=0, help="调试：只处理前 N 条（0=全部）")
+    ap.add_argument(
+        "--sim-ref",
+        default="",
+        help="仿真格参考 npz（build_sim_reference.py 产物）；给定后每格按仿真参考距离"
+        "抽样，且基准表改用抽样后的 basic 器件构建",
+    )
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -160,25 +168,47 @@ def main() -> None:
     kept, dropped = clean_records(records)
     log.info("清洗: 保留 %d，剔除 %d", len(kept), len(dropped))
 
-    # 基准表（用全部合法基准格记录，不受抽样限制）+ 回填
-    baseline = BaselineTable.build(kept)
-    baseline.save(out_dir / "baseline.npz")
-    for r in kept:
-        r["params_base"], _ = baseline.lookup(r["area_um2"], r["has_pf"])
-    fill_sparse_base(kept, baseline)
+    # 物理组划分（先于抽样：仿真校准器需要纯 train 格判定）
+    groups = sorted({_group_tuple(r) for r in kept})
+    splits = split_groups(groups)
 
-    # 每格抽样（v4：≤ surr_per_cell_max 条/格）
-    selected = select_per_cell(kept)
+    # 仿真参考（可选）：校准 Δ 模型（纯 train 格）→ 每格 (fs,fp,Zp) 参考
+    sim_ref = None
+    if args.sim_ref:
+        with np.load(args.sim_ref) as z:
+            sim_cells, sim_raw = z["cells"], z["ref"]
+        sim_ref, diag = fit_sim_calibrators(kept, splits, sim_cells, sim_raw)
+        log.info(
+            "仿真参考: 交集 %d 格，纯 train 校准格 %d，覆盖参考 %d 格",
+            diag["n_intersection"],
+            diag["n_train_cells"],
+            diag.get("n_refs", 0),
+        )
+        if not sim_ref:
+            log.warning("仿真参考为空（交集 0 或纯 train 格 0），回退 |fs-中位数| 抽样")
+            sim_ref = None
+
+    # 每格抽样（v4：≤ surr_per_cell_max 条/格；有仿真参考时按参考距离排序）
+    selected = select_per_cell(kept, sim_ref=sim_ref)
     log.info(
-        "每格抽样: %d → %d（每格 ≤ %d）",
+        "每格抽样: %d → %d（每格 ≤ %d，仿真参考 %s）",
         len(kept),
         len(selected),
         AlgorithmConfig.surr_per_cell_max,
+        "是" if sim_ref else "否",
     )
 
-    # 物理组划分 + 统计 + 落地
-    groups = sorted({_group_tuple(r) for r in kept})
-    splits = split_groups(groups)
+    # 基准表 + 回填
+    # 有仿真参考时用抽样后的记录构建：basic（eg=0/fl=0）档只取最贴近仿真物理的器件，
+    # 避免晶圆离散把基准峰高平均掉（Zp 欠预测的主要来源）；无参考时维持旧行为
+    base_pool = selected if sim_ref else kept
+    baseline = BaselineTable.build(base_pool)
+    baseline.save(out_dir / "baseline.npz")
+    for r in selected:
+        r["params_base"], _ = baseline.lookup(r["area_um2"], r["has_pf"])
+    fill_sparse_base(selected, baseline)
+
+    # 统计 + 落地
     stats = compute_norm_stats(kept, splits)
     assemble_npz(
         selected, groups, splits, stats, dropped, out_dir, freq_axis, AlgorithmConfig.surr_k

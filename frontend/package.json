@@ -113,6 +113,7 @@
   },
   "dependencies": {
     "@duckdb/duckdb-wasm": "^1.33.1-dev57.0",
+    "apache-arrow": "^17.0.0",
     "axios": "^1.7.9",
     "electron-updater": "^6.8.9",
     "onnxruntime-web": "^1.27.0",

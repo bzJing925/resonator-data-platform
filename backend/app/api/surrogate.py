@@ -90,7 +90,20 @@ def _load_bundle() -> dict | None:
                     cells.setdefault(key, []).append(i)
 
             meta = json.loads((data / "meta.json").read_text(encoding="utf-8"))
-            _bundle = {"predictor": predictor, "cells": cells, "npz": npz, "meta": meta}
+            # 仿真外推面积档（可选：sim_extension.npz 存在时，这些面积档仅由校准仿真
+            # 伪标签支撑、无实测验证；前端据此显示"仿真外推"注释）
+            sim_areas: list[int] = []
+            ext_path = data / "sim_extension.npz"
+            if ext_path.exists():
+                with np.load(ext_path) as z:
+                    sim_areas = sorted({int(a) for a in z["cells"][:, 2]})
+            _bundle = {
+                "predictor": predictor,
+                "cells": cells,
+                "npz": npz,
+                "meta": meta,
+                "sim_areas": sim_areas,
+            }
             log.info("代理模型加载完成（stage2=%s，同格索引 %d 格）", stage2.name, len(cells))
         except Exception as exc:  # noqa: BLE001 — 降级而非拖垮平台
             _load_error = str(exc)
@@ -99,6 +112,7 @@ def _load_bundle() -> dict | None:
 
 
 def _options(bundle: dict) -> dict:
+    sim_areas = bundle.get("sim_areas") or []
     xs = bundle["npz"].get("x_struct") if bundle["npz"] else None
     if xs is not None and len(xs):
         return {
@@ -106,7 +120,8 @@ def _options(bundle: dict) -> dict:
             "eg_max": float(xs[:, 0].max()),
             "fl_min": float(xs[:, 1].min()),
             "fl_max": float(xs[:, 1].max()),
-            "areas": sorted({int(a) for a in xs[:, 3]}),
+            "areas": sorted({int(a) for a in xs[:, 3]} | set(sim_areas)),
+            "sim_only_areas": sim_areas,
         }
     # 无 npz 时用基准表网格
     bl = bundle["predictor"].baseline
@@ -115,7 +130,8 @@ def _options(bundle: dict) -> dict:
         "eg_max": 2.0,
         "fl_min": 0.0,
         "fl_max": 2.0,
-        "areas": [int(a) for a in bl.areas],
+        "areas": sorted({int(a) for a in bl.areas} | set(sim_areas)),
+        "sim_only_areas": sim_areas,
     }
 
 

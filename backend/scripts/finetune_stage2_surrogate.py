@@ -136,14 +136,21 @@ def train(
     scale_init: float = 1.0,
     from_scratch: bool = False,
     smoke: bool = False,
+    device: str = "auto",
+    n_target_sub: int = 256,
+    w_peak: float = 3.0,
 ) -> dict:
-    dev = (
-        torch.device("mps")
-        if torch.backends.mps.is_available()
-        else torch.device("cuda")
-        if torch.cuda.is_available()
-        else torch.device("cpu")
-    )
+    if device == "auto":
+        dev = (
+            torch.device("mps")
+            if torch.backends.mps.is_available()
+            else torch.device("cuda")
+            if torch.cuda.is_available()
+            else torch.device("cpu")
+        )
+    else:
+        dev = torch.device(device)
+    print(f"device={dev}（注意：本模型 1001 查询点注意力在 MPS 上实测比 CPU 慢约 7 倍）")
     data_dir_p, ckpt = Path(data_dir), Path(ckpt_dir)
     meta = json.loads((data_dir_p / "meta.json").read_text(encoding="utf-8"))
     freq = np.asarray(meta["freq_ghz"], dtype=np.float64)
@@ -191,9 +198,10 @@ def train(
     opt = torch.optim.AdamW(model.parameters(), lr=lr)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)
 
-    def run_epoch(dl, train_mode: bool) -> float:
+    def run_epoch(dl, train_mode: bool) -> tuple[float, float]:
+        """返回 (普通 MSE, 峰加权 MSE)；训练态加权入损失，val 两种都统计。"""
         model.train(train_mode)
-        total, n = 0.0, 0
+        total, total_w, n = 0.0, 0.0, 0
         with torch.set_grad_enabled(train_mode):
             for b in dl:
                 cond = b["cond"].to(dev)
@@ -201,30 +209,44 @@ def train(
                 freq_t = b["freq_target"].to(dev)
                 zb = b["z_baseline"].to(dev)
                 target = b["target"].to(dev)
+                # 训练态子采样目标频率点：查询点相互独立（仅对样本做 cross-attn），
+                # 子采样的 MSE 是全量 MSE 的无偏估计；注意力开销 ∝ 查询点数，约 4× 加速
+                if train_mode and 0 < n_target_sub < freq_t.shape[1]:
+                    idx = torch.randperm(freq_t.shape[1], device=dev)[:n_target_sub]
+                    freq_t, zb, target = freq_t[:, idx], zb[:, idx], target[:, idx]
                 pred = model(cond, samples, freq_t, z_baseline=zb)
+                # 峰区加权：全谱 1001 点的 MSE 对 ~10 个峰点几乎无梯度（Zp 欠预测主因）。
+                # w = 1 + w_peak·relu(target_n−1)：峰区（≳+1σ）点权重 1+w_peak 倍以上
+                w = 1.0 + w_peak * torch.relu(target - 1.0)
+                loss_w = ((pred - target) ** 2 * w).sum() / w.sum().clamp_min(1e-12)
                 loss = torch.nn.functional.mse_loss(pred, target)
                 if train_mode:
                     opt.zero_grad()
-                    loss.backward()
+                    (loss_w if w_peak > 0 else loss).backward()
                     opt.step()
                 total += loss.item() * len(cond)
+                total_w += loss_w.item() * len(cond)
                 n += len(cond)
-        return total / max(n, 1)
+        return total / max(n, 1), total_w / max(n, 1)
 
     best_val, best_state, bad = float("inf"), None, 0
     history = []
     for epoch in range(1, epochs + 1):
-        tr = run_epoch(train_dl, True)
-        va = run_epoch(val_dl, False)
+        tr, tr_w = run_epoch(train_dl, True)
+        va, va_w = run_epoch(val_dl, False)
         sched.step()
-        history.append({"epoch": epoch, "train": tr, "val": va})
-        if va < best_val - 1e-6:
-            best_val, bad = va, 0
+        history.append({"epoch": epoch, "train": tr, "val": va, "val_w": va_w})
+        # 模型选择与早停用峰加权 val（与训练目标一致；普通 MSE 仅记录参考）
+        crit = va_w if w_peak > 0 else va
+        if crit < best_val - 1e-6:
+            best_val, bad = crit, 0
             best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
         else:
             bad += 1
         if epoch % 5 == 0 or epoch == 1:
-            print(f"epoch {epoch}: train={tr:.4f} val={va:.4f} best={best_val:.4f}")
+            print(
+                f"epoch {epoch}: train={tr:.4f} val={va:.4f} val_w={va_w:.4f} best={best_val:.4f}"
+            )
         if bad >= patience:
             print(f"early stop at epoch {epoch}")
             break
@@ -254,6 +276,23 @@ def main() -> None:
     )
     ap.add_argument("--smoke", action="store_true")
     ap.add_argument(
+        "--device",
+        default="auto",
+        help="auto/cpu/mps/cuda；本模型 1001 查询点注意力在 MPS 实测比 CPU 慢约 7 倍，建议 cpu",
+    )
+    ap.add_argument(
+        "--n-target-sub",
+        type=int,
+        default=256,
+        help="训练态每步子采样的目标频率点数（0=全量；子采样 MSE 无偏，约 4× 加速）",
+    )
+    ap.add_argument(
+        "--w-peak",
+        type=float,
+        default=3.0,
+        help="峰区损失权重（0=普通 MSE）；峰点少、普通 MSE 对 Zp 欠预测梯度太弱",
+    )
+    ap.add_argument(
         "--from-scratch",
         action="store_true",
         help="不加载 stage2.pt，从零训练（归一化语义变更后使用）",
@@ -269,6 +308,9 @@ def main() -> None:
         args.scale_init,
         args.from_scratch,
         args.smoke,
+        args.device,
+        args.n_target_sub,
+        args.w_peak,
     )
 
 

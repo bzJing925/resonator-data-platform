@@ -27,6 +27,16 @@ def _slim_drop(g: dict, reason: str) -> dict:
     }
 
 
+def _zp_from_spectrum(
+    z_db: NDArray, freq_axis: NDArray, fp_ghz: float, win_ghz: float = 0.05
+) -> float:
+    """fp ± win 窗口内 |Z|dB 峰值（Zp 峰高，仿真参考清洗的逐器件特征）。"""
+    if fp_ghz <= 0:
+        return float("nan")
+    m = (freq_axis >= fp_ghz - win_ghz) & (freq_axis <= fp_ghz + win_ghz)
+    return float(np.max(z_db[m])) if m.any() else float("nan")
+
+
 def build_device_record(
     device_row: dict,
     files_dir: str | Path,
@@ -72,6 +82,7 @@ def build_device_record(
         "mark": str(device_row.get("mark") or ""),
         "cell_key": f"{eg}|{fl}|{area}|{pf}",
         "params": params,
+        "zp_db": _zp_from_spectrum(z_db, freq_axis, fp),
         "sample_pos": pos.astype(np.int32),
         "sample_z": z_db[pos].astype(np.float32),
         "sparse_base": np.zeros(k, dtype=np.float32),  # 基准表构建后回填
@@ -154,19 +165,122 @@ def clean_records(
     return kept, dropped
 
 
+def fit_sim_calibrators(
+    records: list[dict],
+    splits: dict,
+    sim_cells: NDArray[np.float64],
+    sim_ref: NDArray[np.float64],
+) -> tuple[dict[str, tuple[float, float, float]], dict]:
+    """仿真参考校准（规格 §8.3）：Δ=实测格中位数−仿真 的 ExtraTrees 模型。
+
+    校准器只用**纯 train 格**拟合（格的所有物理组均为 train），防 val/test 泄漏。
+    返回 (cell_key → (fs_ref, fp_ref, zp_ref) 校准后参考, 诊断 dict)；
+    无仿真覆盖或校准后物理非法（fp<=fs）的格不在返回 dict 中（调用方回退旧准则）。
+    """
+    from sklearn.ensemble import ExtraTreesRegressor
+
+    # 实测格中位数（fs/fp/Zp）与格的纯 train 判定
+    by_cell: dict[str, list[dict]] = {}
+    for r in records:
+        by_cell.setdefault(r["cell_key"], []).append(r)
+    cell_meas: dict[str, tuple[float, float, float]] = {}
+    cell_pure_train: dict[str, bool] = {}
+    for key, group in by_cell.items():
+        cell_meas[key] = (
+            float(np.median([g["params"][0] for g in group])),
+            float(np.median([g["params"][1] for g in group])),
+            float(np.median([g["zp_db"] for g in group])),
+        )
+        cell_pure_train[key] = all(splits.get(_group_tuple(g), "train") == "train" for g in group)
+
+    sim_lookup = {
+        f"{float(c[0])}|{float(c[1])}|{int(c[2])}|{int(c[3])}": (
+            float(r[0]),
+            float(r[1]),
+            float(r[2]),
+        )
+        for c, r in zip(sim_cells, sim_ref, strict=False)
+    }
+    inter = [k for k in by_cell if k in sim_lookup]
+    train_keys = [k for k in inter if cell_pure_train[k]]
+    if not train_keys:
+        return {}, {"n_intersection": len(inter), "n_train_cells": 0}
+
+    def _feat(key: str) -> list[float]:
+        eg, fl, area, pf = key.split("|")
+        return [float(eg), float(fl), float(area), float(pf)]
+
+    x_tr = np.array([_feat(k) for k in train_keys])
+    models = []
+    for j in range(3):  # Δfs / Δfp / Δzp
+        y = np.array([cell_meas[k][j] - sim_lookup[k][j] for k in train_keys])
+        m = ExtraTreesRegressor(n_estimators=300, n_jobs=-1, random_state=0)
+        m.fit(x_tr, y)
+        models.append(m)
+
+    refs: dict[str, tuple[float, float, float]] = {}
+    for key in inter:
+        delta = [float(m.predict([_feat(key)])[0]) for m in models]
+        ref = tuple(sim_lookup[key][j] + delta[j] for j in range(3))
+        if ref[1] <= ref[0]:  # 物理非法：fp_ref 必须 > fs_ref
+            continue
+        refs[key] = ref  # type: ignore[assignment]
+    diag = {
+        "n_intersection": len(inter),
+        "n_train_cells": len(train_keys),
+        "n_refs": len(refs),
+    }
+    return refs, diag
+
+
 def select_per_cell(
     records: list[dict],
     max_per_cell: int = AlgorithmConfig.surr_per_cell_max,
+    sim_ref: dict[str, tuple[float, float, float]] | None = None,
 ) -> list[dict]:
-    """每结构组合按 |fs−格中位数| 升序取前 max_per_cell 条（v4，规格 §5.1）。"""
+    """每结构组合抽样（v4，规格 §5.1）。
+
+    默认：按 |fs−格中位数| 升序取前 max_per_cell 条。
+    给定 sim_ref（fit_sim_calibrators 产物，cell_key → (fs,fp,zp) 校准参考）时：
+    有参考的格改按**仿真参考距离**升序——|Δfs|、|Δfp|、|ΔZp| 各自除以格内 MAD
+    （尺度下限 3MHz/3MHz/0.5dB 防零除）求和，挑出最贴近仿真物理的器件；
+    无参考的格回退旧准则。
+    """
     by_cell: dict[str, list[dict]] = {}
     for r in records:
         by_cell.setdefault(r["cell_key"], []).append(r)
     selected: list[dict] = []
     for key in sorted(by_cell):
         group = by_cell[key]
-        fs_med = float(np.median([g["params"][0] for g in group]))
-        group_sorted = sorted(group, key=lambda g: (abs(g["params"][0] - fs_med), g["device_id"]))
+        ref = sim_ref.get(key) if sim_ref else None
+        if ref is None:
+            fs_med = float(np.median([g["params"][0] for g in group]))
+            group_sorted = sorted(
+                group, key=lambda g: (abs(g["params"][0] - fs_med), g["device_id"])
+            )
+        else:
+            scales = []
+            for j, vals in enumerate(
+                (
+                    [g["params"][0] for g in group],
+                    [g["params"][1] for g in group],
+                    [g["zp_db"] for g in group],
+                )
+            ):
+                med = float(np.median(vals))
+                floor = 0.003 if j < 2 else 0.5
+                scales.append(max(1.4826 * float(np.median([abs(v - med) for v in vals])), floor))
+
+            def _dist(
+                g: dict, _ref: tuple[float, float, float] = ref, _sc: list[float] = scales
+            ) -> float:
+                return (
+                    abs(g["params"][0] - _ref[0]) / _sc[0]
+                    + abs(g["params"][1] - _ref[1]) / _sc[1]
+                    + abs(g["zp_db"] - _ref[2]) / _sc[2]
+                )
+
+            group_sorted = sorted(group, key=lambda g: (_dist(g), g["device_id"]))
         selected.extend(group_sorted[:max_per_cell])
     return selected
 

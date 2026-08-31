@@ -1,17 +1,24 @@
-"""快照导出测试：小 sqlite → parquet/json 契约。"""
+"""快照导出测试：小 sqlite → arrow.gz/json 契约。"""
 
 import json
 import sqlite3
 import sys
 from pathlib import Path
 
+import gzip
+
 import numpy as np
-import pyarrow.parquet as pq
+import pyarrow as pa
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 from export_web_snapshot import export_all  # noqa: E402
 from export_web_surrogate_data import export_surrogate_webdata  # noqa: E402
+
+def _read_arrow_gz(path: Path):
+    with gzip.open(path, "rb") as f:
+        return pa.ipc.open_file(pa.py_buffer(f.read())).read_all()
+
 
 DEVICE_COLS = (
     "id,batch_id,original_filename,display_name,mark,wafer,folder_name,coord,x,y,"
@@ -28,10 +35,12 @@ def mini_db(tmp_path):
     conn.execute(
         "CREATE TABLE batches (id INTEGER PRIMARY KEY, batch_no TEXT UNIQUE NOT NULL,"
         " mapping_id INTEGER, f_start_ghz REAL, f_end_ghz REAL, deembedded INTEGER DEFAULT 0,"
-        " uploaded_at TEXT DEFAULT '', device_count INTEGER DEFAULT 0)"
+        " deembed_method TEXT, process_type TEXT, uploaded_at TEXT DEFAULT '',"
+        " uploaded_by TEXT DEFAULT '', device_count INTEGER DEFAULT 0, task_id INTEGER)"
     )
     conn.execute(
-        "CREATE TABLE mappings (id INTEGER PRIMARY KEY, name TEXT, uploaded_at TEXT DEFAULT '')"
+        "CREATE TABLE mappings (id INTEGER PRIMARY KEY, name TEXT, file_path TEXT,"
+        " entry_count INTEGER DEFAULT 0, uploaded_at TEXT DEFAULT '')"
     )
     conn.execute(
         "CREATE TABLE mapping_entries (id INTEGER PRIMARY KEY, mapping_id INTEGER,"
@@ -41,8 +50,10 @@ def mini_db(tmp_path):
     conn.execute(
         f"CREATE TABLE devices ({', '.join(c + ' TEXT' for c in DEVICE_COLS.split(','))})"
     )
-    conn.execute("INSERT INTO batches VALUES (1, '#T', 1, NULL, NULL, 0, '2026-01-01', 2)")
-    conn.execute("INSERT INTO mappings VALUES (1, 'M1', '')")
+    conn.execute(
+        "INSERT INTO batches VALUES (1, '#T', 1, NULL, NULL, 0, NULL, NULL, '2026-01-01', '', 2, NULL)"
+    )
+    conn.execute("INSERT INTO mappings VALUES (1, 'M1', NULL, 1, '')")
     conn.execute(
         "INSERT INTO mapping_entries VALUES (1, 1, 'A1', 'EG1', 1.0, 0.5, NULL, 700, 5500, 0)"
     )
@@ -76,7 +87,7 @@ def mini_db(tmp_path):
 def test_export_all(mini_db, tmp_path):
     out = tmp_path / "webdata"
     export_all(mini_db, surrogate_dir=None, out_dir=out)
-    t = pq.read_table(out / "devices.parquet")
+    t = _read_arrow_gz(out / "devices.arrow.gz")
     assert t.num_rows == 2
     assert "batch_no" in t.column_names and "s_param_path" not in t.column_names
     assert t.column("batch_no").to_pylist() == ["#T", "#T"]
@@ -85,11 +96,12 @@ def test_export_all(mini_db, tmp_path):
     maps = json.loads((out / "mappings.json").read_text())
     assert maps[0]["entries"][0]["mark"] == "A1"
     stats = json.loads((out / "stats.json").read_text())
-    assert stats["total_devices"] == 2
+    assert stats["devices"] == 2 and stats["batches"] == 1 and stats["mappings"] == 1
     fields = json.loads((out / "fields.json").read_text())
     assert any(f["name"] == "batch_no" for f in fields["categorical"])
+    assert any(f["name"] == "fs_ghz" for f in fields["numeric"])
     manifest = json.loads((out / "manifest.json").read_text())
-    assert "devices.parquet" in manifest["files"]
+    assert "devices.arrow.gz" in manifest["files"]
 
 
 def test_export_surrogate_webdata(tmp_path):
@@ -116,8 +128,8 @@ def test_export_surrogate_webdata(tmp_path):
     out.mkdir()
     written, missing = export_surrogate_webdata(sd, out)
     assert missing == []
-    assert set(written) == {"baseline.json", "surr_meta.json", "cell_means.parquet"}
-    t = pq.read_table(out / "cell_means.parquet")
+    assert set(written) == {"baseline.json", "surr_meta.json", "cell_means.arrow.gz"}
+    t = _read_arrow_gz(out / "cell_means.arrow.gz")
     assert t.num_rows == n_freq  # 1 格 × 11 点
     assert t.column("z").to_pylist()[0] == 1.0  # mean(0, 2)
     bl = json.loads((out / "baseline.json").read_text())
@@ -131,4 +143,4 @@ def test_export_surrogate_webdata_missing(tmp_path):
     out.mkdir()
     written, missing = export_surrogate_webdata(sd, out)
     assert written == []
-    assert set(missing) == {"baseline.json", "surr_meta.json", "cell_means.parquet"}
+    assert set(missing) == {"baseline.json", "surr_meta.json", "cell_means.arrow.gz"}
