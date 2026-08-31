@@ -10,7 +10,7 @@
 
 **约定：**
 - 所有 Python 命令在 `backend/` 下以 `uv run` 执行；pytest 路径相对 `backend/`。
-- 核心算法常数全部进 `backend/app/config.py` 的 `AlgorithmConfig`（任务 1 定义，后文引用如 `surr_K`）。
+- 核心算法常数全部进 `backend/app/config.py` 的 `AlgorithmConfig`（任务 1 定义，后文引用如 `surr_k`）。
 - torch 只出现在 `dataset.py` / `model.py` / `infer.py` 与训练脚本；`extract.py` / `baseline.py` / `sparse_sampler.py` 保持 torch-free。
 - 提交信息遵循仓库中文 conventional commits 风格。
 
@@ -48,7 +48,7 @@ npz 数组（M = 清洗后器件数，N=1001，K=256）：
 
 | 数组 | 形状 | 说明 |
 |---|---|---|
-| `x_struct` | (M,4) float32 | `[eg, fl, area_um2, ag]`，ag 当前恒 0 |
+| `x_struct` | (M,5) float32 | `[eg, fl, ag, area_um2, has_pf]`，ag 当前恒 1.0（v4） |
 | `y_params` | (M,7) float32 | `[fs_ghz, fp_ghz, k2eff_pct, qs, qp, qs_bodeq, qp_bodeq]` |
 | `params_base` | (M,7) float32 | 同面积基准性能参数（提取时查表写入） |
 | `sample_pos` | (M,K) int32 | 确定性采样位置（1001 网格上的索引，升序） |
@@ -56,7 +56,7 @@ npz 数组（M = 清洗后器件数，N=1001，K=256）：
 | `sparse_base` | (M,K) float32 | 基准全谱在采样位置上的插值（dB） |
 | `full_z` | (M,N) float32 | 完整 Z11(dB) |
 | `phase` | (M,N) float32 | 相位通道（预留，训练不用） |
-| `cell_idx` | (M,) int32 | 网格单元索引（指向 meta.cells） |
+| `group_idx` | (M,) int32 | 物理器件组索引（指向 meta.groups，v4） |
 
 meta.json：`cells`（[{eg, fl, area_um2, split}]，split ∈ train/val/test）、`freq_ghz`（N 列表）、`k`、`n_freq`、归一化统计（`x_mean/x_std/params_mean/params_std/z_mean/z_std`，**只在 train 单元上计算**）、`dropped`（清洗剔除清单及原因）、`config`（阈值等）。
 
@@ -106,25 +106,25 @@ git commit -m "chore: backend 增加 scikit-learn（代理模型 B3 基线）"
 
 ```python
     # --- 代理模型（surrogate）---
-    surr_N_FREQ: int = 1001  # 统一频点数
-    surr_K: int = 256  # 稀疏采样点数
-    surr_DENSE_RATIO: float = 0.60  # 谐振密集区配额
-    surr_TRANSITION_RATIO: float = 0.25  # 过渡带配额（远带 = 1 - 前两者）
-    surr_DENSE_HALF_BW: float = 0.5  # 密集区半宽 = 该值 × (fp - fs)
-    surr_TRANSITION_HALF_BW: float = 1.5  # 过渡带外沿 = 该值 × (fp - fs)
-    surr_CLEAN_FS_TOL_MHZ: float = 100.0  # 单元内 fs/fp 离群阈值
-    surr_CLEAN_TREND_SIGMA: float = 3.0  # 跨单元趋势面离群阈值（σ 倍数）
-    surr_VAL_CELLS: int = 48  # val 网格单元数
-    surr_TEST_CELLS: int = 48  # test 网格单元数
-    surr_SPLIT_SEED: int = 42  # 划分随机种子
-    surr_PARAM_COLS: tuple = (  # 7 个性能参数列（顺序固定，全流程一致）
+    surr_n_freq: int = 1001  # 统一频点数
+    surr_k: int = 256  # 稀疏采样点数
+    surr_dense_ratio: float = 0.60  # 谐振密集区配额
+    surr_transition_ratio: float = 0.25  # 过渡带配额（远带 = 1 - 前两者）
+    surr_dense_half_bw: float = 0.5  # 密集区半宽 = 该值 × (fp - fs)
+    surr_transition_half_bw: float = 1.5  # 过渡带外沿 = 该值 × (fp - fs)
+    surr_clean_fs_tol_mhz: float = 100.0  # 单元内 fs/fp 离群阈值
+    surr_clean_trend_sigma: float = 3.0  # 跨单元趋势面离群阈值（σ 倍数）
+    surr_val_cells: int = 48  # val 网格单元数
+    surr_test_cells: int = 48  # test 网格单元数
+    surr_split_seed: int = 42  # 划分随机种子
+    surr_param_cols: tuple = (  # 7 个性能参数列（顺序固定，全流程一致）
         "fs_ghz", "fp_ghz", "k2eff_pct", "qs", "qp", "qs_bodeq", "qp_bodeq",
     )
 ```
 
 - [ ] **步骤 2：验证可导入**
 
-运行：`uv run python -c "from app.config import AlgorithmConfig as A; print(A.surr_K, A.surr_PARAM_COLS)"`
+运行：`uv run python -c "from app.config import AlgorithmConfig as A; print(A.surr_k, A.surr_param_cols)"`
 预期：`256 ('fs_ghz', 'fp_ghz', 'k2eff_pct', 'qs', 'qp', 'qs_bodeq', 'qp_bodeq')`
 
 - [ ] **步骤 3：Commit**
@@ -213,27 +213,27 @@ class TestDeterministicSamplePositions:
 
 - [ ] **步骤 3：实现 `deterministic_sample_positions`**
 
-在 `backend/app/core/sparse_sampler.py` 的 `__all__` 中追加 `"deterministic_sample_positions"`，并在文件末尾追加：
+在 `backend/app/core/sparse_sampler.py` 的 `__all__` 中追加 `"deterministic_sample_positions"`，文件头部导入区追加 `from app.config import AlgorithmConfig`，并在文件末尾追加：
 
 ```python
 def deterministic_sample_positions(
     freq_ghz: NDArray[np.float64],
     fs: float,
     fp: float,
-    k: int = 256,
-    dense_ratio: float = 0.60,
-    transition_ratio: float = 0.25,
-    dense_half_bw: float = 0.5,
-    transition_half_bw: float = 1.5,
+    k: int = AlgorithmConfig.surr_k,
+    dense_ratio: float = AlgorithmConfig.surr_dense_ratio,
+    transition_ratio: float = AlgorithmConfig.surr_transition_ratio,
+    dense_half_bw: float = AlgorithmConfig.surr_dense_half_bw,
+    transition_half_bw: float = AlgorithmConfig.surr_transition_half_bw,
 ) -> NDArray[np.int64]:
     """确定性稀疏采样位置（规格 §5.3）。
 
     只依赖 fs/fp 与频率轴，不看频谱内容，保证训练/推理一致。
-    返回 1001 网格上的升序索引数组。
+    返回 freq_ghz 网格上的升序索引。
 
     区域划分（Δ = fp - fs）：
         密集区  [fs-0.5Δ, fp+0.5Δ]   配额 k×dense_ratio
-        过渡带  两侧各延伸至 ±1.5Δ    配额 k×transition_ratio（左右均分，奇数给右）
+        过渡带  两侧各延伸至 ±1.5Δ    配额 k×transition_ratio（两带拼接后整体均匀取样）
         远带    其余                  剩余配额
     区域格点不足配额时，缺口按 密集→过渡→远带 顺序让渡。
     fs/fp 非法（fs<=0 或 fp<=fs）退化为全轴均匀取点。
@@ -536,37 +536,294 @@ git commit -m "feat(ml): 代理模型基准表（eg=0/fl=0 均值 + 面积插值
 
 ---
 
-## 任务 4：提取纯函数模块 `surrogate/extract.py`
+## 任务 3.5：基准表加 PF 维 + AlgorithmConfig 新常量 + 质量修复收尾（v4 设计变更）
+
+**文件：**
+- 修改：`backend/app/config.py`（AlgorithmConfig 追加 4 个常量）
+- 修改：`backend/app/ml/surrogate/baseline.py`（加 PF 维 + 两个质量修复）
+- 测试：`backend/tests/ml/test_surrogate_baseline.py`
+
+背景：v4 规格把输入改为 5 维（EG, FL, AG=1.0 占位, 面积, PF）。PF 来自 `mapping_entries.has_pf`（0/1）。基准表从"按面积 12 档"变为"按 (pf, area) 24 档"。任务 3 的基准表已实现一维版本，本任务升级为二维，并顺带完成任务 3 质量审查遗留的两个小修复。
+
+- [ ] **步骤 1：AlgorithmConfig 追加常量**
+
+```python
+    surr_per_cell_max: int = 5  # 每结构组合抽样上限（|fs-中位数| 升序取前 N）
+    surr_default_ag: float = 1.0  # AG 占位默认值（μm；数据全空时的常量输入）
+    surr_val_groups: int = 29  # val 物理器件组数
+    surr_test_groups: int = 29  # test 物理器件组数
+```
+
+- [ ] **步骤 2：改测试（TDD——先改测试确认失败）**
+
+测试 fixture 的记录 dict 加 `"has_pf"` 键；`BaselineTable.build` 按 (has_pf, area) 分组；`lookup(area, pf)` 按 pf 选层、面积插值：
+
+```python
+# backend/tests/ml/test_surrogate_baseline.py（全文替换）
+"""基准表构建/查询/插值/存取单测（v4：PF 维）。"""
+
+import numpy as np
+import pytest
+
+from app.ml.surrogate.baseline import BaselineTable
+
+
+def _record(eg, fl, area, params, z_full, has_pf=0):
+    return {
+        "eg": eg, "fl": fl, "ag": 0.0, "area_um2": area, "has_pf": has_pf,
+        "params": np.asarray(params, dtype=np.float64),
+        "full_z": np.asarray(z_full, dtype=np.float64),
+    }
+
+
+def _make_records():
+    """2 个面积档 × 2 个 PF × 基准各 2 条 + 非基准 2 条。"""
+    recs = []
+    for pf in (0, 1):
+        for area in (700, 1500):
+            for i in range(2):
+                recs.append(_record(
+                    0.0, 0.0, area,
+                    params=[4.8, 5.1, 7.0, 510 + i * 10 + pf * 100, 400, 450, 380],
+                    z_full=np.full(101, 30.0 + area / 1000 + i + pf * 10),
+                    has_pf=pf,
+                ))
+    # 非基准：eg≠0、以及 eg=0 但 fl≠0（也不应进基准表）
+    recs.append(_record(1.0, 0.5, 1500, [4.9, 5.2, 7.2, 600, 500, 550, 480],
+                        np.full(101, 50.0)))
+    recs.append(_record(0.0, 1.0, 1500, [4.9, 5.2, 7.2, 600, 500, 550, 480],
+                        np.full(101, 50.0)))
+    return recs
+
+
+class TestBaselineTable:
+    def test_build_groups_by_pf_and_area(self):
+        table = BaselineTable.build(_make_records())
+        assert table.areas.tolist() == [700, 1500]
+        assert table.pfs.tolist() == [0.0, 1.0]
+        # pf=0, area=1500: qs 均值 = (510+520)/2 = 515
+        assert table.params_base[0, 1, 3] == 515.0
+        # pf=1, area=1500: qs 均值 = (610+620)/2 = 615
+        assert table.params_base[1, 1, 3] == 615.0
+        # z_base_full pf=1, area=700: 30+0.7+10+i → mean 41.2
+        np.testing.assert_allclose(table.z_base_full[1, 0], 41.2)
+
+    def test_lookup_exact(self):
+        table = BaselineTable.build(_make_records())
+        params, z = table.lookup(700, 0)
+        np.testing.assert_allclose(params, table.params_base[0, 0])
+        np.testing.assert_allclose(z, table.z_base_full[0, 0])
+        _, z1 = table.lookup(700, 1)
+        np.testing.assert_allclose(z1, table.z_base_full[1, 0])
+
+    def test_lookup_interpolates_area_in_db_domain(self):
+        table = BaselineTable.build(_make_records())
+        params, z = table.lookup(900, 0)  # 700/1500 之间，w=0.25
+        w = (900 - 700) / (1500 - 700)
+        np.testing.assert_allclose(z, (1 - w) * table.z_base_full[0, 0] + w * table.z_base_full[0, 1])
+        np.testing.assert_allclose(
+            params, (1 - w) * table.params_base[0, 0] + w * table.params_base[0, 1]
+        )
+
+    def test_lookup_out_of_range_clamps(self):
+        table = BaselineTable.build(_make_records())
+        _, z = table.lookup(100, 0)
+        np.testing.assert_allclose(z, table.z_base_full[0, 0])
+        _, z = table.lookup(9999, 1)
+        np.testing.assert_allclose(z, table.z_base_full[1, -1])
+
+    def test_lookup_returns_copies(self):
+        """越界 clamp 分支返回副本，原地修改不污染表。"""
+        table = BaselineTable.build(_make_records())
+        _, z = table.lookup(100, 0)
+        z[:] = -999
+        assert table.z_base_full[0, 0, 0] != -999
+
+    def test_save_load_roundtrip(self, tmp_path):
+        table = BaselineTable.build(_make_records())
+        path = tmp_path / "baseline.npz"
+        table.save(path)
+        loaded = BaselineTable.load(path)
+        np.testing.assert_allclose(loaded.areas, table.areas)
+        np.testing.assert_allclose(loaded.pfs, table.pfs)
+        np.testing.assert_allclose(loaded.params_base, table.params_base)
+        np.testing.assert_allclose(loaded.z_base_full, table.z_base_full)
+
+    def test_build_without_baseline_records_raises(self):
+        with pytest.raises(ValueError, match="基准单元"):
+            BaselineTable.build([_record(1.0, 1.0, 700, [4.8] * 7, [30.0] * 101)])
+```
+
+- [ ] **步骤 3：运行测试验证失败**
+
+运行（工作目录 `backend/`）：`uv run pytest tests/ml/test_surrogate_baseline.py -v`
+预期：FAIL（`AttributeError: pfs` / `TypeError: lookup() takes 2 positional arguments but 3 were given`）
+
+- [ ] **步骤 4：实现 PF 维 BaselineTable（含两个质量修复）**
+
+```python
+# backend/app/ml/surrogate/baseline.py（全文替换）
+"""eg=0/fl=0 基准表：按 (pf, area) 组织的均值性能参数与均值全谱（规格 §5.4 v4）。
+
+基准表只在清洗后的基准单元记录上构建；查询时 pf 取精确档（0/1），
+面积不在档位上时对相邻面积档做 dB 域线性插值（z 已是 dB，params 直接线性）。
+torch-free。
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import numpy as np
+from numpy.typing import NDArray
+
+
+class BaselineTable:
+    """按 (pf, area) 二维组织的基准表。
+
+    Attributes:
+        pfs: (P,) 升序 pf 档（[0., 1.]）。
+        areas: (A,) 升序面积档（μm²）。
+        params_base: (P, A, 7) 每档基准性能参数均值。
+        z_base_full: (P, A, N) 每档基准全谱均值（dB）。
+    """
+
+    def __init__(
+        self,
+        pfs: NDArray[np.float64],
+        areas: NDArray[np.float64],
+        params_base: NDArray[np.float64],
+        z_base_full: NDArray[np.float64],
+    ) -> None:
+        self.pfs = np.asarray(pfs, dtype=np.float64)
+        self.areas = np.asarray(areas, dtype=np.float64)
+        self.params_base = np.asarray(params_base, dtype=np.float64)
+        self.z_base_full = np.asarray(z_base_full, dtype=np.float64)
+        if not np.all(np.diff(self.areas) > 0):
+            raise ValueError("areas 必须严格递增")
+        expected = (len(self.pfs), len(self.areas))
+        if self.params_base.shape[:2] != expected or self.z_base_full.shape[:2] != expected:
+            raise ValueError("pfs/areas 与 params_base/z_base_full 形状不一致")
+
+    @classmethod
+    def build(cls, records: list[dict]) -> BaselineTable:
+        """从清洗后的记录构建（只用 eg=0 且 fl=0 的基准单元，按 (has_pf, area) 分组）。"""
+        base = [r for r in records if r["eg"] == 0.0 and r["fl"] == 0.0]
+        if not base:
+            raise ValueError("没有 eg=0/fl=0 的基准单元记录，无法构建基准表")
+        groups: dict[tuple[int, int], list[dict]] = {}
+        for r in base:
+            groups.setdefault((int(r["has_pf"]), r["area_um2"]), []).append(r)
+        pfs = sorted({k[0] for k in groups})
+        areas = sorted({k[1] for k in groups})
+        params = np.zeros((len(pfs), len(areas), 7))
+        z = np.zeros((len(pfs), len(areas), len(base[0]["full_z"])))
+        for (pf, area), group in groups.items():
+            pi, ai = pfs.index(pf), areas.index(area)
+            params[pi, ai] = np.mean([r["params"] for r in group], axis=0)
+            z[pi, ai] = np.mean([r["full_z"] for r in group], axis=0)
+        return cls(
+            np.asarray(pfs, dtype=np.float64),
+            np.asarray(areas, dtype=np.float64),
+            params,
+            z,
+        )
+
+    def lookup(self, area: float, pf: float) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        """按 (面积, pf) 查询 (params_base(7,), z_base_full(N,))。
+
+        pf 取最近档（0/1 精确语义）；面积档间线性插值、越界取端点（返回副本）。
+        """
+        pi = int(np.argmin(np.abs(self.pfs - float(pf))))
+        a = float(area)
+        if a <= self.areas[0]:
+            return self.params_base[pi, 0].copy(), self.z_base_full[pi, 0].copy()
+        if a >= self.areas[-1]:
+            return self.params_base[pi, -1].copy(), self.z_base_full[pi, -1].copy()
+        hi = int(np.searchsorted(self.areas, a))
+        lo = hi - 1
+        w = (a - self.areas[lo]) / (self.areas[hi] - self.areas[lo])
+        params = (1 - w) * self.params_base[pi, lo] + w * self.params_base[pi, hi]
+        z = (1 - w) * self.z_base_full[pi, lo] + w * self.z_base_full[pi, hi]
+        return params, z
+
+    def save(self, path: str | Path) -> None:
+        np.savez_compressed(
+            path, pfs=self.pfs, areas=self.areas,
+            params_base=self.params_base, z_base_full=self.z_base_full,
+        )
+
+    @classmethod
+    def load(cls, path: str | Path) -> BaselineTable:
+        with np.load(path) as data:
+            return cls(data["pfs"], data["areas"], data["params_base"], data["z_base_full"])
+```
+
+- [ ] **步骤 5：运行测试验证通过**
+
+运行：`uv run pytest tests/ml/test_surrogate_baseline.py -v`
+预期：7 passed
+
+- [ ] **步骤 6：ruff + Commit**
+
+```bash
+uv run ruff check backend/app/ml/surrogate/ backend/tests/ml/
+git add backend/app/config.py backend/app/ml/surrogate/baseline.py backend/tests/ml/test_surrogate_baseline.py
+git commit -m "feat(ml): 基准表加 PF 维（lookup(area, pf)）+ 抽样/划分常量"
+```
+
+---
+
+## 任务 4：提取纯函数模块 `surrogate/extract.py`（v4）
 
 **文件：**
 - 创建：`backend/app/ml/surrogate/extract.py`
 - 测试：`backend/tests/ml/test_surrogate_extract.py`
 
 职责（全部 torch-free 纯函数，脚本只负责编排）：
-1. `build_device_record(device_row, data_root, ...)`：单器件 → 记录 dict（读谱 → 确定性位置 → 采样 → 记录）
+1. `build_device_record(device_row, files_dir, freq_axis, k)`：单器件 → 记录 dict（读谱 → 确定性位置 → 采样 → 记录）
 2. `clean_records(records, ...)`：两级清洗（规格 §5.2）
-3. `split_cells(cells, ...)`：网格单元划分（规格 §5.5）
-4. `compute_norm_stats(records, train_cells)`：归一化统计（只用 train 单元，防泄漏）
-5. `assemble_npz(records, baseline, cells, splits, out_dir)`：写 dataset.npz + meta.json
+3. `select_per_cell(records, max_per_cell)`：每结构组合按 |fs−格中位数| 升序取前 N（v4，规格 §5.1）
+4. `split_groups(groups, ...)`：物理器件组（eg, fl, pf, mark）划分，基准组固定 train（v4，规格 §5.5）
+5. `compute_norm_stats(records, splits)`：归一化统计（只用 train 组，防泄漏）
 
-- [ ] **步骤 1：编写失败的测试（清洗 + 划分 + 统计；读谱在任务 5 夹具里测）**
+记录 dict 结构（v4）：
+
+```python
+{
+    "device_id": int, "eg": float, "fl": float, "ag": float,  # ag 当前 = surr_default_ag
+    "area_um2": int, "has_pf": int,  # 0/1，由脚本 JOIN mapping_entries 提供
+    "mark": str,  # 物理结构标识（划分组键；同 mark 的 S11/S22 两行与重复管芯同组）
+    "cell_key": str,  # f"{eg}|{fl}|{area}|{pf}"（抽样单元）
+    "params": (7,), "sample_pos": (K,), "sample_z": (K,), "sparse_base": (K,),
+    "full_z": (N,), "phase": (N,),
+}
+```
+
+- [ ] **步骤 1：编写失败的测试（清洗 + 抽样 + 划分 + 统计；读谱在任务 5 夹具里测）**
 
 ```python
 # backend/tests/ml/test_surrogate_extract.py
-"""提取管线纯函数单测：两级清洗、网格划分、归一化统计。"""
+"""提取管线纯函数单测：两级清洗、每格抽样、物理组划分、归一化统计（v4）。"""
 
 import numpy as np
 import pytest
 
-from app.ml.surrogate.extract import clean_records, compute_norm_stats, split_cells
+from app.ml.surrogate.extract import (
+    clean_records,
+    compute_norm_stats,
+    select_per_cell,
+    split_groups,
+)
 
 N = 101
 
 
-def _rec(eg, fl, area, fs=4.8, fp=5.1, qs=500.0, qp=400.0):
+def _rec(eg, fl, area, pf=0, mark="M1", fs=4.8, fp=5.1, qs=500.0, qp=400.0):
     return {
-        "device_id": 1, "eg": eg, "fl": fl, "ag": 0.0, "area_um2": area,
-        "cell_key": f"{eg}|{fl}|{area}",
+        "device_id": 1, "eg": eg, "fl": fl, "ag": 1.0, "area_um2": area,
+        "has_pf": pf, "mark": mark,
+        "cell_key": f"{eg}|{fl}|{area}|{pf}",
         "params": np.array([fs, fp, 7.0, qs, qp, 450.0, 380.0]),
         "sample_pos": np.arange(32), "sample_z": np.full(32, 40.0),
         "sparse_base": np.full(32, 39.0),
@@ -601,56 +858,90 @@ class TestCleanRecords:
                 fs = 4.7 + 0.1 * eg
                 if eg == 1.0 and fl == 0.5:
                     fs = 5.5  # 异常格
-                for _ in range(4):
-                    recs.append(_rec(eg, fl, 700, fs=fs + rng.normal(0, 0.001)))
+                for i in range(4):
+                    recs.append(_rec(eg, fl, 700, mark=f"M{eg}{fl}", fs=fs + rng.normal(0, 0.001)))
         kept, dropped = clean_records(recs, fs_tol_mhz=100.0, trend_sigma=3.0)
         dropped_cells = {d["cell_key"] for d in dropped if d["reason"] == "trend_outlier"}
-        assert "1.0|0.5|700" in dropped_cells
+        assert "1.0|0.5|700|0" in dropped_cells
         assert len(kept) == 60 - 4
 
+    def test_pf_separates_cells(self):
+        """同 eg/fl/area 不同 pf 是两个独立抽样单元，各自做中位数过滤。"""
+        recs = [_rec(1.0, 0.5, 700, pf=0, fs=4.80), _rec(1.0, 0.5, 700, pf=0, fs=4.81),
+                _rec(1.0, 0.5, 700, pf=1, mark="H1", fs=4.60), _rec(1.0, 0.5, 700, pf=1, mark="H1", fs=4.61)]
+        kept, dropped = clean_records(recs, fs_tol_mhz=100.0, trend_sigma=1e9)
+        assert len(kept) == 4  # pf=1 的 fs 低 0.2GHz 但不与 pf=0 混算中位数
 
-class TestSplitCells:
-    def test_baseline_cells_stay_in_train(self):
-        cells = [(0.0, 0.0, a) for a in range(100, 1300, 100)]
-        cells += [(1.0, 0.5, a) for a in range(100, 1300, 100)]
-        splits = split_cells(cells, val_n=3, test_n=3, seed=42)
-        for c in cells[:12]:
-            assert splits[c] == "train"
-        assert sum(v == "val" for v in splits.values()) == 3
-        assert sum(v == "test" for v in splits.values()) == 3
+
+class TestSelectPerCell:
+    def test_caps_at_max_and_prefers_median(self):
+        """8 条同格记录 → 取 |fs-中位数| 最小的 5 条。"""
+        fss = [4.80, 4.81, 4.79, 4.82, 4.78, 4.90, 4.70, 4.85]
+        recs = [_rec(1.0, 0.5, 700, fs=f) for f in fss]
+        for i, r in enumerate(recs):
+            r["device_id"] = i
+        selected = select_per_cell(recs, max_per_cell=5)
+        assert len(selected) == 5
+        median = float(np.median(fss))  # 4.805
+        kept_fs = sorted(r["params"][0] for r in selected)
+        # 离中位数最近的 5 个：4.80, 4.81, 4.79, 4.82, 4.78（4.85/4.90/4.70 落选）
+        assert kept_fs == [4.78, 4.79, 4.80, 4.81, 4.82]
+
+    def test_fewer_than_max_keeps_all(self):
+        recs = [_rec(1.0, 0.5, 700, fs=4.8), _rec(1.0, 0.5, 700, fs=4.9)]
+        assert len(select_per_cell(recs, max_per_cell=5)) == 2
+
+    def test_pf_cells_selected_independently(self):
+        recs = [_rec(1.0, 0.5, 700, pf=0, fs=4.8 + i * 0.01) for i in range(7)]
+        recs += [_rec(1.0, 0.5, 700, pf=1, mark="H1", fs=4.6 + i * 0.01) for i in range(3)]
+        selected = select_per_cell(recs, max_per_cell=5)
+        assert len(selected) == 5 + 3
+
+
+class TestSplitGroups:
+    def _groups(self):
+        """8 个物理组：2 个基准（eg=0,fl=0）+ 6 个非基准。"""
+        groups = [(0.0, 0.0, 0, "A1-1"), (0.0, 0.0, 1, "G1-1")]
+        groups += [(1.0, 0.5, 0, f"B{i}") for i in range(4)]
+        groups += [(1.0, 0.5, 1, f"H{i}") for i in range(2)]
+        return groups
+
+    def test_baseline_groups_stay_in_train(self):
+        splits = split_groups(self._groups(), val_n=2, test_n=2, seed=42)
+        assert splits[(0.0, 0.0, 0, "A1-1")] == "train"
+        assert splits[(0.0, 0.0, 1, "G1-1")] == "train"
+        assert sum(v == "val" for v in splits.values()) == 2
+        assert sum(v == "test" for v in splits.values()) == 2
 
     def test_deterministic_with_seed(self):
-        cells = [(float(e), float(f), 700) for e in range(5) for f in range(8)]
-        s1 = split_cells(cells, val_n=5, test_n=5, seed=42)
-        s2 = split_cells(cells, val_n=5, test_n=5, seed=42)
+        s1 = split_groups(self._groups(), val_n=2, test_n=2, seed=42)
+        s2 = split_groups(self._groups(), val_n=2, test_n=2, seed=42)
         assert s1 == s2
 
 
 class TestComputeNormStats:
-    def test_stats_only_from_train_cells(self):
-        recs = [_rec(0.0, 0.0, 700), _rec(1.0, 0.5, 700)]
-        splits = {"0.0|0.0|700": "train", "1.0|0.5|700": "test"}
+    def test_stats_only_from_train_groups(self):
+        recs = [_rec(0.0, 0.0, 700, mark="A1-1"), _rec(1.0, 0.5, 700, mark="B0")]
+        splits = {(0.0, 0.0, 0, "A1-1"): "train", (1.0, 0.5, 0, "B0"): "test"}
         stats = compute_norm_stats(recs, splits)
         # 只有 train 记录（eg=0）参与：x_mean[0] == 0
         assert stats["x_mean"][0] == pytest.approx(0.0)
+        assert stats["x_mean"][4] == pytest.approx(0.0)  # has_pf 列
         assert set(stats.keys()) == {"x_mean", "x_std", "params_mean", "params_std", "z_mean", "z_std"}
 ```
 
 - [ ] **步骤 2：运行测试验证失败**
 
-运行：`uv run pytest tests/ml/test_surrogate_extract.py -v`
+运行（工作目录 `backend/`）：`uv run pytest tests/ml/test_surrogate_extract.py -v`
 预期：FAIL，`ImportError: cannot import name 'clean_records'`
 
 - [ ] **步骤 3：实现 `extract.py`**
 
 ```python
 # backend/app/ml/surrogate/extract.py
-"""代理模型训练数据提取纯函数（规格 §5）。torch-free。
+"""代理模型训练数据提取纯函数（规格 §5，v4）。torch-free。
 
-记录 dict 结构（与计划"数据契约"一致）：
-    device_id, eg, fl, ag, area_um2, cell_key,
-    params(7,), sample_pos(K,), sample_z(K,), sparse_base(K,),
-    full_z(N,), phase(N,)
+记录 dict 结构见计划"数据契约"；has_pf/mark 由脚本经 mapping JOIN 提供。
 """
 
 from __future__ import annotations
@@ -660,22 +951,19 @@ from pathlib import Path
 import numpy as np
 from numpy.typing import NDArray
 
-from app.config import AlgorithmConfig as AC
+from app.config import AlgorithmConfig
 from app.core.sparse_sampler import deterministic_sample_positions, read_z_mag_db
-
-ACFG = AC  # AlgorithmConfig 为常量类，直接用类属性访问（与现有代码一致）
-
 
 def build_device_record(
     device_row: dict,
     files_dir: str | Path,
     freq_axis: NDArray[np.float64],
-    k: int = ACFG.surr_K,
+    k: int = AlgorithmConfig.surr_k,
 ) -> dict | None:
     """单器件 → 记录 dict；文件缺失/读取失败返回 None。
 
     Args:
-        device_row: 含 eg/fl/ag/area_um2/7 性能参数/s_param_path/s_param_port/batch_no 的行。
+        device_row: 含 eg/fl/area_um2/has_pf/mark/7 性能参数/s_param_path/s_param_port/batch_no 的行。
         files_dir: DATA_ROOT/files 目录。
         freq_axis: 统一频率轴 (N,)。
         k: 稀疏采样点数。
@@ -701,19 +989,17 @@ def build_device_record(
 
     fs = float(device_row.get("fs_ghz") or 0.0)
     fp = float(device_row.get("fp_ghz") or 0.0)
-    pos = deterministic_sample_positions(
-        freq_axis, fs, fp, k=k,
-        dense_ratio=ACFG.surr_DENSE_RATIO, transition_ratio=ACFG.surr_TRANSITION_RATIO,
-        dense_half_bw=ACFG.surr_DENSE_HALF_BW, transition_half_bw=ACFG.surr_TRANSITION_HALF_BW,
-    )
-    params = np.array([float(device_row.get(c) or 0.0) for c in ACFG.surr_PARAM_COLS])
+    pos = deterministic_sample_positions(freq_axis, fs, fp, k=k)
+    params = np.array([float(device_row.get(c) or 0.0) for c in AlgorithmConfig.surr_param_cols])
     eg = float(device_row.get("eg") or 0.0)
     fl = float(device_row.get("fl") or 0.0)
     area = int(device_row.get("area_um2") or 0)
+    pf = int(device_row.get("has_pf") or 0)
     return {
         "device_id": int(device_row.get("id") or 0),
-        "eg": eg, "fl": fl, "ag": float(device_row.get("ag") or 0.0), "area_um2": area,
-        "cell_key": f"{eg}|{fl}|{area}",
+        "eg": eg, "fl": fl, "ag": AlgorithmConfig.surr_default_ag, "area_um2": area,
+        "has_pf": pf, "mark": str(device_row.get("mark") or ""),
+        "cell_key": f"{eg}|{fl}|{area}|{pf}",
         "params": params,
         "sample_pos": pos.astype(np.int32),
         "sample_z": z_db[pos].astype(np.float32),
@@ -725,28 +1011,24 @@ def build_device_record(
 
 def clean_records(
     records: list[dict],
-    fs_tol_mhz: float = ACFG.surr_CLEAN_FS_TOL_MHZ,
-    trend_sigma: float = ACFG.surr_CLEAN_TREND_SIGMA,
+    fs_tol_mhz: float = AlgorithmConfig.surr_clean_fs_tol_mhz,
+    trend_sigma: float = AlgorithmConfig.surr_clean_trend_sigma,
 ) -> tuple[list[dict], list[dict]]:
-    """两级清洗（规格 §5.2）。返回 (kept, dropped)，dropped 元素含 reason 字段。"""
+    """两级清洗（规格 §5.2）。返回 (kept, dropped)，dropped 元素含 reason 字段。
+
+    判定顺序：单元内 fs/fp 离群 → 跨单元趋势面 → 物理非法（qs/qp<=0 或 fp<=fs）。
+    物理非法放最后：同时违反多项的记录按更具体的原因（cell_outlier/trend_outlier）
+    归类；物理非法记录仍参与单元中位数与趋势面拟合（中位数/最小二乘对其鲁棒）。
+    """
     dropped: list[dict] = []
 
-    # 第 0 级：物理非法
-    legal = []
-    for r in records:
-        fs, fp, qs, qp = r["params"][0], r["params"][1], r["params"][3], r["params"][4]
-        if qs <= 0 or qp <= 0 or fp <= fs:
-            dropped.append({**r, "reason": "physical"})
-        else:
-            legal.append(r)
-
-    # 第 1 级：单元内 fs/fp 中位数 ± tol
+    # 第 1 级：单元内 fs/fp 中位数 ± tol（单元 = eg|fl|area|pf）
     by_cell: dict[str, list[dict]] = {}
-    for r in legal:
+    for r in records:
         by_cell.setdefault(r["cell_key"], []).append(r)
     tol_ghz = fs_tol_mhz / 1000.0
     in_cell: list[dict] = []
-    for key, group in by_cell.items():
+    for group in by_cell.values():
         fs_med = float(np.median([g["params"][0] for g in group]))
         fp_med = float(np.median([g["params"][1] for g in group]))
         for g in group:
@@ -755,62 +1037,101 @@ def clean_records(
             else:
                 in_cell.append(g)
 
-    # 第 2 级：跨单元趋势面（每面积档：fs/fp 中位数 ~ (1, eg, fl) 最小二乘）
-    by_area: dict[int, dict[str, list[dict]]] = {}
+    # 第 2 级：跨单元趋势面（每 (area, pf)：fs/fp 格中位数 ~ (1, eg, fl) 最小二乘）
+    by_area_pf: dict[tuple[int, int], dict[str, list[dict]]] = {}
     for r in in_cell:
-        by_area.setdefault(r["area_um2"], {}).setdefault(r["cell_key"], []).append(r)
-    kept: list[dict] = []
-    for area, cells in by_area.items():
+        by_area_pf.setdefault((r["area_um2"], r["has_pf"]), {}).setdefault(
+            r["cell_key"], []).append(r)
+    in_trend: list[dict] = []
+    for (_area, _pf), cells in by_area_pf.items():
         keys = sorted(cells)
         if len(keys) < 4:  # 格太少无法拟合趋势面，全部保留
             for key in keys:
-                kept.extend(cells[key])
+                in_trend.extend(cells[key])
             continue
         design = np.array([[1.0, *map(float, key.split("|")[:2])] for key in keys])
+        bad: set[str] = set()  # fs/fp 任一维超阈值即整格剔除（并集，判定一次）
         for param_idx in (0, 1):  # fs, fp
-            med = np.array([float(np.median([g["params"][param_idx] for g in cells[key]])) for key in keys])
+            med = np.array([
+                float(np.median([g["params"][param_idx] for g in cells[key]]))
+                for key in keys
+            ])
             coef, *_ = np.linalg.lstsq(design, med, rcond=None)
             resid = med - design @ coef
-            sigma = float(resid.std()) or 1e-12
-            bad = {keys[i] for i in range(len(keys)) if abs(resid[i]) > trend_sigma * sigma}
-            for key in keys:
-                if key in bad:
-                    dropped.extend({**g, "reason": "trend_outlier"} for g in cells[key])
-                else:
-                    kept.extend(cells[key])
+            sigma = max(float(resid.std()), 1e-12)  # 下限防常量数据数值误杀
+            bad |= {keys[i] for i in range(len(keys)) if abs(resid[i]) > trend_sigma * sigma}
+        for key in keys:
+            if key in bad:
+                dropped.extend({**g, "reason": "trend_outlier"} for g in cells[key])
+            else:
+                in_trend.extend(cells[key])
+
+    # 第 0 级（最后判定）：物理非法
+    kept: list[dict] = []
+    for r in in_trend:
+        fs, fp, qs, qp = r["params"][0], r["params"][1], r["params"][3], r["params"][4]
+        if qs <= 0 or qp <= 0 or fp <= fs:
+            dropped.append({**r, "reason": "physical"})
+        else:
+            kept.append(r)
     return kept, dropped
 
 
-def split_cells(
-    cells: list[tuple[float, float, int]],
-    val_n: int = ACFG.surr_VAL_CELLS,
-    test_n: int = ACFG.surr_TEST_CELLS,
-    seed: int = ACFG.surr_SPLIT_SEED,
-) -> dict[tuple[float, float, int], str]:
-    """网格单元划分：eg=0/fl=0 基准格固定 train，其余随机分 val/test（规格 §5.5）。"""
-    baseline = {c for c in cells if c[0] == 0.0 and c[1] == 0.0}
-    others = sorted(c for c in cells if c not in baseline)
+def select_per_cell(
+    records: list[dict],
+    max_per_cell: int = AlgorithmConfig.surr_per_cell_max,
+) -> list[dict]:
+    """每结构组合按 |fs−格中位数| 升序取前 max_per_cell 条（v4，规格 §5.1）。
+
+    在 clean_records 之后调用；同格记录不足上限时全保留。
+    每格内保持 |fs−中位数| 升序（确定性）。
+    """
+    by_cell: dict[str, list[dict]] = {}
+    for r in records:
+        by_cell.setdefault(r["cell_key"], []).append(r)
+    selected: list[dict] = []
+    for key in sorted(by_cell):
+        group = by_cell[key]
+        fs_med = float(np.median([g["params"][0] for g in group]))
+        group_sorted = sorted(group, key=lambda g: (abs(g["params"][0] - fs_med), g["device_id"]))
+        selected.extend(group_sorted[:max_per_cell])
+    return selected
+
+
+def split_groups(
+    groups: list[tuple[float, float, int, str]],
+    val_n: int = AlgorithmConfig.surr_val_groups,
+    test_n: int = AlgorithmConfig.surr_test_groups,
+    seed: int = AlgorithmConfig.surr_split_seed,
+) -> dict[tuple[float, float, int, str], str]:
+    """物理器件组划分（v4，规格 §5.5）。
+
+    组 = (eg, fl, has_pf, mark)：同 mark 的 S11/S22 两行与重复管芯绑定同侧。
+    eg=0 且 fl=0 的基准组固定 train；其余随机分 val/test。
+    """
+    baseline = {g for g in groups if g[0] == 0.0 and g[1] == 0.0}
+    others = sorted(g for g in groups if g not in baseline)
     rng = np.random.default_rng(seed)
     perm = rng.permutation(len(others))
-    val_cells = {others[i] for i in perm[:val_n]}
-    test_cells = {others[i] for i in perm[val_n:val_n + test_n]}
-    splits: dict[tuple[float, float, int], str] = {}
-    for c in cells:
-        if c in baseline:
-            splits[c] = "train"
-        elif c in val_cells:
-            splits[c] = "val"
-        elif c in test_cells:
-            splits[c] = "test"
+    val_groups = {others[i] for i in perm[:val_n]}
+    test_groups = {others[i] for i in perm[val_n:val_n + test_n]}
+    splits: dict[tuple[float, float, int, str], str] = {}
+    for g in groups:
+        if g in baseline:
+            splits[g] = "train"
+        elif g in val_groups:
+            splits[g] = "val"
+        elif g in test_groups:
+            splits[g] = "test"
         else:
-            splits[c] = "train"
+            splits[g] = "train"
     return splits
 
 
 def compute_norm_stats(records: list[dict], splits: dict) -> dict[str, list[float]]:
-    """归一化统计：只用 train 单元的记录（防 test 泄漏）。"""
-    train = [r for r in records if splits.get(_key_tuple(r), "train") == "train"]
-    x = np.array([[r["eg"], r["fl"], r["area_um2"], r["ag"]] for r in train])
+    """归一化统计：只用 train 组的记录（防 test 泄漏）。x 为 5 维 [eg,fl,ag,area,pf]。"""
+    train = [r for r in records if splits.get(_group_tuple(r), "train") == "train"]
+    x = np.array([[r["eg"], r["fl"], r["ag"], r["area_um2"], r["has_pf"]] for r in train])
     params = np.stack([r["params"] for r in train])
     z = np.concatenate([r["full_z"] for r in train])
     return {
@@ -823,30 +1144,29 @@ def compute_norm_stats(records: list[dict], splits: dict) -> dict[str, list[floa
     }
 
 
-def _key_tuple(r: dict) -> tuple[float, float, int]:
-    return (r["eg"], r["fl"], r["area_um2"])
+def _group_tuple(r: dict) -> tuple[float, float, int, str]:
+    return (r["eg"], r["fl"], r["has_pf"], r["mark"])
 ```
 
 - [ ] **步骤 4：运行测试验证通过**
 
 运行：`uv run pytest tests/ml/test_surrogate_extract.py -v`
-预期：7 passed
+预期：9 passed
 
 - [ ] **步骤 5：Commit**
 
 ```bash
 git add backend/app/ml/surrogate/extract.py backend/tests/ml/test_surrogate_extract.py
-git commit -m "feat(ml): 提取纯函数（记录构建/两级清洗/网格划分/归一化统计）"
+git commit -m "feat(ml): 提取纯函数（记录/两级清洗/每格抽样/物理组划分/统计）"
 ```
 
----
 
-## 任务 5：提取脚本 `extract_surrogate_dataset.py`（含 npz/meta 落地）
+## 任务 5：提取脚本 `extract_surrogate_dataset.py`（含 npz/meta 落地，v4）
 
 **文件：**
-- 修改：`backend/app/ml/surrogate/extract.py`（追加 `assemble_npz` + `fill_sparse_base`）
+- 修改：`backend/app/ml/surrogate/extract.py`（追加 `fill_sparse_base` + `assemble_npz`）
 - 创建：`backend/scripts/extract_surrogate_dataset.py`
-- 测试：`backend/tests/ml/test_surrogate_extract.py`（追加落地与回填测试）
+- 测试：`backend/tests/ml/test_surrogate_extract.py`（追加落地与回填测试）、`backend/tests/ml/test_extract_smoke.py`
 
 - [ ] **步骤 1：追加失败的测试**
 
@@ -859,10 +1179,12 @@ from app.ml.surrogate.extract import assemble_npz, fill_sparse_base
 class TestFillSparseBase:
     def test_fill_writes_interpolated_baseline(self):
         recs = [
-            _rec(0.0, 0.0, 700), _rec(0.0, 0.0, 700),  # 基准格（z 恒 40）
-            _rec(1.0, 0.5, 700),
+            _rec(0.0, 0.0, 700, mark="A1-1"), _rec(0.0, 0.0, 700, mark="A1-1"),
+            _rec(1.0, 0.5, 700, mark="B0"),
         ]
         table = BaselineTable.build(recs)
+        for r in recs:
+            r["params_base"], _ = table.lookup(r["area_um2"], r["has_pf"])
         fill_sparse_base(recs, table)
         for r in recs:
             # 基准全谱恒 40 → 任意位置插值都是 40
@@ -872,23 +1194,27 @@ class TestFillSparseBase:
 class TestAssembleNpz:
     def test_writes_npz_and_meta(self, tmp_path):
         recs = [
-            _rec(0.0, 0.0, 700), _rec(0.0, 0.0, 700),
-            _rec(1.0, 0.5, 700), _rec(2.0, 1.0, 700),
+            _rec(0.0, 0.0, 700, mark="A1-1"), _rec(0.0, 0.0, 5500, mark="A1-1"),
+            _rec(1.0, 0.5, 700, mark="B0"), _rec(2.0, 1.0, 700, mark="C0"),
         ]
-        cells = [(0.0, 0.0, 700), (1.0, 0.5, 700), (2.0, 1.0, 700)]
-        splits = {(0.0, 0.0, 700): "train", (1.0, 0.5, 700): "val", (2.0, 1.0, 700): "test"}
+        for r in recs:
+            r["params_base"] = np.zeros(7)
+        groups = [(0.0, 0.0, 0, "A1-1"), (1.0, 0.5, 0, "B0"), (2.0, 1.0, 0, "C0")]
+        splits = {groups[0]: "train", groups[1]: "val", groups[2]: "test"}
         stats = compute_norm_stats(recs, splits)
-        assemble_npz(recs, cells, splits, stats, dropped=[], out_dir=tmp_path,
+        assemble_npz(recs, groups, splits, stats, dropped=[], out_dir=tmp_path,
                      freq_axis=np.linspace(4.0, 7.0, 101), k=32)
         data = np.load(tmp_path / "dataset.npz")
-        assert data["x_struct"].shape == (4, 4)
+        assert data["x_struct"].shape == (4, 5)  # [eg, fl, ag, area, pf]
         assert data["y_params"].shape == (4, 7)
         assert data["full_z"].shape == (4, 101)
         assert data["sample_pos"].shape == (4, 32)
+        # 同 mark（A1-1）的两行 group_idx 相同（物理绑定）
+        assert data["group_idx"][0] == data["group_idx"][1]
         import json
         meta = json.loads((tmp_path / "meta.json").read_text(encoding="utf-8"))
-        assert len(meta["cells"]) == 3
-        assert meta["cells"][1]["split"] == "val"
+        assert len(meta["groups"]) == 3
+        assert meta["groups"][1]["split"] == "val"
         assert meta["k"] == 32
 ```
 
@@ -901,11 +1227,9 @@ class TestAssembleNpz:
 
 ```python
 def fill_sparse_base(records: list[dict], baseline: "BaselineTable") -> None:
-    """回填每条记录的 sparse_base：基准全谱在该器件采样位置上的插值。"""
-    from app.ml.surrogate.baseline import BaselineTable as _BT  # noqa: F401（类型）
+    """回填每条记录的 sparse_base：基准全谱在该器件采样位置上的取值（同网格直接索引）。"""
     for r in records:
-        _, z_base = baseline.lookup(r["area_um2"])
-        # z_base 与 full_z 同网格（N），采样位置是网格索引 → 直接取
+        _, z_base = baseline.lookup(r["area_um2"], r["has_pf"])
         if len(z_base) == len(r["full_z"]):
             r["sparse_base"] = z_base[r["sample_pos"]].astype(np.float32)
         else:  # 网格不一致时按位置比例插值（防御分支）
@@ -916,7 +1240,7 @@ def fill_sparse_base(records: list[dict], baseline: "BaselineTable") -> None:
 
 def assemble_npz(
     records: list[dict],
-    cells: list[tuple[float, float, int]],
+    groups: list[tuple[float, float, int, str]],
     splits: dict,
     stats: dict,
     dropped: list[dict],
@@ -924,17 +1248,20 @@ def assemble_npz(
     freq_axis: NDArray[np.float64],
     k: int,
 ) -> None:
-    """写 dataset.npz + meta.json（数据契约见计划头部）。"""
+    """写 dataset.npz + meta.json（数据契约见计划头部，v4：groups 版）。"""
     import json
 
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    cell_list = sorted(cells)
-    cell_index = {c: i for i, c in enumerate(cell_list)}
+    group_list = sorted(groups)
+    group_index = {g: i for i, g in enumerate(group_list)}
 
     np.savez_compressed(
         out / "dataset.npz",
-        x_struct=np.array([[r["eg"], r["fl"], r["area_um2"], r["ag"]] for r in records], dtype=np.float32),
+        x_struct=np.array(
+            [[r["eg"], r["fl"], r["ag"], r["area_um2"], r["has_pf"]] for r in records],
+            dtype=np.float32,
+        ),
         y_params=np.stack([r["params"] for r in records]).astype(np.float32),
         params_base=np.stack([r["params_base"] for r in records]).astype(np.float32),
         sample_pos=np.stack([r["sample_pos"] for r in records]).astype(np.int32),
@@ -942,11 +1269,12 @@ def assemble_npz(
         sparse_base=np.stack([r["sparse_base"] for r in records]).astype(np.float32),
         full_z=np.stack([r["full_z"] for r in records]).astype(np.float32),
         phase=np.stack([r["phase"] for r in records]).astype(np.float32),
-        cell_idx=np.array([cell_index[_key_tuple(r)] for r in records], dtype=np.int32),
+        group_idx=np.array([group_index[_group_tuple(r)] for r in records], dtype=np.int32),
     )
     meta = {
-        "cells": [
-            {"eg": c[0], "fl": c[1], "area_um2": c[2], "split": splits[c]} for c in cell_list
+        "groups": [
+            {"eg": g[0], "fl": g[1], "has_pf": g[2], "mark": g[3], "split": splits[g]}
+            for g in group_list
         ],
         "freq_ghz": freq_axis.tolist(),
         "k": k,
@@ -957,25 +1285,23 @@ def assemble_npz(
             for d in dropped
         ],
         "config": {
-            "fs_tol_mhz": ACFG.surr_CLEAN_FS_TOL_MHZ,
-            "trend_sigma": ACFG.surr_CLEAN_TREND_SIGMA,
-            "dense_ratio": ACFG.surr_DENSE_RATIO,
-            "transition_ratio": ACFG.surr_TRANSITION_RATIO,
+            "fs_tol_mhz": AlgorithmConfig.surr_clean_fs_tol_mhz,
+            "trend_sigma": AlgorithmConfig.surr_clean_trend_sigma,
+            "per_cell_max": AlgorithmConfig.surr_per_cell_max,
+            "default_ag": AlgorithmConfig.surr_default_ag,
         },
     }
     (out / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 ```
 
-注意：`assemble_npz` 依赖每条记录的 `params_base` 字段，由脚本在基准表构建后统一回填（见步骤 4 脚本 `main()`）。
-
 - [ ] **步骤 4：运行测试验证通过，然后编写提取脚本**
 
 运行：`uv run pytest tests/ml/test_surrogate_extract.py -q`
-预期：9 passed
+预期：11 passed
 
 ```python
 # backend/scripts/extract_surrogate_dataset.py
-"""代理模型训练数据提取（规格 §5）。
+"""代理模型训练数据提取（规格 §5，v4）。
 
 用法：
     uv run python scripts/extract_surrogate_dataset.py \
@@ -995,36 +1321,45 @@ from pathlib import Path
 import numpy as np
 from sqlalchemy import create_engine, select
 
-from app.config import AlgorithmConfig as AC
-from app.core.sparse_sampler import read_z_mag_db  # noqa: F401（子进程预加载）
+from app.config import AlgorithmConfig
+from app.core.sparse_sampler import read_z_mag_db
 from app.ml.surrogate.baseline import BaselineTable
 from app.ml.surrogate.extract import (
+    _group_tuple,
+    assemble_npz,
     build_device_record,
     clean_records,
     compute_norm_stats,
     fill_sparse_base,
-    split_cells,
-    assemble_npz,
+    select_per_cell,
+    split_groups,
 )
-from app.models import Batch, Device
+from app.models import Batch, Device, MappingEntry
 
 log = logging.getLogger("extract_surrogate")
-_PARAM_COLS = list(AC.surr_PARAM_COLS)
-ACFG = AC  # 常量类，类属性访问
+
+_PARAM_COLS = list(AlgorithmConfig.surr_param_cols)
 
 
-def _fetch_rows(db_url: str, batch_no: str) -> tuple[list[dict], np.ndarray]:
-    """查询批次器件行 + 频率轴（用第一条有效记录的文件确定）。"""
+def _fetch_rows(db_url: str, batch_no: str) -> list[dict]:
+    """查询批次器件行，JOIN mapping_entries 取 has_pf/mark；剔除关联失败的行。"""
     engine = create_engine(db_url)
     cols = [
-        Device.id, Device.eg, Device.fl, Device.ag, Device.area_um2,
+        Device.id, Device.eg, Device.fl, Device.area_um2,
         *[getattr(Device, c) for c in _PARAM_COLS],
-        Device.s_param_path, Device.s_param_port, Batch.batch_no,
+        Device.s_param_path, Device.s_param_port, Device.mark,
+        Batch.batch_no, Batch.mapping_id,
+        MappingEntry.has_pf,
     ]
     stmt = (
         select(*cols)
         .select_from(Device)
         .join(Batch, Device.batch_id == Batch.id)
+        .join(
+            MappingEntry,
+            (MappingEntry.mark == Device.mark)
+            & (MappingEntry.mapping_id == Batch.mapping_id),
+        )
         .where(
             Batch.batch_no == batch_no,
             Device.eg.is_not(None),
@@ -1055,26 +1390,25 @@ def main() -> None:
     rows = _fetch_rows(args.db_url, args.batch_no)
     if args.limit > 0:
         rows = rows[: args.limit]
-    log.info("查询到 %d 条器件记录", len(rows))
+    log.info("查询到 %d 条器件记录（已 ⋈ mapping_entries，关联失败已剔除）", len(rows))
 
     # 频率轴：从第一条可读记录确定
-    first = None
+    freq_axis = None
     for row in rows:
         p = files_dir / str(row["batch_no"]) / str(row["s_param_path"])
         if p.exists():
-            freq, _ = read_z_mag_db(p, port=row.get("s_param_port") or "S11",
-                                    target_n_freq=ACFG.surr_N_FREQ)
-            first = freq
+            freq_axis, _ = read_z_mag_db(p, port=row.get("s_param_port") or "S11",
+                                         target_n_freq=AlgorithmConfig.surr_n_freq)
             break
-    if first is None:
+    if freq_axis is None:
         raise SystemExit("没有任何可读的 S 参数文件")
-    freq_axis = first
     log.info("频率轴: %.3f - %.3f GHz, %d 点", freq_axis[0], freq_axis[-1], len(freq_axis))
 
     # 多进程构建记录（build_device_record 为顶层函数，可 pickle）
     records: list[dict] = []
     with ProcessPoolExecutor(max_workers=args.workers) as exe:
-        futs = [exe.submit(build_device_record, row, files_dir, freq_axis, AC.surr_K) for row in rows]
+        futs = [exe.submit(build_device_record, row, files_dir, freq_axis, AlgorithmConfig.surr_k)
+                for row in rows]
         for i, fut in enumerate(as_completed(futs), 1):
             rec = fut.result()
             if rec is not None:
@@ -1083,43 +1417,46 @@ def main() -> None:
                 log.info("进度 %d/%d，成功 %d", i, len(rows), len(records))
     log.info("成功构建 %d 条记录", len(records))
 
-    # 清洗
+    # 清洗（两级）
     kept, dropped = clean_records(records)
-    log.info("清洗: 保留 %d，剔除 %d（physical/cell_outlier/trend_outlier）", len(kept), len(dropped))
+    log.info("清洗: 保留 %d，剔除 %d", len(kept), len(dropped))
 
-    # 基准表 + 回填
+    # 基准表（用全部合法基准格记录，不受抽样限制）+ 回填
     baseline = BaselineTable.build(kept)
     baseline.save(Path(args.out) / "baseline.npz")
     for r in kept:
-        r["params_base"], _ = baseline.lookup(r["area_um2"])
+        r["params_base"], _ = baseline.lookup(r["area_um2"], r["has_pf"])
     fill_sparse_base(kept, baseline)
 
-    # 划分 + 统计 + 落地
-    cells = sorted({(r["eg"], r["fl"], r["area_um2"]) for r in kept})
-    splits = split_cells(cells)
+    # 每格抽样（v4：≤ surr_per_cell_max 条/格）
+    selected = select_per_cell(kept)
+    log.info("每格抽样: %d → %d（每格 ≤ %d）", len(kept), len(selected), AlgorithmConfig.surr_per_cell_max)
+
+    # 物理组划分 + 统计 + 落地
+    groups = sorted({_group_tuple(r) for r in kept})
+    splits = split_groups(groups)
     stats = compute_norm_stats(kept, splits)
-    assemble_npz(kept, cells, splits, stats, dropped, args.out, freq_axis, ACFG.surr_K)
-    n_train = sum(1 for c in cells if splits[c] == "train")
-    log.info("完成: %d 格（train %d / val %d / test %d）→ %s",
-             len(cells), n_train, ACFG.surr_VAL_CELLS, ACFG.surr_TEST_CELLS, args.out)
+    assemble_npz(selected, groups, splits, stats, dropped, args.out, freq_axis, AlgorithmConfig.surr_k)
+    n_train = sum(1 for g in groups if splits[g] == "train")
+    log.info("完成: %d 物理组（train %d / val %d / test %d）→ %s",
+             len(groups), n_train, AlgorithmConfig.surr_val_groups, AlgorithmConfig.surr_test_groups, args.out)
 
 
 if __name__ == "__main__":
     main()
 ```
 
-（`build_device_record` 是 `app.ml.surrogate.extract` 的顶层函数，可直接被 ProcessPoolExecutor pickle 调度。）
+注意：`MappingEntry` 模型在 `app/models/` 中（表 `mapping_entries`，列 `mapping_id/mark/has_pf`）；若导入路径不同（如 `app.models.mapping`），按实际模型文件调整 import。`_fetch_rows` 用 INNER JOIN——mark 为空或关联失败的行自然被剔除（v4 规格 §5.1）。
 
 - [ ] **步骤 5：sqlite 内存夹具冒烟测试（不依赖真实数据库）**
 
 新建 `backend/tests/ml/test_extract_smoke.py`：
 
 ```python
-"""提取脚本冒烟：2 个合成 s2p + 内存 sqlite → dataset.npz。"""
+"""提取链路冒烟：2 个合成 s2p + 构造行 → 清洗/抽样/基准/落地。"""
 
 import numpy as np
 import pytest
-from sqlalchemy import create_engine, text
 
 skrf = pytest.importorskip("skrf")
 
@@ -1138,11 +1475,19 @@ def _write_s2p(path, fs_ghz=4.8, fp_ghz=5.1):
     path.write_text("".join(lines))
 
 
-def test_extract_end_to_end(tmp_path, monkeypatch):
+def _row(i, mark, pf, path_name, fs=4.8, fp=5.1):
+    return {"id": i, "eg": 0.0 if pf == 0 else 1.0, "fl": 0.0, "area_um2": 700,
+            "has_pf": pf, "mark": mark,
+            "fs_ghz": fs, "fp_ghz": fp, "k2eff_pct": 7.0, "qs": 500.0, "qp": 400.0,
+            "qs_bodeq": 450.0, "qp_bodeq": 380.0,
+            "s_param_path": path_name, "s_param_port": "S11", "batch_no": "T1"}
+
+
+def test_extract_end_to_end(tmp_path):
     from app.ml.surrogate.baseline import BaselineTable
     from app.ml.surrogate.extract import (
-        build_device_record, clean_records, compute_norm_stats,
-        fill_sparse_base, split_cells, assemble_npz,
+        _group_tuple, assemble_npz, build_device_record, clean_records,
+        compute_norm_stats, fill_sparse_base, select_per_cell, split_groups,
     )
 
     files_dir = tmp_path / "files" / "T1"
@@ -1150,33 +1495,34 @@ def test_extract_end_to_end(tmp_path, monkeypatch):
     _write_s2p(files_dir / "a.s2p")
     _write_s2p(files_dir / "b.s2p", fs_ghz=4.9, fp_ghz=5.2)
 
-    row_a = {"id": 1, "eg": 0.0, "fl": 0.0, "ag": 0.0, "area_um2": 700,
-             "fs_ghz": 4.8, "fp_ghz": 5.1, "k2eff_pct": 7.0, "qs": 500.0, "qp": 400.0,
-             "qs_bodeq": 450.0, "qp_bodeq": 380.0,
-             "s_param_path": "a.s2p", "s_param_port": "S11", "batch_no": "T1"}
-    row_b = {**row_a, "id": 2, "eg": 1.0, "fl": 0.5, "fs_ghz": 4.9, "fp_ghz": 5.2,
-             "s_param_path": "b.s2p"}
+    rows = [_row(1, "A1-1", 0, "a.s2p", fs=4.8, fp=5.1),
+            _row(2, "H1-1", 1, "b.s2p", fs=4.9, fp=5.2)]
     freq_axis = np.linspace(4.0, 7.0, 1001)
 
-    recs = [build_device_record(row_a, tmp_path / "files", freq_axis, k=32),
-            build_device_record(row_b, tmp_path / "files", freq_axis, k=32)]
+    recs = [build_device_record(r, tmp_path / "files", freq_axis, k=32) for r in rows]
     assert all(r is not None for r in recs)
     assert recs[0]["full_z"].shape == (1001,)
     assert recs[0]["sample_pos"].shape == (32,)
+    assert recs[0]["has_pf"] == 0 and recs[1]["has_pf"] == 1
+    assert recs[0]["ag"] == 1.0  # surr_default_ag 占位
 
     kept, dropped = clean_records(recs, fs_tol_mhz=1e9, trend_sigma=1e9)
     assert len(kept) == 2
-    table = BaselineTable.build(kept)  # eg=0/fl=0 的只有 a
+    table = BaselineTable.build(kept)  # eg=0/fl=0 的只有 a（pf=0）
     for r in kept:
-        r["params_base"], _ = table.lookup(r["area_um2"])
+        r["params_base"], _ = table.lookup(r["area_um2"], r["has_pf"])
     fill_sparse_base(kept, table)
 
-    cells = sorted({(r["eg"], r["fl"], r["area_um2"]) for r in kept})
-    splits = split_cells(cells, val_n=0, test_n=1, seed=42)
+    selected = select_per_cell(kept, max_per_cell=5)
+    assert len(selected) == 2
+
+    groups = sorted({_group_tuple(r) for r in kept})
+    splits = split_groups(groups, val_n=0, test_n=1, seed=42)
     stats = compute_norm_stats(kept, splits)
-    assemble_npz(kept, cells, splits, stats, dropped, tmp_path / "out", freq_axis, 32)
+    assemble_npz(selected, groups, splits, stats, dropped, tmp_path / "out", freq_axis, 32)
     data = np.load(tmp_path / "out" / "dataset.npz")
     assert data["full_z"].shape == (2, 1001)
+    assert data["x_struct"].shape == (2, 5)
     assert np.all(np.isfinite(data["full_z"]))
 ```
 
@@ -1190,10 +1536,9 @@ def test_extract_end_to_end(tmp_path, monkeypatch):
 
 ```bash
 git add backend/app/ml/surrogate/extract.py backend/scripts/extract_surrogate_dataset.py backend/tests/ml/
-git commit -m "feat(ml): 提取脚本（多进程 + npz/meta 落地 + 冒烟夹具）"
+git commit -m "feat(ml): 提取脚本（has_pf JOIN + 每格抽样 + 物理组落地 + 冒烟夹具）"
 ```
 
----
 
 ## 任务 6：torch Dataset `SurrogateDataset`
 
@@ -1206,7 +1551,7 @@ git commit -m "feat(ml): 提取脚本（多进程 + npz/meta 落地 + 冒烟夹�
 
 ```python
 # backend/tests/ml/conftest.py
-"""合成小 npz 夹具：6 格 × 4 器件，N=101，K=32。"""
+"""合成小 npz 夹具：6 物理组 × 4 器件，N=101，K=32（v4：5 维输入 + groups）。"""
 
 import json
 
@@ -1218,19 +1563,20 @@ import pytest
 def tiny_npz(tmp_path):
     rng = np.random.default_rng(0)
     n_freq, k = 101, 32
-    cells = [
-        (0.0, 0.0, 700, "train"), (0.0, 0.0, 1500, "train"),
-        (1.0, 0.5, 700, "train"), (1.0, 0.5, 1500, "train"),
-        (2.0, 1.0, 700, "val"), (0.75, 1.25, 1500, "test"),
+    groups = [
+        (0.0, 0.0, 0, "A1-1", "train"), (0.0, 0.0, 1, "G1-1", "train"),
+        (1.0, 0.5, 0, "B0", "train"), (1.0, 0.5, 1, "H0", "train"),
+        (2.0, 1.0, 0, "C0", "val"), (0.75, 1.25, 0, "D0", "test"),
     ]
     freq = np.linspace(4.0, 7.0, n_freq)
     recs = {"x_struct": [], "y_params": [], "params_base": [], "sample_pos": [],
-            "y_sparse": [], "sparse_base": [], "full_z": [], "phase": [], "cell_idx": []}
-    for ci, (eg, fl, area, _split) in enumerate(cells):
+            "y_sparse": [], "sparse_base": [], "full_z": [], "phase": [], "group_idx": []}
+    for gi, (eg, fl, pf, _mark, _split) in enumerate(groups):
         for _ in range(4):
+            area = 700 + gi * 200
             z = 40 + 5 * np.sin(freq * 2) + rng.normal(0, 0.1, n_freq) + area / 1000
             pos = np.sort(rng.choice(n_freq, k, replace=False)).astype(np.int32)
-            recs["x_struct"].append([eg, fl, area, 0.0])
+            recs["x_struct"].append([eg, fl, 1.0, area, pf])  # [eg, fl, ag, area, pf]
             recs["y_params"].append([4.8 + eg * 0.01, 5.1 + fl * 0.01, 7.0, 500, 400, 450, 380])
             recs["params_base"].append([4.8, 5.1, 7.0, 500, 400, 450, 380])
             recs["sample_pos"].append(pos)
@@ -1238,7 +1584,7 @@ def tiny_npz(tmp_path):
             recs["sparse_base"].append(z[pos] - 0.5)
             recs["full_z"].append(z)
             recs["phase"].append(np.zeros(n_freq))
-            recs["cell_idx"].append(ci)
+            recs["group_idx"].append(gi)
     np.savez_compressed(
         tmp_path / "dataset.npz",
         x_struct=np.array(recs["x_struct"], dtype=np.float32),
@@ -1249,12 +1595,15 @@ def tiny_npz(tmp_path):
         sparse_base=np.array(recs["sparse_base"], dtype=np.float32),
         full_z=np.array(recs["full_z"], dtype=np.float32),
         phase=np.array(recs["phase"], dtype=np.float32),
-        cell_idx=np.array(recs["cell_idx"], dtype=np.int32),
+        group_idx=np.array(recs["group_idx"], dtype=np.int32),
     )
     meta = {
-        "cells": [{"eg": c[0], "fl": c[1], "area_um2": c[2], "split": c[3]} for c in cells],
+        "groups": [
+            {"eg": g[0], "fl": g[1], "has_pf": g[2], "mark": g[3], "split": g[4]}
+            for g in groups
+        ],
         "freq_ghz": freq.tolist(), "k": k, "n_freq": n_freq,
-        "x_mean": [0.5] * 4, "x_std": [1.0] * 4,
+        "x_mean": [0.5] * 5, "x_std": [1.0] * 5,
         "params_mean": [4.85, 5.15, 7.0, 500, 400, 450, 380],
         "params_std": [0.02, 0.02, 0.5, 50, 40, 45, 38],
         "z_mean": [42.0], "z_std": [3.0],
@@ -1339,8 +1688,8 @@ class SurrogateDataset(Dataset):
         self.n_freq: int = meta["n_freq"]
 
         data = np.load(data_dir / "dataset.npz")
-        keep_cells = {i for i, c in enumerate(meta["cells"]) if c["split"] == split}
-        mask = np.array([ci in keep_cells for ci in data["cell_idx"]])
+        keep_groups = {i for i, g in enumerate(meta["groups"]) if g["split"] == split}
+        mask = np.array([ci in keep_groups for ci in data["group_idx"]])
 
         self.x = torch.from_numpy(data["x_struct"][mask]).float()
         self.y_params = torch.from_numpy(data["y_params"][mask]).float()
@@ -1349,7 +1698,7 @@ class SurrogateDataset(Dataset):
         self.sparse_base = torch.from_numpy(data["sparse_base"][mask]).float()
         self.full_z = torch.from_numpy(data["full_z"][mask]).float()
         self.sample_pos = torch.from_numpy(data["sample_pos"][mask]).long()
-        self.cell_idx = torch.from_numpy(data["cell_idx"][mask]).long()
+        self.group_idx = torch.from_numpy(data["group_idx"][mask]).long()
 
         self.x_mean = torch.tensor(meta["x_mean"], dtype=torch.float32)
         self.x_std = torch.tensor(meta["x_std"], dtype=torch.float32)
@@ -1377,7 +1726,7 @@ class SurrogateDataset(Dataset):
             "params_base": (self.params_base[idx] - self.p_mean) / self.p_std,
             "y_sparse": self.norm_z(self.y_sparse[idx]),
             "sparse_base": self.norm_z(self.sparse_base[idx]),
-            "cell_idx": self.cell_idx[idx],
+            "group_idx": self.group_idx[idx],
         }
 ```
 
@@ -1399,7 +1748,7 @@ git commit -m "feat(ml): SurrogateDataset（split 过滤 + 归一化 + 基准对
 - 创建：`backend/app/ml/surrogate/model.py`
 - 测试：`backend/tests/ml/test_surrogate_model.py`
 
-设计（规格 §6）：输入归一化 x(4) → Linear 256 → GELU → 残差块×2 → 双头（Δparams(7) / Δsparse(K)）；输出 = 基准 + 残差。**两头最后一层零初始化**，保证零残差时输出恒等于基准。
+设计（规格 §6）：输入归一化 x(5) → Linear 256 → GELU → 残差块×2 → 双头（Δparams(7) / Δsparse(K)）；输出 = 基准 + 残差。**两头最后一层零初始化**，保证零残差时输出恒等于基准。
 
 - [ ] **步骤 1：编写失败的测试**
 
@@ -1414,29 +1763,29 @@ from app.ml.surrogate.model import BaselineResidualMLP
 
 class TestBaselineResidualMLP:
     def test_forward_shapes(self):
-        model = BaselineResidualMLP(in_dim=4, hidden=64, n_res_blocks=2, n_params=7, k=32)
-        out = model(torch.randn(8, 4), torch.randn(8, 7), torch.randn(8, 32))
+        model = BaselineResidualMLP(in_dim=5, hidden=64, n_res_blocks=2, n_params=7, k=32)
+        out = model(torch.randn(8, 5), torch.randn(8, 7), torch.randn(8, 32))
         assert out["params"].shape == (8, 7)
         assert out["sparse"].shape == (8, 32)
 
     def test_zero_residual_identity(self):
         """最后一层零初始化 → 输出恒等于基准。"""
-        model = BaselineResidualMLP(in_dim=4, hidden=64, n_res_blocks=2, n_params=7, k=32)
+        model = BaselineResidualMLP(in_dim=5, hidden=64, n_res_blocks=2, n_params=7, k=32)
         p_base = torch.randn(4, 7)
         s_base = torch.randn(4, 32)
-        out = model(torch.randn(4, 4), p_base, s_base)
+        out = model(torch.randn(4, 5), p_base, s_base)
         torch.testing.assert_close(out["params"], p_base)
         torch.testing.assert_close(out["sparse"], s_base)
 
     def test_residual_changes_output(self):
         """非零输入扰动后输出应偏离基准（证明残差通路存在）。"""
-        model = BaselineResidualMLP(in_dim=4, hidden=64, n_res_blocks=2, n_params=7, k=32)
+        model = BaselineResidualMLP(in_dim=5, hidden=64, n_res_blocks=2, n_params=7, k=32)
         with torch.no_grad():
             for p in model.head_params[-1].parameters():
                 p.normal_(0, 0.1)
         p_base = torch.zeros(2, 7)
         s_base = torch.zeros(2, 32)
-        out = model(torch.ones(2, 4), p_base, s_base)
+        out = model(torch.ones(2, 5), p_base, s_base)
         assert out["params"].abs().sum() > 0
 ```
 
@@ -1472,11 +1821,11 @@ class _ResBlock(nn.Module):
 
 
 class BaselineResidualMLP(nn.Module):
-    """(eg, fl, area[, ag]) → Δparams(7) + Δsparse(K)，输出基准+残差。"""
+    """(eg, fl, ag, area, pf) → Δparams(7) + Δsparse(K)，输出基准+残差。"""
 
     def __init__(
         self,
-        in_dim: int = 4,
+        in_dim: int = 5,
         hidden: int = 256,
         n_res_blocks: int = 2,
         n_params: int = 7,
@@ -1582,7 +1931,7 @@ def train(data_dir: str, out_dir: str, epochs: int = 300, batch_size: int = 512,
     train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=True, drop_last=False)
     val_dl = DataLoader(val_ds, batch_size=batch_size)
 
-    model = BaselineResidualMLP(in_dim=4, hidden=256, n_res_blocks=2,
+    model = BaselineResidualMLP(in_dim=5, hidden=256, n_res_blocks=2,
                                 n_params=7, k=train_ds.k).to(dev)
     opt = torch.optim.AdamW(model.parameters(), lr=lr)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)
@@ -1629,7 +1978,7 @@ def train(data_dir: str, out_dir: str, epochs: int = 300, batch_size: int = 512,
     if best_state is not None:
         model.load_state_dict(best_state)
     torch.save(
-        {"model_state": model.state_dict(), "in_dim": 4, "hidden": 256,
+        {"model_state": model.state_dict(), "in_dim": 5, "hidden": 256,
          "n_res_blocks": 2, "n_params": 7, "k": train_ds.k, "lambda_sparse": lambda_sparse},
         out / "stage1.pt",
     )
@@ -1724,10 +2073,9 @@ import joblib
 import numpy as np
 from sklearn.ensemble import ExtraTreesRegressor
 
-from app.config import AlgorithmConfig as AC
+from app.config import AlgorithmConfig
 
-ACFG = AC
-_PARAM_COLS = list(ACFG.surr_PARAM_COLS)
+_PARAM_COLS = list(AlgorithmConfig.surr_param_cols)
 
 
 def _load_split(data_dir: str, split: str) -> tuple[np.ndarray, np.ndarray]:
@@ -1735,9 +2083,9 @@ def _load_split(data_dir: str, split: str) -> tuple[np.ndarray, np.ndarray]:
 
     data = np.load(Path(data_dir) / "dataset.npz")
     meta = _json.loads((Path(data_dir) / "meta.json").read_text(encoding="utf-8"))
-    keep = {i for i, c in enumerate(meta["cells"]) if c["split"] == split}
-    mask = np.array([ci in keep for ci in data["cell_idx"]])
-    return data["x_struct"][mask][:, :3], data["y_params"][mask]  # 输入只用 eg/fl/area
+    keep = {i for i, g in enumerate(meta["groups"]) if g["split"] == split}
+    mask = np.array([ci in keep for ci in data["group_idx"]])
+    return data["x_struct"][mask][:, [0, 1, 3, 4]], data["y_params"][mask]  # 输入 eg/fl/area/pf（ag 恒值不用）
 
 
 def run(data_dir: str, out_dir: str, n_estimators: int = 300) -> dict:
@@ -1853,8 +2201,8 @@ class Stage2Dataset(Dataset):
         data_dir = Path(data_dir)
         meta = json.loads((data_dir / "meta.json").read_text(encoding="utf-8"))
         data = np.load(data_dir / "dataset.npz")
-        keep = {i for i, c in enumerate(meta["cells"]) if c["split"] == split}
-        mask = np.array([ci in keep for ci in data["cell_idx"]])
+        keep = {i for i, g in enumerate(meta["groups"]) if g["split"] == split}
+        mask = np.array([ci in keep for ci in data["group_idx"]])
         self.freq = np.asarray(meta["freq_ghz"], dtype=np.float32)
         self.cond = torch.from_numpy(data["y_params"][mask][:, _COND_IDX]).float()
         self.samples = np.stack(
@@ -2034,8 +2382,8 @@ from app.ml.sparse.reconstructor import SparseReconstructor
 
 
 def _make_ckpts(tiny_npz, tmp_path):
-    s1 = BaselineResidualMLP(in_dim=4, hidden=32, n_res_blocks=1, n_params=7, k=32)
-    torch.save({"model_state": s1.state_dict(), "in_dim": 4, "hidden": 32,
+    s1 = BaselineResidualMLP(in_dim=5, hidden=32, n_res_blocks=1, n_params=7, k=32)
+    torch.save({"model_state": s1.state_dict(), "in_dim": 5, "hidden": 32,
                 "n_res_blocks": 1, "n_params": 7, "k": 32}, tmp_path / "stage1.pt")
     s2 = SparseReconstructor(d_model=32, n_encoder_layers=1, n_heads=2, dropout=0.0)
     torch.save(s2.state_dict(), tmp_path / "stage2.pt")
@@ -2043,13 +2391,15 @@ def _make_ckpts(tiny_npz, tmp_path):
     (tmp_path / "stage2_config.json").write_text(
         json.dumps({"d_model": 32, "n_encoder_layers": 1, "n_heads": 2, "dropout": 0.0}),
         encoding="utf-8")
-    # 基准表：tiny_npz 不含 baseline.npz，造一个恒 40 的
+    # 基准表：tiny_npz 不含 baseline.npz，造一个 (pf=2, area=2) 恒 40 的
+    pfs = np.array([0.0, 1.0])
     areas = np.array([700.0, 1500.0])
     np.savez_compressed(
         tmp_path / "baseline.npz",
+        pfs=pfs,
         areas=areas,
-        params_base=np.tile(np.array([4.8, 5.1, 7.0, 500, 400, 450, 380]), (2, 1)),
-        z_base_full=np.full((2, 101), 40.0),
+        params_base=np.tile(np.array([4.8, 5.1, 7.0, 500, 400, 450, 380]), (2, 2, 1)),
+        z_base_full=np.full((2, 2, 101), 40.0),
     )
     return tmp_path
 
@@ -2064,7 +2414,7 @@ class TestSurrogatePredictor:
             baseline_path=ckpt / "baseline.npz",
             meta_path=tiny_npz / "meta.json",
         )
-        out = pred.predict(eg=1.0, fl=0.5, area_um2=1200)
+        out = pred.predict(eg=1.0, fl=0.5, area_um2=1200, pf=0)
         assert out["z_db"].shape == (101,)
         assert out["freq_ghz"].shape == (101,)
         assert np.all(np.isfinite(out["z_db"]))
@@ -2097,14 +2447,13 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from app.config import AlgorithmConfig as AC
+from app.config import AlgorithmConfig
 from app.core.sparse_sampler import baseline_interpolate, deterministic_sample_positions
 from app.ml.sparse.reconstructor import SparseReconstructor
 from app.ml.surrogate.baseline import BaselineTable
 from app.ml.surrogate.model import BaselineResidualMLP
 
-ACFG = AC
-_PARAM_COLS = list(ACFG.surr_PARAM_COLS)
+_PARAM_COLS = list(AlgorithmConfig.surr_param_cols)
 _COND_IDX = [0, 1, 3, 4, 2]  # [fs, fp, Qs, Qp, kt2]
 
 
@@ -2149,11 +2498,12 @@ class SurrogatePredictor:
         self.stage2.eval()
 
     @torch.no_grad()
-    def predict(self, eg: float, fl: float, area_um2: float, ag: float = 0.0) -> dict:
-        x = (np.array([eg, fl, area_um2, ag], dtype=np.float32) - self.x_mean) / self.x_std
+    def predict(self, eg: float, fl: float, area_um2: float, pf: float = 0.0,
+                ag: float = AlgorithmConfig.surr_default_ag) -> dict:
+        x = (np.array([eg, fl, ag, area_um2, pf], dtype=np.float32) - self.x_mean) / self.x_std
         x_t = torch.from_numpy(x).float().unsqueeze(0).to(self.dev)
 
-        params_base, z_base_full = self.baseline.lookup(area_um2)
+        params_base, z_base_full = self.baseline.lookup(area_um2, pf)
         pb = (torch.tensor(params_base, dtype=torch.float32, device=self.dev) - self.p_mean) \
             / self.p_std
         pb = pb.unsqueeze(0)
@@ -2166,8 +2516,8 @@ class SurrogatePredictor:
         # 预测 fs/fp → 采样位置 → sparse_base（dB → 归一化）
         pos = deterministic_sample_positions(
             self.freq, fs, fp, k=self.k,
-            dense_ratio=ACFG.surr_DENSE_RATIO, transition_ratio=ACFG.surr_TRANSITION_RATIO,
-            dense_half_bw=ACFG.surr_DENSE_HALF_BW, transition_half_bw=ACFG.surr_TRANSITION_HALF_BW,
+            dense_ratio=AlgorithmConfig.surr_dense_ratio, transition_ratio=AlgorithmConfig.surr_transition_ratio,
+            dense_half_bw=AlgorithmConfig.surr_dense_half_bw, transition_half_bw=AlgorithmConfig.surr_transition_half_bw,
         )
         sparse_base_db = z_base_full[pos] if len(z_base_full) == len(self.freq) else np.interp(
             pos / (len(self.freq) - 1), np.linspace(0, 1, len(z_base_full)), z_base_full
@@ -2249,7 +2599,8 @@ def main() -> None:
     ap.add_argument("--eg", type=float, required=True)
     ap.add_argument("--fl", type=float, required=True)
     ap.add_argument("--area", type=float, required=True)
-    ap.add_argument("--ag", type=float, default=0.0)
+    ap.add_argument("--pf", type=int, default=0, choices=[0, 1], help="massloading 有无（0/1）")
+    ap.add_argument("--ag", type=float, default=1.0)
     ap.add_argument("--data", default="./surrogate_data")
     ap.add_argument("--ckpt", default="./checkpoints_surrogate")
     ap.add_argument("--out", default="./pred_out")
@@ -2266,7 +2617,7 @@ def main() -> None:
         baseline_path=data / "baseline.npz",
         meta_path=data / "meta.json",
     )
-    result = pred.predict(args.eg, args.fl, args.area, args.ag)
+    result = pred.predict(args.eg, args.fl, args.area, args.pf, args.ag)
 
     print(json.dumps(result["params"], ensure_ascii=False, indent=2))
 
@@ -2336,13 +2687,12 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from app.config import AlgorithmConfig as AC
+from app.config import AlgorithmConfig
 from app.core.sparse_sampler import deterministic_sample_positions
 from app.ml.surrogate.baseline import BaselineTable
 from app.ml.surrogate.infer import SurrogatePredictor
 
-ACFG = AC
-_PARAM_COLS = list(ACFG.surr_PARAM_COLS)
+_PARAM_COLS = list(AlgorithmConfig.surr_param_cols)
 
 
 def _region_masks(freq: np.ndarray, fs: float, fp: float) -> dict[str, np.ndarray]:
@@ -2378,8 +2728,8 @@ def main() -> None:
     meta = json.loads((data_dir / "meta.json").read_text(encoding="utf-8"))
     freq = np.asarray(meta["freq_ghz"])
     data = np.load(data_dir / "dataset.npz")
-    test_cells = {i for i, c in enumerate(meta["cells"]) if c["split"] == "test"}
-    mask = np.array([ci in test_cells for ci in data["cell_idx"]])
+    test_groups = {i for i, g in enumerate(meta["groups"]) if g["split"] == "test"}
+    mask = np.array([ci in test_groups for ci in data["group_idx"]])
     idx_all = np.where(mask)[0]
     if args.max_devices > 0:
         idx_all = idx_all[: args.max_devices]
@@ -2391,40 +2741,41 @@ def main() -> None:
     baseline = BaselineTable.load(data_dir / "baseline.npz")
     b3 = joblib.load(ckpt_dir / "b3_extratrees.joblib") if (ckpt_dir / "b3_extratrees.joblib").exists() else None
 
-    # B2 准备：train 单元每格均值谱（同面积）
-    train_cells = {i for i, c in enumerate(meta["cells"]) if c["split"] == "train"}
-    tr_mask = np.array([ci in train_cells for ci in data["cell_idx"]])
-    cell_mean_z: dict[int, np.ndarray] = {}
-    for ci in train_cells:
-        rows = np.where((data["cell_idx"] == ci) & tr_mask)[0]
-        if len(rows):
-            cell_mean_z[ci] = data["full_z"][rows].mean(axis=0)
+    # B2 准备：train 行按 (eg, fl, pf, area) 格求均值谱（v4：格键取自 x_struct）
+    train_groups = {i for i, g in enumerate(meta["groups"]) if g["split"] == "train"}
+    tr_mask = np.array([ci in train_groups for ci in data["group_idx"]])
+    cell_mean_z: dict[tuple, np.ndarray] = {}
+    for i in np.where(tr_mask)[0]:
+        eg_i, fl_i, _ag, area_i, pf_i = data["x_struct"][i]
+        key = (float(eg_i), float(fl_i), float(pf_i), float(area_i))
+        cell_mean_z.setdefault(key, []).append(data["full_z"][i])
+    cell_mean_z = {key: np.mean(v, axis=0) for key, v in cell_mean_z.items()}
 
     rows = []
     for i in idx_all:
         true_z = data["full_z"][i]
         true_params = data["y_params"][i]
-        eg, fl, area, _ag = data["x_struct"][i]
-        r = pred.predict(float(eg), float(fl), float(area))
+        eg, fl, _ag, area, pf = data["x_struct"][i]
+        r = pred.predict(float(eg), float(fl), float(area), float(pf))
         pred_z = r["z_db"]
         pred_params = np.array([r["params"][c] for c in _PARAM_COLS])
         fs_t, fp_t = float(true_params[0]), float(true_params[1])
         regions = _region_masks(freq, fs_t, fp_t)
 
         # B0：纯基准
-        _, z_b0 = baseline.lookup(float(area))
-        # B2：同面积 train 格 IDW 插值
-        ci_test = int(data["cell_idx"][i])
+        _, z_b0 = baseline.lookup(float(area), float(pf))
+        # B2：同 (area, pf) train 格 IDW 插值（排除本格）
         neighbors = [
-            (ci, meta["cells"][ci]) for ci in cell_mean_z
-            if meta["cells"][ci]["area_um2"] == area and ci != ci_test
+            (key, mz) for key, mz in cell_mean_z.items()
+            if key[3] == float(area) and key[2] == float(pf)
+            and not (key[0] == float(eg) and key[1] == float(fl))
         ]
         if neighbors:
             w, z_acc = 0.0, np.zeros_like(true_z)
-            for ci, cell in neighbors:
-                d2 = (cell["eg"] - eg) ** 2 + (cell["fl"] - fl) ** 2
+            for key, mz in neighbors:
+                d2 = (key[0] - float(eg)) ** 2 + (key[1] - float(fl)) ** 2
                 wi = 1.0 / max(d2, 1e-6)
-                z_acc += wi * cell_mean_z[ci]
+                z_acc += wi * mz
                 w += wi
             z_b2 = z_acc / w
         else:
@@ -2436,7 +2787,7 @@ def main() -> None:
 
         row = {
             "device_idx": int(i),
-            "cell": {"eg": float(eg), "fl": float(fl), "area": float(area)},
+            "cell": {"eg": float(eg), "fl": float(fl), "area": float(area), "pf": float(pf)},
             "fs_err_mhz": abs(float(pred_params[0]) - fs_t) * 1000,
             "fp_err_mhz": abs(float(pred_params[1]) - fp_t) * 1000,
             "fs_reextract_err_mhz": abs(fs_re - fs_t) * 1000,
@@ -2446,7 +2797,7 @@ def main() -> None:
             "rmse_b2": _rmse(z_b2, true_z),
         }
         if b3 is not None:
-            p3 = b3.predict(np.array([[eg, fl, area]]))[0]
+            p3 = b3.predict(np.array([[eg, fl, area, pf]]))[0]
             row["b3_fs_err_mhz"] = abs(float(p3[0]) - fs_t) * 1000
             row["b3_fp_err_mhz"] = abs(float(p3[1]) - fp_t) * 1000
         rows.append(row)
@@ -2455,9 +2806,17 @@ def main() -> None:
         vals = [r[key] for r in rows if r[key] == r[key]]  # 去 NaN
         return float(np.mean(vals)) if vals else float("nan")
 
+    def _mean_pf(key: str, pf_val: float) -> float:
+        vals = [r[key] for r in rows if r["cell"]["pf"] == pf_val and r[key] == r[key]]
+        return float(np.mean(vals)) if vals else float("nan")
+
     report = {
         "n_test_devices": len(rows),
-        "n_test_cells": len(test_cells),
+        "n_test_groups": len(test_groups),
+        "rmse_full_db_pf0": _mean_pf("rmse_full", 0.0),
+        "rmse_full_db_pf1": _mean_pf("rmse_full", 1.0),
+        "fs_mae_mhz_pf0": _mean_pf("fs_err_mhz", 0.0),
+        "fs_mae_mhz_pf1": _mean_pf("fs_err_mhz", 1.0),
         "fs_mae_mhz": _mean("fs_err_mhz"),
         "fp_mae_mhz": _mean("fp_err_mhz"),
         "fs_reextract_mae_mhz": _mean("fs_reextract_err_mhz"),
@@ -2483,8 +2842,8 @@ def main() -> None:
     fig, axes = plt.subplots(2, 3, figsize=(15, 7))
     for ax, ri in zip(axes.flat, pick):
         i = rows[ri]["device_idx"]
-        eg, fl, area, _ = data["x_struct"][i]
-        r = pred.predict(float(eg), float(fl), float(area))
+        eg, fl, _ag, area, pf = data["x_struct"][i]
+        r = pred.predict(float(eg), float(fl), float(area), float(pf))
         ax.plot(freq, data["full_z"][i], lw=1, label="true")
         ax.plot(freq, r["z_db"], lw=1, label="pred")
         ax.set_title(f"eg={eg} fl={fl} a={int(area)}", fontsize=9)
@@ -2494,7 +2853,7 @@ def main() -> None:
     fig.savefig(out_dir / "pred_vs_true.png", dpi=140)
 
     # 图 2：RMSE 随 (eg, fl) 热图（每面积档一张，取档数 ≤4）
-    areas = sorted({meta["cells"][ci]["area_um2"] for ci in test_cells})[:4]
+    areas = sorted({r["cell"]["area"] for r in rows})[:4]
     fig, axes = plt.subplots(1, len(areas), figsize=(4 * len(areas), 4), squeeze=False)
     for ax, area in zip(axes.flat, areas):
         grid = np.full((20, 20), np.nan)
@@ -2549,13 +2908,14 @@ uv run python scripts/extract_surrogate_dataset.py \
 ```
 
 预期输出日志：
-- `查询到 38400 条器件记录`
+- `查询到 ≈37200 条器件记录`（38,400 − 约 1,200 空 mark 关联失败）
 - `频率轴: 4.000 - 7.000 GHz, 1001 点`
-- `成功构建 ≈38000+ 条记录`
-- `清洗: 保留 ≈32000–36000，剔除 ≈5–15%`
-- `完成: 480 格（train 384 / val 48 / test 48）`
+- `成功构建 ≈37000+ 条记录`
+- `清洗: 保留 ≈31000–35000，剔除 ≈5–15%`
+- `每格抽样: ≈33000 → ≈2500–2900（每格 ≤ 5）`
+- `完成: ≈288 物理组（train ≈230 / val 29 / test 29）`
 
-产出检查：`surrogate_data/dataset.npz`（约 400–600MB）、`meta.json`（480 个 cells、480 以外的 dropped 清单）、`baseline.npz`（12 面积档）。
+产出检查：`surrogate_data/dataset.npz`（抽样后约 15–20MB）、`meta.json`（≈288 个 groups + dropped 清单）、`baseline.npz`（2 pf × 12 面积档 = 24 档）。
 
 调试建议：先加 `--limit 200` 跑通全流程再全量。
 
@@ -2642,4 +3002,4 @@ git commit -m "docs: 代理模型实测结果（任务 14 评估数字）"
 **已知取舍：**
 - 相位通道（§5.1 预留）只做存储（任务 5 的 build_device_record），不进训练 ✓ 符合规格
 - 多进程提取直接用 `build_device_record` 提交 ProcessPoolExecutor（顶层函数可 pickle）
-- `AlgorithmConfig` 常量一律类属性访问（`AC.surr_K`），与现有代码风格一致
+- `AlgorithmConfig` 常量一律类属性访问（`AC.surr_k`），与现有代码风格一致

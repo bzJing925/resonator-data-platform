@@ -1,13 +1,13 @@
 # 谐振器代理模型（Surrogate Model）设计规格
 
-日期：2026-07-20（v2：同步 aln-data2 后修订 §5，提取流程复用 `nn_export` / `sparse_sampler` 构件；v3：参考 `/Users/jingbozuo/Documents/kimi/workspace/BAW_光谱ML分析报告.md` 修订——清洗升级两级、评估加 B3 轻量基线、相位通道预留、标签循环性风险）
+日期：2026-07-20（v2：同步 aln-data2 后修订 §5，提取流程复用 `nn_export` / `sparse_sampler` 构件；v3：参考 `/Users/jingbozuo/Documents/kimi/workspace/BAW_光谱ML分析报告.md` 修订——清洗升级两级、评估加 B3 轻量基线、相位通道预留、标签循环性风险；v4：输入改 5 维（+PF massloading、AG 默认 1μm）、每结构组合≤5 条抽样、物理器件绑定划分）
 状态：已评审（头脑风暴阶段确认）
 
 ## 1. 背景与目标
 
 基于已上传的谐振器测试数据，训练一个**代理模型**：输入器件结构参数，预测性能参数与完整阻抗谱 Z11(dB)，用于"预测未流片设计"的离线分析。
 
-- **输入**：EG、FL、面积（area_um2）；预留 AG 第 4 维（当前数据 AG 全空，恒 0 + 有效位 mask）
+- **输入（v4，5 维）**：EG、FL、AG（当前默认 1.0 μm，数据全空时的占位常量，预留真实数据）、面积（area_um2）、PF（massloading 有无，0/1，取自 `mapping_entries.has_pf`）
 - **输出**：7 个性能参数（fs、fp、kt2、Qs、Qp、qs_bodeq、qp_bodeq）+ 1001 点 Z11(dB) 全谱
 - **交付形态**：纯离线（训练脚本 + 评估报告 + CLI 推理），不改 Web 平台；精度验证达标后再决定是否做 UI 集成
 
@@ -15,11 +15,12 @@
 
 | 决策点 | 结论 |
 |---|---|
-| 输入维度 | 3 维 (EG, FL, 面积)，代码预留 AG 第 4 维 |
+| 输入维度 | **5 维 (EG, FL, AG, 面积, PF)**；AG 当前恒 1.0 占位，PF ∈ {0,1}（v4） |
+| 训练集抽样 | **每个结构参数组合（eg,fl,area,pf）取 ≤5 条**，按 \|fs−格中位数\| 升序选取（v4） |
 | 建模范围 | 只用批次 `#2`（4–7 GHz），不跨频段 |
 | 交付形态 | 先离线验证再定 UI 集成 |
 | 架构 | 方案 A：两阶段级联（Stage 1 代理模型 + Stage 2 稀疏重建） |
-| Stage 1 结构 | 基准锚定残差：eg=0/fl=0 单元为基准，网络只学残差 |
+| Stage 1 结构 | 基准锚定残差：eg=0/fl=0 同 PF 单元为基准，网络只学残差 |
 | 训练数据提取 | 复用 aln-data2 的 `nn_export` / `sparse_sampler` 构件；新增确定性位置规则、清洗、基准表、划分（v2） |
 | 成功标准 | 全谱 RMSE ≤ 0.5 dB（test 网格单元） |
 
@@ -33,8 +34,11 @@
 - `ag` 列 50,411 条全 NULL（mapping 源表 1317 条仅 10 条有值）——源头缺数据，非导入 bug
 - 性能参数列齐全：`fs_ghz/fp_ghz/k2eff_pct/qs/qp/qs_bodeq/qp_bodeq` 全部非空
 - 结构参数只在数据库（mapping 导入），文件名里没有，**提取必须走 DB ⋈ 文件**
-- 基准组（eg=0, fl=0）：1,200 器件，12 面积档 × 100；格间 fs 均值仅 4.65–4.85 GHz，证实"曲线形状相似、频点偏移小"
+- 基准组（eg=0, fl=0）：1,200 器件（A1-* PF=0 与 G1-* PF=1 各 600）；格间 fs 均值仅 4.65–4.85 GHz，证实"曲线形状相似、频点偏移小"
 - **离群值坑**：个体器件 fs 散布 4.0–6.15 GHz（Fail 器件提取抓到杂波/谐波），必须清洗
+- **PF（massloading）数据源（v4）**：`mapping_entries.has_pf` 布尔列（195 条 has_pf=1，mark 形如 H1-1，描述含"EG0+PF"字样）；经 `devices.mark ⋈ mapping_entries.mark`（同 mapping_id）关联。批次 #2：PF=0 36,300 条、PF=1 5,400 条（仅覆盖 8 个 eg|fl 组合）、**mark 为空无法关联的 1,200 条剔除**（PF 未知）
+- **端口-面积配对（v4）**：同一 .s2p 文件产生 S11/S22 两行，面积不同（mapping 的 `area_s11`/`area_s22` 互补配对，如 700↔5500、2500↔3000），合占 12 个面积档。划分时**同一文件的两行必须绑定同侧**（否则同谐振器的 fs/fp 经另一端口泄漏）
+- **含 PF 的结构组合**：576 个（PF=0 满网格 40×12=480 + PF=1 的 8×12=96）
 
 ## 4. 架构总览
 
@@ -61,7 +65,7 @@
 
 **复用 aln-data2 已有构件**（`app/services/nn_export.py` + `app/core/sparse_sampler.py`）：
 
-- 查询：`build_nn_export_stmt`（`devices ⋈ batches`，标量列齐全：eg/fl/ag、7 性能参数、s_param_path/port、batch_no），filters 指定 `batch_no='#2'` + `eg/fl/area_um2` 非空
+- 查询：`build_nn_export_stmt`（`devices ⋈ batches`，标量列齐全：eg/fl/ag、7 性能参数、s_param_path/port、batch_no），filters 指定 `batch_no='#2'` + `eg/fl/area_um2` 非空；**v4 追加 ⋈ `mapping_entries`（同 mapping_id 的 mark 关联）取 `has_pf`**；mark 为空/关联失败的记录剔除（约 1,200 条）
 - 读谱：`read_z_mag_db(path, port, target_n_freq=1001)` —— 按 `s_param_port` 取 S11/S22 端口转 |Z| dB 并插值，S1P/S2P 通吃
 - 行迭代参考：`iter_nn_export_rows` 的流式模式
 
@@ -70,8 +74,9 @@
 1. §5.2 数据清洗（nn_export 不做离群过滤）
 2. §5.3 确定性稀疏位置规则（替代 nn_export 的内容依赖随机采样，见下）
 3. §5.4 基准表、§5.5 网格单元划分
-4. 落地为 `dataset.npz`（float32，约 400MB）+ `meta.json`（归一化统计、基准表、划分清单、剔除清单）—— 不用 nn-csv 宽表（38,400 × 2617 列 CSV 体积与解析开销大，npz 更适合训练）
-5. **相位通道预留**：读谱时同时保存 `phase(Z)` 通道到 npz（约 +150MB，训练暂不使用）——分析报告 §5.2(a) 指出双通道信息对谐振/Q 敏感任务价值显著（类比 2DUV 交叉峰），为后续双通道模型留数据
+4. **每格抽样（v4）**：清洗后，每个结构组合 (eg, fl, area, pf) 按 |fs−格中位数| 升序取前 5 条进训练/val/test 集（`surr_per_cell_max=5`）；全集规模 ≈576 格 × 5 ≈ **2,900 条**。基准表构建不受此限（用全部合法基准格记录）
+5. 落地为 `dataset.npz`（float32，抽样后仅 ~15MB）+ `meta.json`（归一化统计、基准表、划分清单、剔除清单）—— 不用 nn-csv 宽表（npz 更适合训练）
+6. **相位通道预留**：读谱时同时保存 `phase(Z)` 通道到 npz（训练暂不使用）——分析报告 §5.2(a) 指出双通道信息对谐振/Q 敏感任务价值显著（类比 2DUV 交叉峰），为后续双通道模型留数据
 
 ### 5.2 数据清洗（新增，两级）
 
@@ -100,32 +105,33 @@
 - 其主模区内用 `np.random.choice` **随机加权**采样，同一器件两次提取点不同；训练（真值谱随机采样）与推理（预测 fs/fp 确定性位置）分布不一致，会给 Stage 2 引入额外偏移
 - 因此新增 `deterministic_sample_positions(freq_axis, fs, fp, k)` 放进 `app/core/sparse_sampler.py`，提取管线与推理链路共用同一实现；`fixed_rule_sample` 保留给现有 nn-csv 导出与旧 reconstructor 流程
 
-### 5.4 基准表
+### 5.4 基准表（v4：加 PF 维）
 
-对 12 个 `(eg=0, fl=0, area)` 单元，清洗后计算：
+对 `(eg=0, fl=0, pf, area)` 基准单元（A1-* 为 pf=0、G1-* 为 pf=1，各覆盖全部 12 个面积档，共 24 个基准档），用**全部合法基准格记录**（不受每格 ≤5 抽样限制）计算：
 
-- `params_base(area)`：7 维性能参数均值
-- `z_base_full(area)`：1001 点均值谱
+- `params_base(pf, area)`：7 维性能参数均值
+- `z_base_full(pf, area)`：1001 点均值谱
 
-随 `meta.json` 保存，并作为 buffer 存进 Stage 1 模型。推理时面积不在 12 档上：相邻面积档 dB 域线性插值。
+随 `meta.json` 保存，并作为 buffer 存进 Stage 1 模型。查询 `lookup(area, pf)`：面积不在 12 档上时相邻面积档 dB 域线性插值；pf 精确匹配（不插值）。
 
-### 5.5 数据集划分
+### 5.5 数据集划分（v4：物理器件绑定）
 
-- 12 个基准单元**固定进训练集**（推理要查基准）
-- 其余 468 格按单元划分 train/val/test = 372/48/48
-- test 格训练时完全不见，真实检验"预测未流片设计"
+- 同一 .s2p 文件的 S11/S22 两行**绑定同侧**——划分单元是"物理器件组"（eg, fl, pf, mark），共约 288 组（576 格 ÷ 2 端口）
+- 24 个基准档对应器件组**固定进训练集**（推理要查基准）
+- 其余器件组划分 train/val/test ≈ 8:1:1（`surr_val_groups`/`surr_test_groups` 进 AlgorithmConfig）
+- test 组训练时完全不见，真实检验"预测未流片设计"
 
 ## 6. Stage 1：基准锚定残差 MLP
 
 ```
-输入 (eg, fl, area)  z-score，3 维（预留 AG 第 4 维：恒 0 + mask）
+输入 (eg, fl, ag, area, pf)  z-score，5 维（ag 当前恒 1.0 占位；pf ∈ {0,1}）
   → Linear 256 → GELU → 残差块 ×2（Linear 256 → GELU → Linear 256）
   → head_params：Δparams（7 维，z-score 目标）
   → head_sparse：Δsparse_z（256 维，dB 按 meta 统计归一）
-输出 = 基准(area) + 残差
+输出 = 基准(area, pf) + 残差
 ```
 
-- 残差语义：`Δparams = params − params_base(area)`；`Δsparse_z = z_device(pos) − interp(z_base_full(area), pos)`，pos 由各器件自身 fs/fp 按 §5.3 生成
+- 残差语义：`Δparams = params − params_base(pf, area)`；`Δsparse_z = z_device(pos) − interp(z_base_full(pf, area), pos)`，pos 由各器件自身 fs/fp 按 §5.3 生成
 - 损失：`L = MSE(params_norm) + λ·MSE(sparse_z)`，λ 默认 0.1 可调
 - 训练：AdamW lr=3e-4 + cosine，batch 512，≤300 epochs，val 网格早停，MPS
 - train/infer 一致性：训练用真值 fs/fp 算采样位置，推理用预测 fs/fp；若评估显示位置敏感，加"预测位置重采样微调"收尾步骤（可选改进项）
@@ -161,6 +167,34 @@
 
 `evaluate_surrogate.py` 输出：JSON 报告 + 预测 vs 真值谱对比图（每 test 格抽代表器件）+ 误差分布直方图 + RMSE 随 (EG, FL) 热图。
 
+### 8.1 实测结果（2026-08-10，批次 #2 真实数据）
+
+数据：38,400 条 JOIN 成功 → 清洗保留 23,614（cell_outlier 14,572 / trend_outlier 214，晶圆内离散为主）→ 每格 ≤5 抽样 **2,840 条 / 384 物理组（train 326 / val 29 / test 29）**，12 面积档 × 2 PF。
+
+**关键发现——逐器件指标存在物理下限**：同格（同结构参数）器件因晶圆工艺离散，fs 留一 MAE 5.2 MHz、全谱格内不可约 RMSE **0.97 dB（train）/ 0.79 dB（test）**。模型输入在格内恒定 → **逐器件全谱 RMSE ≤ 0.5 dB 不可达**；公平口径应为格均值参照或位移对齐指标。
+
+| 指标 | 目标 | 实测 | 判定 |
+|---|---|---|---|
+| fs MAE | ≤ 10 MHz | 11.41 MHz（B3: 9.46；地板 5.2） | ✗（B3 更优） |
+| fp MAE | ≤ 15 MHz | 14.90 MHz（B3: 17.27） | ✓ |
+| 全谱 RMSE（逐器件） | ≤ 0.5 dB | **1.20 dB**（dense 2.65 / transition 0.60 / far 0.39） | ✗（地板 0.79） |
+| 全谱 RMSE（格均值参照） | — | **0.93 dB**（B0: 1.68 / B2: 0.99） | 新基准口径 |
+| 全谱 RMSE（±45MHz 位移对齐） | — | **0.72 dB** | 形状已低于地板 |
+| 重提取 fs MAE | ≤ 15 MHz | 10.04 MHz | ✓ |
+| vs B0 提升 | ≥ 50% | 36.2% | ✗ |
+| vs B2（逐器件/格均值） | 优于 | 1.20 vs 1.28 / 0.93 vs 0.99 | ✓ 均优于 |
+
+结论：级联**形状重建达标**（对齐口径 0.72 dB ≤ 地板），残差几乎全部是谐振**位置**误差（fs MAE 11.4 MHz vs 地板 5.2 MHz）。Stage 2 训练中发现并修复两个结构性缺陷（见下"训练修复记录"）。pf=1 分组指标：rmse_full 1.08 dB、fs MAE 6.8 MHz（优于 pf=0 的 1.21/11.9，48 组样本量小仅供参考）。
+
+**训练修复记录**（任务 14 迭代）：
+
+1. Stage 1 欠拟合：bs512→64（优化步数 5→38/epoch），lr 3e-4→1e-3；fs 17.9→11.4 MHz。λ_sparse 0.02 实验变差（0.1 最佳）；多次重训取 val 最优（种子噪声 ±2 MHz）。
+2. **SparseReconstructor 频率标尺缺陷**：`max_freq=10` 使 4–7 GHz 归一化到 0.4–0.7（跨窗 0.3 rad），正弦位置编码近似常数、注意力均匀化（熵 5.52/5.54），残差通路学到 ≈0（Step A 等价样条插值）。修复：max_freq=0.1（窗口映射 40–70，q_pos 跨窗 std 0.0075→0.235）。
+3. **cond/z 未归一化**：Qs/Qp 数百量级 + dB 直接入 LayerNorm 压垮位置信号；改为 params/z 统计归一化（O(1) 激活）。
+4. Step B（规格 §7 预案）已执行：用 Stage 1 预测点微调 Stage 2（lr 5e-3、from-scratch、早停 epoch 168，val 0.0390 归一化 MSE），全谱 1.30→1.20 dB 并反超 B2。
+
+**后续迭代方向**（按杠杆率排序）：① fs/fp 精度是唯一的硬瓶颈——B3 已证 9.5 MHz 可达，Stage 1 参数头可借鉴树模型特征或直接用 B3 输出替换（偏离原架构，需决策）；② 若有晶圆坐标等逐器件特征入模，可突破格内地板；③ 评估主口径建议改为格均值参照（目标可定为 ≤0.5 dB，当前 0.93）。
+
 ## 9. 工程与测试
 
 - 环境：uv + `backend/.venv`，PyTorch + MPS；入口 `uv run python scripts/...`
@@ -180,8 +214,10 @@
 | 全谱 0.5 dB 目标过紧 | 分区域报告；先保主模区，远带视结论再优化 |
 | 预测 fs/fp 误差导致采样位置偏移 | 评估敏感性；必要时"预测位置重采样微调" |
 | 测试格上残差学习不优于插值基线 B2 / 轻量基线 B3 | 评估直接对比 B0/B2/B3，用数据决定是否迭代架构 |
+| **PF=1 只覆盖 8 个 eg\|fl 组合**（v4）：pf=1 的泛化范围受限，test 含 pf=1 格时结论需分开报告 | 评估按 pf 分组报告指标；pf=1 组合不足时只对已有组合做插值结论 |
+| **每格仅 5 条样本**（v4）：合计 ~2,900 条，NN 对轻量模型的优势窗口变窄 | B3 基线是硬性对照（规格 §8）；必要时加数据增广或回到全量记录 |
 | **标签循环性**（分析报告 §5.3）：fs/fp/Q 标签来自传统提取算法，模型只会复现其系统误差 | §8 闭环重提取验证 + 人工抽检高置信样本；长期以高置信仿真标签破局 |
-| AG 后续批次有值 | 输入第 4 维 + mask 已预留，重新提取数据即可 |
+| AG 后续批次有真实值 | 输入第 3 维已占位（当前恒 1.0），重新提取数据即可 |
 
 **开放点（本版不实现）**：
 

@@ -2,6 +2,7 @@
 PyInstaller 入口：启动 FastAPI + 静态文件服务。
 """
 
+import multiprocessing
 import os
 import sys
 import time
@@ -100,6 +101,10 @@ def _start_worker() -> None:
 
 
 if __name__ == "__main__":
+    # PyInstaller/spawn 子进程支持：本地 worker 用 multiprocessing 跑 CPU 密集任务，
+    # Windows 打包模式下子进程会重新执行本入口，freeze_support 必须在最前面拦截。
+    multiprocessing.freeze_support()
+
     is_worker = "--worker" in sys.argv
 
     if is_worker:

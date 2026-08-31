@@ -12,7 +12,7 @@ from app.models import Base
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def _ensure_dirs(root: Path) -> None:
@@ -96,6 +96,71 @@ def _migrate_v2_to_v3(engine) -> None:
         conn.commit()
 
 
+def _migrate_v3_to_v4(engine) -> None:
+    """重建 upload_tasks：kind 约束加入 'remap'。
+
+    v3 的 CHECK 约束不含 'remap'，插入 remap 任务会直接 IntegrityError
+    并让任务线程反复失败。SQLite 不支持修改 CHECK，只能重建表。
+    """
+    with engine.connect() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE _upload_tasks_new (
+                    id INTEGER NOT NULL PRIMARY KEY,
+                    batch_no TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    progress_pct SMALLINT NOT NULL DEFAULT 0,
+                    stage TEXT NOT NULL DEFAULT 'extract',
+                    stage_progress_pct SMALLINT NOT NULL DEFAULT 0,
+                    progress_msg TEXT,
+                    error_msg TEXT,
+                    started_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                    finished_at DATETIME,
+                    cancelled_at DATETIME,
+                    celery_task_id TEXT,
+                    kind TEXT NOT NULL DEFAULT 'upload',
+                    CONSTRAINT ck_uptask_status
+                        CHECK (status IN ('pending','running','success','failed','cancelled')),
+                    CONSTRAINT ck_uptask_stage
+                        CHECK (stage IN ('extract','deembed','metrics','done','failed')),
+                    CONSTRAINT ck_uptask_kind
+                        CHECK (kind IN ('upload','reextract','redeembed','recompute','remap')),
+                    CONSTRAINT ck_uptask_progress CHECK (progress_pct BETWEEN 0 AND 100),
+                    CONSTRAINT ck_uptask_stage_progress
+                        CHECK (stage_progress_pct BETWEEN 0 AND 100)
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO _upload_tasks_new (
+                    id, batch_no, status, progress_pct, stage, stage_progress_pct,
+                    progress_msg, error_msg, started_at, finished_at, cancelled_at,
+                    celery_task_id, kind
+                )
+                SELECT
+                    id, batch_no, status, progress_pct, stage, stage_progress_pct,
+                    progress_msg, error_msg, started_at, finished_at, cancelled_at,
+                    celery_task_id, kind
+                FROM upload_tasks
+                """
+            )
+        )
+        conn.execute(text("DROP TABLE upload_tasks"))
+        conn.execute(text("ALTER TABLE _upload_tasks_new RENAME TO upload_tasks"))
+        # DROP TABLE 会连带删掉旧表上的索引，按模型定义补回
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS idx_uptask_status_started "
+                "ON upload_tasks (status, started_at)"
+            )
+        )
+        conn.commit()
+
+
 def _init_schema(engine) -> None:
     with engine.connect() as conn:
         current = _schema_version(conn)
@@ -118,6 +183,8 @@ def _init_schema(engine) -> None:
         logger.info("桌面数据库 schema 从 %s 升级到 %s", current, SCHEMA_VERSION)
         if current < 3:
             _migrate_v2_to_v3(engine)
+        if current < 4:
+            _migrate_v3_to_v4(engine)
         with engine.connect() as conn:
             _ensure_version_table(conn)
             conn.execute(
