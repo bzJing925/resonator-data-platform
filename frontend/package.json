@@ -15,7 +15,8 @@
     "electron:dev": "npm run electron:build-main && concurrently \"npm run dev\" \"wait-on http://127.0.0.1:5173 && electron .\"",
     "electron:preview": "npm run build && electron .",
     "electron:pack": "npm run build && electron-builder",
-    "dist": "npm run build && electron-builder"
+    "dist": "npm run build && electron-builder",
+    "test": "vitest run"
   },
   "homepage": ".",
   "build": {
@@ -120,6 +121,7 @@
     "react-router-dom": "^6.28.1"
   },
   "devDependencies": {
+    "@testing-library/react": "^16.3.2",
     "@types/node": "^20.19.43",
     "@types/react": "^18.3.31",
     "@types/react-dom": "^18.3.7",
@@ -128,8 +130,10 @@
     "concurrently": "^10.0.3",
     "electron": "^42.4.0",
     "electron-builder": "^26.15.3",
+    "jsdom": "^29.1.1",
     "typescript": "^5.4.5",
     "vite": "^5.4.11",
+    "vitest": "^4.1.10",
     "wait-on": "^9.0.10"
   }
 }

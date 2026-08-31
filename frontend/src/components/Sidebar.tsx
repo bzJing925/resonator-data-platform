@@ -8,6 +8,7 @@ const NAV = [
   { to: '/impedance', icon: I.curve, label: '阻抗曲线' },
   { to: '/batches', icon: I.batches, label: '批次管理' },
   { to: '/mappings', icon: I.table, label: '对照表' },
+  { to: '/process', icon: I.wafer, label: '工艺数据' },
   { to: '/upload', icon: I.upload, label: '上传' },
   { to: '/tasks', icon: I.cpu, label: '任务' },
 ];
