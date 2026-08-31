@@ -143,6 +143,15 @@ def status() -> dict:
     return {"available": True, **_options(bundle)}
 
 
+def prewarm() -> None:
+    """后台预热入口：服务就绪后由 lifespan 调度，提前完成懒加载。
+
+    与 /surrogate/status 共用 _load_bundle（幂等 + 锁 + 异常降级为 _load_error），
+    避免用户首次打开代理模型页时等待 torch/检查点加载（实测约 29s）。
+    """
+    _load_bundle()
+
+
 @lru_cache(maxsize=512)
 def _predict_cached(eg: float, fl: float, ag: float, area: float, pf: float) -> dict:
     """按舍入后的键缓存（float 入参已在端点舍入，滑块拖动命中率高）。"""

@@ -120,7 +120,30 @@ export ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-b
 ```
 
 **Q: 后端启动失败？**
-A: 检查 `frontend/release/mac-arm64/ALN Resonator Data Platform.app/Contents/Resources/backend/aln-backend` 是否存在；在终端运行该文件查看错误。
+A: 检查 `frontend/release/mac-arm64/ALN Resonator Data Platform.app/Contents/Resources/backend/aln-backend/aln-backend` 是否存在（onedir 目录结构）；在终端运行该文件查看错误。
 
 **Q: 如何关闭后端调试日志？**
 A: 生产环境下后端 stdout/stderr 已重定向到 Electron 主进程控制台；可在 `electron/main.js` 中调整 `stdio` 参数。
+
+## 9. 发布更新（自动更新通道）
+
+桌面版自动更新走 **generic provider + gh-proxy 镜像**（github.com 主站在国内不可达），
+指向固定 tag `latest` 的 release 资产目录。发新版流程：
+
+```bash
+# 1. 提版本号：frontend/package.json version（如 0.2.1 → 0.2.2）
+# 2. 完整构建（必须用 backend/.venv 的 python，否则产物缺依赖）
+backend/.venv/bin/python build.py --target mac
+
+# 3. 发布版本归档 release（tag v0.2.2，3 个资产）
+#    同时同步 latest 通道：删除 latest release 的 3 个旧资产，上传新的
+#    - ALN-Resonator-Data-Platform-X.Y.Z-arm64.dmg
+#    - ALN-Resonator-Data-Platform-X.Y.Z-arm64.dmg.blockmap
+#    - latest-mac.yml
+GH_TOKEN=<token> npx electron-builder --mac --publish always   # frontend/ 下执行
+```
+
+注意：electron-builder 偶发把同一版本拆成两个 draft release（资产分裂），
+发布后到仓库 Releases 页核对：`vX.Y.Z` 与 `latest` 两个 release 都必须各有
+完整 3 个资产且为正式发布（非 Draft）。若镜像失效，改 `frontend/electron/updater.ts`
+的 `DEFAULT_UPDATE_URL` 或让用户在 `~/.aln-data/settings.json` 配 `updateSource`。

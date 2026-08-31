@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parent
 FRONTEND_BUILD = ROOT.parent / "frontend" / "build" / "backend"
 
 
-def run(onedir: bool = False):
+def run(onefile: bool = False):
     try:
         import PyInstaller.__main__  # noqa: F401
     except ImportError:
@@ -37,8 +37,10 @@ def run(onedir: bool = False):
     work_dir = ROOT / "build" / "pyinstaller" / "work"
     dist_dir = ROOT / "build" / "pyinstaller" / "dist"
 
-    # 基础 PyInstaller 参数：默认 --onefile，便于分发；加 --onedir 启动更快
-    mode_flag = "--onedir" if onedir else "--onefile"
+    # 默认 --onedir：onefile 每次启动都解压到全新 _MEI 临时目录，macOS 会对其中
+    # 数百个 dylib 逐个重新做安全校验（路径无缓存复用），实测仅此一项就要 60–90s；
+    # onedir 路径固定，校验结果可跨启动复用，稳态冷启动 ~2s。onefile 仅作备选。
+    mode_flag = "--onefile" if onefile else "--onedir"
     args = [
         str(ROOT / "desktop_entry.py"),
         "--name=aln-backend",
@@ -128,15 +130,7 @@ def run(onedir: bool = False):
     print("执行 PyInstaller...")
     subprocess.check_call([sys.executable, "-m", "PyInstaller"] + args)
 
-    if onedir:
-        src = dist_dir / "aln-backend"
-        dst = FRONTEND_BUILD / "aln-backend"
-        if src.exists():
-            shutil.copytree(src, dst, dirs_exist_ok=True)
-        else:
-            raise FileNotFoundError(f"PyInstaller 未生成 onedir 目录: {src}")
-        print(f"后端 onedir 目录已输出: {dst}")
-    else:
+    if onefile:
         exe_name = "aln-backend.exe" if sys.platform == "win32" else "aln-backend"
         src = dist_dir / exe_name
         dst = FRONTEND_BUILD / exe_name
@@ -144,6 +138,14 @@ def run(onedir: bool = False):
             raise FileNotFoundError(f"PyInstaller 未生成可执行文件: {src}")
         shutil.copy2(src, dst)
         print(f"后端可执行文件已输出: {dst}")
+    else:
+        src = dist_dir / "aln-backend"
+        dst = FRONTEND_BUILD / "aln-backend"
+        if src.exists():
+            shutil.copytree(src, dst, dirs_exist_ok=True)
+        else:
+            raise FileNotFoundError(f"PyInstaller 未生成 onedir 目录: {src}")
+        print(f"后端 onedir 目录已输出: {dst}")
 
     # 代理模型产物：只并入推理必需文件（b3 joblib 35MB、训练 history 等不带进安装包）
     surr_data = ROOT / "surrogate_data"
@@ -164,9 +166,9 @@ def run(onedir: bool = False):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="打包后端为桌面可执行文件")
     parser.add_argument(
-        "--onedir",
+        "--onefile",
         action="store_true",
-        help="使用 onedir 模式（启动更快，文件更多）",
+        help="使用 onefile 模式（单文件便于分发；但启动时要解压并被 macOS 重新校验，慢约 1 分钟）",
     )
     args = parser.parse_args()
-    run(onedir=args.onedir)
+    run(onefile=args.onefile)
