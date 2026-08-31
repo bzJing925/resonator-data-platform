@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     # 数据根目录（容器内挂载点；本地开发可指向 /data3/aln）
     DATA_ROOT: Path = Path("/data3/aln")
 
+    # 代理模型产物（数据集 npz/meta/baseline + 训练 checkpoint）；
+    # 相对路径基于 backend/ 目录解析；缺失时 /api/surrogate/* 降级 available=false
+    SURROGATE_DATA_DIR: Path = Path("surrogate_data")
+    SURROGATE_CKPT_DIR: Path = Path("checkpoints_surrogate")
+
     # 上传限制
     UPLOAD_MAX_GB: int = 100
 
@@ -180,6 +185,30 @@ class AlgorithmConfig:
             "k2eff_pct",
         )
     )
+
+    # ── 代理模型（surrogate）──────────────────────────────────
+    surr_n_freq: int = 1001  # 统一频点数
+    surr_k: int = 256  # 稀疏采样点数
+    surr_dense_ratio: float = 0.60  # 谐振密集区配额
+    surr_transition_ratio: float = 0.25  # 过渡带配额（远带 = 1 - 前两者）
+    surr_dense_half_bw: float = 0.5  # 密集区半宽 = 该值 × (fp - fs)
+    surr_transition_half_bw: float = 1.5  # 过渡带外沿 = 该值 × (fp - fs)
+    surr_clean_fs_tol_mhz: float = 100.0  # 单元内 fs/fp 离群阈值（MHz；比较时 ÷1000 换算为 GHz）
+    surr_clean_trend_sigma: float = 3.0  # 跨单元趋势面离群阈值（σ 倍数）
+    surr_split_seed: int = 42  # 划分随机种子
+    surr_param_cols: tuple[str, ...] = (  # 7 个性能参数列（顺序固定，全流程一致）
+        "fs_ghz",
+        "fp_ghz",
+        "k2eff_pct",
+        "qs",
+        "qp",
+        "qs_bodeq",
+        "qp_bodeq",
+    )
+    surr_per_cell_max: int = 5  # 每结构组合抽样上限（|fs-中位数| 升序取前 N）
+    surr_default_ag: float = 1.0  # AG 占位默认值（μm；数据全空时的常量输入）
+    surr_val_groups: int = 29  # val 物理器件组数
+    surr_test_groups: int = 29  # test 物理器件组数
 
 
 @lru_cache

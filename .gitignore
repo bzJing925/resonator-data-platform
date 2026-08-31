@@ -41,6 +41,12 @@ backend/build/
 backend/pinn_*/
 backend/sparse_*/
 backend/app/ml/checkpoints/
+backend/surrogate_data/
+backend/checkpoints_surrogate/
+backend/ckpt_s1_run*/
+backend/eval_out/
+backend/pred_demo/
+backend/pred_out/
 frontend/build/
 
 # 其他本地临时目录 / 根目录临时脚本
@@ -75,3 +81,4 @@ Thumbs.db
 .playwright-mcp/
 **/.playwright-cli/
 **/.playwright-mcp/
+backend/eval_out_ft/
