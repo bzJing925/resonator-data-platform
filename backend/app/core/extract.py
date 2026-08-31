@@ -14,10 +14,6 @@ import re
 from pathlib import Path
 
 import numpy as np
-import skrf as rf
-from scipy.interpolate import interp1d
-from scipy.optimize import curve_fit
-from scipy.signal import find_peaks, savgol_filter
 
 from app.config import AlgorithmConfig, get_algorithm_config
 from app.core.filename import parse_filename
@@ -95,6 +91,8 @@ def _bodeq_raw_array(s: np.ndarray, freq: np.ndarray) -> tuple[np.ndarray, int]:
 
 def _smooth_bodeq(bodeq_raw: np.ndarray, freq: np.ndarray, cfg: AlgorithmConfig) -> np.ndarray:
     """Savitzky-Golay 平滑 BodeQ 曲线（窗口随长度缩放）。"""
+    from scipy.signal import savgol_filter
+
     window_size = min(cfg.savgol_window, len(freq) // 10 * 2 + 1)
     if window_size <= 5:
         return bodeq_raw
@@ -144,6 +142,9 @@ def calc_bodeq(
     amp0 = float(np.nanmax(fit_bodeq))
     f00 = f_peak_guess
     gamma0 = (float(freq[-1]) - float(freq[0])) / 100.0
+
+    from scipy.interpolate import interp1d
+    from scipy.optimize import curve_fit
 
     try:
         popt, _ = curve_fit(
@@ -212,6 +213,8 @@ def calc_bodeq_curve(
         raise ExtractError("平滑后的 BodeQ 数组全为 NaN")
 
     fitted_arr = np.full_like(bodeq_smooth_arr, np.nan, dtype=float)
+
+    from scipy.optimize import curve_fit
 
     try:
         max_idx = int(np.nanargmax(bodeq_smooth_arr))
@@ -312,6 +315,8 @@ def detect_intermediate_peak(
     物理约束：fs < fp2 < fs2 < fp 且 zs < zs2 < zp2 < zp。无候选返回 None。
     """
     cfg = config or get_algorithm_config()
+
+    from scipy.signal import find_peaks, savgol_filter
 
     freq = np.asarray(freq)
     z_mag_db = np.asarray(z_mag_db)
@@ -439,6 +444,8 @@ def extract_resonator_params(
     cfg = config or get_algorithm_config()
     s1p_path = Path(s1p_path)
     filename = s1p_path.name
+
+    import skrf as rf
 
     parsed = parse_filename(filename)
 

@@ -1,7 +1,7 @@
 {
   "name": "aln-data-frontend",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "ALN Resonator Test Data Platform",
   "author": "aln-data <dev@aln-data.local>",
   "type": "module",
@@ -33,18 +33,28 @@
       {
         "from": "build/backend",
         "to": "backend",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "protocols": [
       {
         "name": "ALN Data Platform",
-        "schemes": ["alndata"]
+        "schemes": [
+          "alndata"
+        ]
       }
     ],
     "mac": {
       "target": [
-        { "target": "dmg", "arch": ["x64", "arm64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
       ],
       "icon": "build-resources/icon.icns",
       "category": "public.app-category.science",
@@ -54,14 +64,32 @@
     "dmg": {
       "sign": false,
       "contents": [
-        { "x": 130, "y": 220 },
-        { "x": 410, "y": 220, "type": "link", "path": "/Applications" }
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
       ]
     },
     "win": {
       "target": [
-        { "target": "nsis", "arch": ["x64"] },
-        { "target": "portable", "arch": ["x64"] }
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
       "icon": "build-resources/icon.ico"
     },

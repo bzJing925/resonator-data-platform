@@ -28,9 +28,9 @@ python build.py
 
 输出：
 
-- macOS：`frontend/release/ALN Resonator Data Platform-0.1.0-arm64.dmg`
-- Windows：`frontend/release/ALN Resonator Data Platform Setup 0.1.0.exe`
-- Windows 便携版：`frontend/release/ALN Resonator Data Platform 0.1.0.exe`
+- macOS：`frontend/release/ALN Resonator Data Platform-0.1.1-arm64.dmg`
+- Windows：`frontend/release/ALN Resonator Data Platform Setup 0.1.1.exe`
+- Windows 便携版：`frontend/release/ALN Resonator Data Platform 0.1.1.exe`
 
 仅构建 macOS：
 

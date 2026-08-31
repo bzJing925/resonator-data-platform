@@ -89,12 +89,16 @@ def run(onedir: bool = False):
         "alembic.runtime.migration",
         "alembic.script.base",
         "email_validator",
+        "zipstream",
     ]
     for imp in hidden:
         args.append(f"--hidden-import={imp}")
 
     # Celery / kombu 大量动态导入，collect-all 最稳
     args.extend(["--collect-all", "celery", "--collect-all", "kombu", "--collect-all", "billiard"])
+
+    # scipy / numpy 子模块众多，PyInstaller 容易漏掉，导致桌面版导入卡住
+    args.extend(["--collect-all", "scipy", "--collect-all", "numpy"])
 
     print("执行 PyInstaller...")
     subprocess.check_call([sys.executable, "-m", "PyInstaller"] + args)

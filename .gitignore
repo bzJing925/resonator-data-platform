@@ -23,6 +23,7 @@ wheels/
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
+frontend/release/
 
 # 数据导出/临时
 backend/exports/
@@ -36,9 +37,7 @@ backend/uploads/
 backend/build/
 backend/pinn_*/
 backend/sparse_*/
-backend/*.pt
-backend/*.pth
-backend/*.onnx
+backend/app/ml/checkpoints/
 frontend/build/
 
 # 其他本地临时目录 / 根目录临时脚本

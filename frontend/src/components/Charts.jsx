@@ -1488,7 +1488,7 @@ export function UnifiedChartGrid({
       pw.push({ kind: 'z_numeric_dropped', chartType, zField: zField.name });
     }
 
-    const useGl = rows.length < PERF_GL_THRESHOLD;
+    const useGl = rows.length >= PERF_GL_THRESHOLD;
     const pWarn = rows.length >= PERF_GL_THRESHOLD
       ? { rowCount: rows.length, threshold: PERF_GL_THRESHOLD }
       : null;
