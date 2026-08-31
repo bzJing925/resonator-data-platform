@@ -24,7 +24,7 @@ const EntryRow = memo(function EntryRow({ entry }: EntryRowProps) {
       <td className="num dim">{e.ag ?? '—'}</td>
       <td className="num">{e.area_s11 ?? '—'}</td>
       <td className="num">{e.area_s22 ?? '—'}</td>
-      <td>{e.has_pf ? '是' : '—'}</td>
+      <td>{e.has_pf ? '有massloading' : '没有massloading'}</td>
     </tr>
   );
 });
@@ -42,6 +42,8 @@ export default function Mappings() {
 
   const [mappings, setMappings] = useState<Mapping[]>([]);
   const [entries, setEntries] = useState<{ items: MappingEntry[]; total: number }>({ items: [], total: 0 });
+  const [page, setPage] = useState(1);
+  const [size] = useState(50);
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState<boolean>(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -64,10 +66,15 @@ export default function Mappings() {
     if (!selected) return;
     // 快速点不同对照表时旧 fetch 可能后到、覆盖新选中的 entries。
     let cancelled = false;
-    listMappingEntries(selected, { page: 1, size: 200 })
+    listMappingEntries(selected, { page, size })
       .then((d) => { if (!cancelled) setEntries(d); })
       .catch((e: Error) => { if (!cancelled) setError(e.message); });
     return () => { cancelled = true; };
+  }, [selected, page, size]);
+
+  // 切换对照表时重置到第一页
+  useEffect(() => {
+    setPage(1);
   }, [selected]);
 
   const submit = async () => {
@@ -196,12 +203,12 @@ export default function Mappings() {
                 <tr>
                   <th>标记</th>
                   <th>描述</th>
-                  <th className="num">电极间隙 (EG)</th>
-                  <th className="num">指长 (FL)</th>
-                  <th className="num">孔径 (AG)</th>
-                  <th className="num">S11 面积 (μm²)</th>
-                  <th className="num">S22 面积 (μm²)</th>
-                  <th>含 PF</th>
+                  <th className="num">EG</th>
+                  <th className="num">FL</th>
+                  <th className="num">AG</th>
+                  <th className="num">S11 面积</th>
+                  <th className="num">S22 面积</th>
+                  <th>PF</th>
                 </tr>
               </thead>
               <tbody>
@@ -210,6 +217,17 @@ export default function Mappings() {
                 ))}
               </tbody>
             </table>
+          </div>
+          <div style={{ padding: 12, display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'center', borderTop: '1px solid var(--border)' }}>
+            <button className="btn sm" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
+              <I.chevron size={11} style={{ transform: 'scaleX(-1)' }} />
+            </button>
+            <span className="dim mono" style={{ fontSize: 11 }}>
+              {page} / {Math.max(1, Math.ceil((entries.total || 0) / size))}
+            </span>
+            <button className="btn sm" disabled={page * size >= (entries.total || 0)} onClick={() => setPage((p) => p + 1)}>
+              <I.chevron size={11} />
+            </button>
           </div>
         </div>
       </div>

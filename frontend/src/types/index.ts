@@ -89,6 +89,7 @@ export interface Device {
   original_filename?: string;
   display_name?: string;
   mark?: string;
+  description?: string;
   wafer?: string | number;
   folder_name?: string;
   coord?: string;

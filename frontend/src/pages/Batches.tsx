@@ -1,16 +1,18 @@
 import React, { memo, useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import I from '../components/Icons';
-import { listBatches, deleteBatch } from '../api/endpoints';
+import { listBatches, deleteBatch, renameBatch } from '../api/endpoints';
+import RenameBatchModal from '../components/RenameBatchModal';
 import { usePageState } from '../contexts/PageStateContext';
 import type { Batch } from '../types';
 
 interface BatchRowProps {
   batch: Batch;
   onDelete: (batchNo: string) => Promise<void>;
+  onRename: (batchNo: string) => void;
 }
 
-const BatchRow = memo(function BatchRow({ batch, onDelete }: BatchRowProps) {
+const BatchRow = memo(function BatchRow({ batch, onDelete, onRename }: BatchRowProps) {
   const b = batch;
   return (
     <tr>
@@ -46,6 +48,9 @@ const BatchRow = memo(function BatchRow({ batch, onDelete }: BatchRowProps) {
           >
             <I.table size={12} />
           </Link>
+          <button className="btn ghost sm" title="重命名" onClick={() => onRename(b.batch_no)}>
+            <I.edit size={12} />
+          </button>
           <button className="btn ghost sm danger" title="删除" onClick={() => onDelete(b.batch_no)}>
             <I.trash size={12} />
           </button>
@@ -72,6 +77,7 @@ export default function Batches() {
   });
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [renameBatchNo, setRenameBatchNo] = useState<string | null>(null);
 
   // load 接受外部 cancelled flag —— useEffect 重跑时能让旧请求丢弃结果，
   // 避免分页/size 快速切换时慢请求覆盖快请求结果。
@@ -97,6 +103,16 @@ export default function Batches() {
       load();
     } catch (e: any) {
       alert(e.message);
+    }
+  };
+
+  const handleRename = async (oldBatchNo: string, newBatchNo: string) => {
+    try {
+      await renameBatch(oldBatchNo, newBatchNo);
+      setRenameBatchNo(null);
+      load();
+    } catch (e: any) {
+      alert(e.response?.data?.detail || e.message);
     }
   };
 
@@ -159,10 +175,18 @@ export default function Batches() {
               </tr>
             )}
             {filtered.map((b) => (
-              <BatchRow key={b.batch_no} batch={b} onDelete={onDelete} />
+              <BatchRow key={b.batch_no} batch={b} onDelete={onDelete} onRename={setRenameBatchNo} />
             ))}
           </tbody>
         </table>
+
+        {renameBatchNo && (
+          <RenameBatchModal
+            batchNo={renameBatchNo}
+            onClose={() => setRenameBatchNo(null)}
+            onSubmit={(newBatchNo) => handleRename(renameBatchNo, newBatchNo)}
+          />
+        )}
 
         <div style={{ padding: 12, display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'center' }}>
           <button className="btn sm" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>

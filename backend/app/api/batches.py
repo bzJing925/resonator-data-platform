@@ -8,18 +8,30 @@ from typing import Annotated, Any, Literal
 import zipstream
 from fastapi import APIRouter, HTTPException, Query, Response, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func, select
+from sqlalchemy import false, func, select
 
 from app.api.deps import DEVICE_COLUMNS, DbSession
 from app.config import get_settings
-from app.models import Batch, Device, Mapping, UploadTask
+from app.models import Batch, Device, Mapping, MappingEntry, UploadTask
 from app.schemas.batch import (
     BatchDetail,
     BatchListItem,
     BatchListResponse,
+    BatchRenameRequest,
+    BatchRenameResponse,
     BatchStats,
     RecomputeRequest,
     ReprocessResponse,
+)
+from app.services.batch_rename_service import (
+    BatchNotFoundError as RenameBatchNotFoundError,
+)
+from app.services.batch_rename_service import (
+    BatchRenameActiveTaskError,
+    BatchRenameDuplicateError,
+    BatchRenameError,
+    BatchRenameInvalidNameError,
+    rename_batch,
 )
 from app.services.batch_stats_service import get_batch_stats
 from app.services.cleanup_service import delete_batch_and_files
@@ -183,6 +195,28 @@ def delete_batch(batch_no: str, db: DbSession) -> None:
         raise HTTPException(status_code=404, detail=f"批次 {batch_no} 不存在")
 
 
+@router.post("/{batch_no}/rename", response_model=BatchRenameResponse)
+def rename_batch_endpoint(
+    batch_no: str,
+    body: BatchRenameRequest,
+    db: DbSession,
+) -> BatchRenameResponse:
+    """重命名批次号，同时重命名磁盘目录并同步相关 DB 字段。"""
+    try:
+        new_batch_no = rename_batch(db, batch_no, body.new_batch_no)
+    except RenameBatchNotFoundError:
+        raise HTTPException(status_code=404, detail=f"批次 {batch_no} 不存在") from None
+    except BatchRenameDuplicateError:
+        raise HTTPException(status_code=409, detail="新批次号已存在") from None
+    except BatchRenameActiveTaskError:
+        raise HTTPException(status_code=409, detail="该批次有进行中的任务，无法重命名") from None
+    except BatchRenameInvalidNameError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    except BatchRenameError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from None
+    return BatchRenameResponse(batch_no=new_batch_no)
+
+
 @router.post("/{batch_no}/reextract", response_model=ReprocessResponse)
 def reextract_batch(batch_no: str, db: DbSession) -> ReprocessResponse:
     return _start_reprocess(db, batch_no, "reextract")
@@ -208,6 +242,7 @@ def list_batch_devices(
     db: DbSession,
     wafer: int | None = None,
     pf: str | None = None,
+    massloading: str | None = None,
     page: Annotated[int, Query(ge=1)] = 1,
     size: Annotated[int, Query(ge=1, le=1000)] = 100,
 ) -> dict[str, Any]:
@@ -222,13 +257,44 @@ def list_batch_devices(
         if pf not in ("Y", "N"):
             raise HTTPException(status_code=400, detail="pf 必须为 Y / N")
         conditions.append(Device.pf == pf)
-
+    if massloading is not None:
+        if massloading not in ("Y", "N"):
+            raise HTTPException(status_code=400, detail="massloading 必须为 Y / N")
+        if batch.mapping_id is None:
+            conditions.append(false())
+        else:
+            marks = db.scalars(
+                select(MappingEntry.mark).where(
+                    MappingEntry.mapping_id == batch.mapping_id,
+                    MappingEntry.has_pf == (massloading == "Y"),
+                )
+            ).all()
+            if marks:
+                conditions.append(Device.mark.in_(marks))
+            else:
+                conditions.append(false())
     total = db.scalar(select(func.count()).select_from(Device).where(*conditions)) or 0
     stmt = (
         select(Device).where(*conditions).order_by(Device.id).offset((page - 1) * size).limit(size)
     )
     devices = db.scalars(stmt).all()
     rows = [{col: getattr(d, col) for col in DEVICE_COLUMNS if col != "batch_id"} for d in devices]
+
+    # 批量补充每个 device 对应的对照表 description
+    if devices and batch.mapping_id is not None:
+        marks = [d.mark for d in devices if d.mark]
+        mark_to_desc: dict[str, str | None] = {}
+        if marks:
+            entries = db.scalars(
+                select(MappingEntry).where(
+                    MappingEntry.mapping_id == batch.mapping_id,
+                    MappingEntry.mark.in_(marks),
+                )
+            ).all()
+            mark_to_desc = {e.mark: e.description for e in entries}
+        for r, d in zip(rows, devices, strict=True):
+            r["description"] = mark_to_desc.get(d.mark) if d.mark else None
+
     for r, d in zip(rows, devices, strict=True):
         r["batch_no"] = batch_no
         r["id"] = d.id

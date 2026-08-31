@@ -11,6 +11,26 @@ const { app, BrowserWindow, ipcMain, shell, Menu } = electron;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// 开发调试日志：把主进程 console 输出写入文件，方便排查后端启动问题
+const _logDir = path.join(os.homedir(), '.aln-data', 'logs');
+fs.mkdirSync(_logDir, { recursive: true });
+const _logFile = path.join(_logDir, 'electron-main.log');
+const _logStream = fs.createWriteStream(_logFile, { flags: 'a' });
+function _logToFile(...args: any[]) {
+  const line = `[${new Date().toISOString()}] ${args.map((a) => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ')}\n`;
+  _logStream.write(line);
+}
+const _origLog = console.log;
+const _origError = console.error;
+console.log = (...args: any[]) => {
+  _origLog(...args);
+  _logToFile(...args);
+};
+console.error = (...args: any[]) => {
+  _origError(...args);
+  _logToFile('[ERROR]', ...args);
+};
+
 const isPackaged = app.isPackaged;
 const isDev = !isPackaged;
 
@@ -20,6 +40,18 @@ let backendProcess: ChildProcess | null = null;
 let backendUrl = '';
 let backendReady = false;
 let healthCheckTimer: NodeJS.Timeout | null = null;
+let backendLogFd: number | null = null;
+
+function closeBackendLogFd() {
+  if (backendLogFd !== null) {
+    try {
+      fs.closeSync(backendLogFd);
+    } catch {
+      // ignore
+    }
+    backendLogFd = null;
+  }
+}
 
 function findFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -85,7 +117,7 @@ async function startBackend(): Promise<void> {
     args = [];
     cwd = path.dirname(command);
   } else {
-    command = 'python';
+    command = process.env.ALN_PYTHON_PATH || 'python';
     args = ['-m', 'uvicorn', 'app.main:app', '--host', host, '--port', String(port)];
     cwd = path.join(projectRoot, 'backend');
   }
@@ -104,16 +136,23 @@ async function startBackend(): Promise<void> {
     KEEP_RAW_ZIP: 'true',
   };
 
+  const backendLogDir = path.join(desktopDir, 'logs');
+  fs.mkdirSync(backendLogDir, { recursive: true });
+  closeBackendLogFd();
+  backendLogFd = fs.openSync(path.join(backendLogDir, 'backend.log'), 'a');
+
   console.log('[main] 启动后端:', command, args.join(' '), 'on', backendUrl);
   backendProcess = spawn(command, args, {
     cwd,
-    stdio: isDev ? 'inherit' : ['ignore', 'pipe', 'pipe'],
+    stdio: ['ignore', backendLogFd, backendLogFd],
     detached: false,
     env: backendEnv,
+    windowsHide: true,
   });
 
   backendProcess.on('error', (err) => {
     console.error('[main] 后端进程启动失败:', err.message);
+    closeBackendLogFd();
     notifyBackendState('error');
   });
 
@@ -121,6 +160,7 @@ async function startBackend(): Promise<void> {
     console.log(`[main] 后端进程退出，code=${code}`);
     backendProcess = null;
     backendReady = false;
+    closeBackendLogFd();
     notifyBackendState('error');
     if (!isDev) {
       setTimeout(() => startBackend().catch(console.error), 2000);
@@ -167,6 +207,7 @@ function stopBackend() {
     }
     backendProcess = null;
   }
+  closeBackendLogFd();
 }
 
 function createSplashWindow() {

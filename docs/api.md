@@ -32,6 +32,7 @@
 | 曲线 | GET | `/api/devices/{id}/sparam` | 单器件 S 参数曲线（现读现画） |
 | 曲线 | GET | `/api/devices/{id}/bodeq` | 单器件 BodeQ 曲线（按需算） |
 | 导出 | POST | `/api/export/csv` | CSV 导出（同步流式） |
+| 导出 | POST | `/api/export/nn-csv` | NN 训练 CSV 导出（EG/AG/FL → 阻抗谱） |
 | 导出 | POST | `/api/export/xlsx` | Excel 导出（异步落 exports/） |
 | 导出 | GET | `/api/exports/{id}` | 下载导出文件 |
 | 系统 | GET | `/api/health` | 健康检查 |
@@ -352,6 +353,36 @@ data: {"error_msg": "..."}
 ### POST `/api/export/csv`
 
 请求体同 `/api/query/devices`，响应是 `Content-Type: text/csv` 的流式下载，`Content-Disposition: attachment; filename=devices_20260509.csv`。
+
+### POST `/api/export/nn-csv`
+
+导出 NN 训练数据 CSV，每行一个器件，列结构为：
+
+```
+device_id, eg, ag, fl,
+fs_ghz, fp_ghz, k2eff_pct, qs, qp,
+bodeq_raw, bodeq_smooth, bodeq_fitted, fbode_ghz, qs_bodeq, qp_bodeq,
+sample_freq_0, sample_z_0, ..., sample_freq_K-1, sample_z_K-1,
+full_freq_0, full_z_0, ..., full_freq_N-1, full_z_N-1
+```
+
+- `eg` / `ag` / `fl` 为自变量。
+- `fs` / `fp` / `kt2` / `Qs` / `Qp` / `bodeQ` 系列与完整阻抗谱为因变量。
+- 阻抗谱为 `|Z| dB`；采样点按 fs/fp 附近密集、远带稀疏的固定规则生成。
+- 默认 `K=300` 个采样点，`N=1001` 个全谱频点；均可在请求体中覆盖。
+
+请求体示例：
+
+```json
+{
+  "filters": {"eg": [1.0, 2.0]},
+  "limit": 50000,
+  "target_k": 300,
+  "target_n_freq": 1001
+}
+```
+
+响应为 `text/csv` 流式下载，`limit` 上限 50,000。缺失或无法解析 S1P 的器件会被自动跳过。
 
 ### POST `/api/export/xlsx`
 

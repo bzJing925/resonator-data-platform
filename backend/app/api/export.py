@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import csv
 import io
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -17,9 +18,12 @@ from fastapi.responses import FileResponse, StreamingResponse
 
 from app.api.deps import DbSession
 from app.config import get_settings
+from app.schemas.nn_export import NNExportRequest
 from app.schemas.query import QueryRequest
 from app.services.export_query import build_export_fields_and_stmt, select_export_rows
+from app.services.nn_export import build_nn_export_stmt, get_nn_export_header, iter_nn_export_rows
 
+log = logging.getLogger("aln")
 router = APIRouter(tags=["export"])
 
 # CSV 流式读取批次大小
@@ -99,4 +103,45 @@ def download_export(export_id: str) -> FileResponse:
         path=str(path),
         filename=path.name,
         media_type="application/octet-stream",
+    )
+
+
+# NN 训练数据导出：EG/AG/FL + 标量参数 + 稀疏采样点 + 完整 |Z| dB 频谱
+_NN_STREAM_YIELD_PER = 500
+
+
+@router.post("/export/nn-csv")
+def export_nn_csv(req: NNExportRequest, db: DbSession) -> StreamingResponse:
+    """导出 NN 训练 CSV。
+
+    每行一个器件：自变量 eg/ag/fl，因变量 fs/fp/kt2/Qs/Qp/bodeQ，
+    外加稀疏采样点和完整 |Z| dB 频谱。
+    """
+    # 先在生成器外构建/校验 SQL，确保 filter 异常能在响应开始前抛出 400。
+    _, stmt = build_nn_export_stmt(req)
+    header = get_nn_export_header(req)
+
+    def gen():
+        buf = io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=header)
+        writer.writeheader()
+        yield buf.getvalue()
+        buf.seek(0)
+        buf.truncate()
+
+        count = 0
+        for row in iter_nn_export_rows(db, req, stmt=stmt):
+            writer.writerow(row)
+            yield buf.getvalue()
+            buf.seek(0)
+            buf.truncate()
+            count += 1
+            if count % _NN_STREAM_YIELD_PER == 0:
+                log.info("nn-csv 已导出 %d 行", count)
+
+    filename = f"nn_devices_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.csv"
+    return StreamingResponse(
+        gen(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

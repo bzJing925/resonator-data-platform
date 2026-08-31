@@ -14,9 +14,11 @@ import {
   reextractBatch,
   redeembedBatch,
   recomputeBatch,
+  renameBatch,
 } from '../api/endpoints';
 import DeviceModal from '../components/DeviceModal';
 import ReprocessMetricsModal from '../components/ReprocessMetricsModal';
+import RenameBatchModal from '../components/RenameBatchModal';
 import useFields, { displayLabel } from '../hooks/useFields';
 import { usePageState } from '../contexts/PageStateContext';
 import type { Batch, Device, FileEntry } from '../types';
@@ -77,6 +79,9 @@ const DeviceRow = memo(function DeviceRow({ device, columns, fmtCell, onRowClick
       {(!originalSpan || originalSpan.showCell) && (
         <td rowSpan={originalSpan?.rowSpan}>{d.original_filename || '—'}</td>
       )}
+      {(!originalSpan || originalSpan.showCell) && (
+        <td rowSpan={originalSpan?.rowSpan}>{d.description || '—'}</td>
+      )}
       <td className="mono">{d.id || '—'}</td>
       <td>{d.s_param_port || '—'}</td>
       {columns.map((c) => (
@@ -108,12 +113,16 @@ const COLUMN_DEFS: ColumnDef[] = [
   { key: 'coord', fallback: '坐标 Coord', type: 'text' },
   { key: 'x', fallback: 'X', type: 'num', digits: 0 },
   { key: 'y', fallback: 'Y', type: 'num', digits: 0 },
-  { key: 'pf', fallback: '合格 P/F', type: 'text', render: (d) => <span className={d.pf === 'Y' ? 'pass' : 'fail'}>{d.pf || '—'}</span> },
+  { key: 'pf', fallback: 'PF', type: 'text', render: (d) => {
+    const hasPf = Boolean(d.description && d.description.includes('PF'));
+    const text = hasPf ? '有massloading' : '没有massloading';
+    return <span className={hasPf ? 'pass' : 'fail'}>{text}</span>;
+  } },
   // 工艺
-  { key: 'eg', fallback: '电极间隙 EG', type: 'num', digits: 2 },
-  { key: 'fl', fallback: '指长 FL', type: 'num', digits: 2 },
-  { key: 'ag', fallback: '孔径 AG', type: 'num', digits: 2 },
-  { key: 'area_um2', fallback: '面积 (μm²)', type: 'num', digits: 0 },
+  { key: 'eg', fallback: 'EG', type: 'num', digits: 2 },
+  { key: 'fl', fallback: 'FL', type: 'num', digits: 2 },
+  { key: 'ag', fallback: 'AG', type: 'num', digits: 2 },
+  { key: 'area_um2', fallback: '面积', type: 'num', digits: 0 },
   // 主参数
   { key: 'fs_ghz', fallback: '串联谐振 fs (GHz)', type: 'num', digits: 4 },
   { key: 'fp_ghz', fallback: '并联谐振 fp (GHz)', type: 'num', digits: 4 },
@@ -187,6 +196,7 @@ export default function BatchDetail() {
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
   const [filesLoading, setFilesLoading] = useState<boolean>(false);
   const [showRecomputeModal, setShowRecomputeModal] = useState(false);
+  const [showRenameModal, setShowRenameModal] = useState(false);
   const fieldsState = useFields();
 
   // 计算列头：优先用 useFields 的 label+unit，缺失时回退到 fallback
@@ -260,7 +270,7 @@ export default function BatchDetail() {
     let cancelled = false;
     const params: Record<string, unknown> = { page, size };
     if (waferFilter) params.wafer = waferFilter;
-    if (pfFilter) params.pf = pfFilter;
+    if (pfFilter) params.massloading = pfFilter;
     listBatchDevices(batchNo, params)
       .then((d) => { if (!cancelled) setDevices(d); })
       .catch((e: Error) => { if (!cancelled) setError(e.message); });
@@ -338,6 +348,18 @@ export default function BatchDetail() {
 
   const isTaskActive = taskStatus === 'pending' || taskStatus === 'running';
 
+  const handleRename = async (newBatchNo: string) => {
+    if (!batchNo) return;
+    try {
+      setError(null);
+      const res = await renameBatch(batchNo, newBatchNo);
+      setShowRenameModal(false);
+      navigate(`/batches/${encodeURIComponent(res.batch_no)}`);
+    } catch (e: any) {
+      setError(e.response?.data?.detail || e.message || '重命名失败');
+    }
+  };
+
   return (
     <>
       <div className="toolbar">
@@ -370,6 +392,14 @@ export default function BatchDetail() {
             取消任务
           </button>
         )}
+        <button
+          className="btn"
+          disabled={!batchNo || isTaskActive}
+          onClick={() => setShowRenameModal(true)}
+          title="重命名批次号"
+        >
+          <I.edit size={13} /> 重命名
+        </button>
         <button className="btn" onClick={onExportCsv} disabled={exporting} title="导出当前批次全部 devices 为 CSV">
           <I.download size={13} /> {exporting ? '导出中…' : '导出 CSV'}
         </button>
@@ -502,9 +532,9 @@ export default function BatchDetail() {
                   setPage(1);
                 }}
               >
-                <option value="">全部 P/F</option>
-                <option value="Y">通过</option>
-                <option value="N">失败</option>
+                <option value="">全部 PF</option>
+                <option value="Y">有massloading</option>
+                <option value="N">没有massloading</option>
               </select>
             </div>
           </div>
@@ -513,6 +543,7 @@ export default function BatchDetail() {
               <thead>
                 <tr>
                   <th>原始文件名</th>
+                  <th>Description</th>
                   <th>器件 ID</th>
                   <th>端口</th>
                   {columns.map((c) => (
@@ -524,7 +555,7 @@ export default function BatchDetail() {
               <tbody>
                 {items.length === 0 && (
                   <tr>
-                    <td colSpan={columns.length + 4} className="dim" style={{ textAlign: 'center', padding: 24 }}>
+                    <td colSpan={columns.length + 5} className="dim" style={{ textAlign: 'center', padding: 24 }}>
                       暂无器件
                     </td>
                   </tr>
@@ -572,6 +603,13 @@ export default function BatchDetail() {
               setError(formatApiError(e, '重新计算失败'));
             }
           }}
+        />
+      )}
+      {showRenameModal && batchNo && (
+        <RenameBatchModal
+          batchNo={batchNo}
+          onClose={() => setShowRenameModal(false)}
+          onSubmit={handleRename}
         />
       )}
     </>
