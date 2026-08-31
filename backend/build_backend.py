@@ -97,8 +97,8 @@ def run(onedir: bool = False):
         "email_validator",
         "zipstream",
     ]
-    for imp in hidden:
-        args.append(f"--hidden-import={imp}")
+    # 注意：hidden 列表的消费在下方 PyInstaller 调用前统一进行，
+    # 后续段落如需追加直接 hidden.extend/append 即可
 
     # Celery / kombu 大量动态导入，collect-all 最稳
     args.extend(["--collect-all", "celery", "--collect-all", "kombu", "--collect-all", "billiard"])
@@ -112,12 +112,18 @@ def run(onedir: bool = False):
     # 代理模型推理：torch 体量大但页面实时推理必需（推理链路为懒加载导入，
     # PyInstaller 静态分析发现不了，必须显式收集）
     args.extend(["--collect-all", "torch"])
+    # Zp 校正器（zp_corrector.joblib，ExtraTrees）推理时需要 sklearn/joblib/threadpoolctl
+    args.extend(["--collect-all", "sklearn", "--collect-all", "joblib"])
+    hidden.append("threadpoolctl")
     hidden.extend([
         "app.ml.surrogate.infer",
         "app.ml.surrogate.model",
         "app.ml.surrogate.baseline",
         "app.ml.sparse.reconstructor",
     ])
+
+    for imp in hidden:
+        args.append(f"--hidden-import={imp}")
 
     print("执行 PyInstaller...")
     subprocess.check_call([sys.executable, "-m", "PyInstaller"] + args)

@@ -111,9 +111,12 @@ def _write_arrow(df, path: Path) -> None:
     import pyarrow as pa
 
     table = pa.Table.from_pandas(df, preserve_index=False)
-    with gzip.open(str(path), "wb", compresslevel=6) as sink:
-        with pa.ipc.new_file(sink, table.schema) as w:
-            w.write_table(table)
+    # mtime=0：同内容 → 同字节（git diff 干净、缓存友好）
+    with open(path, "wb") as raw:
+        with gzip.GzipFile(filename="", mode="wb", fileobj=raw,
+                           compresslevel=6, mtime=0) as sink:
+            with pa.ipc.new_file(sink, table.schema) as w:
+                w.write_table(table)
 
 
 def export_all(db_path: str | Path, surrogate_dir: str | Path | None, out_dir: str | Path) -> dict:
