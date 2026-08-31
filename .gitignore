@@ -90,3 +90,13 @@ backend/eval_out_ft/
 .web-deploy/
 frontend/public/webdata/
 .web-data/
+
+# 本地研究数据与工具（不入库：含客户数据/未发表论文/仿真中间产物）
+.claudian/
+.obsidian/
+Excalidraw/
+paper/
+batch2_vs_reference/
+/L_air = L_bot-6\[um\]/
+/D1_D2_*
+/副本SICM_AlN_DT.xlsx
