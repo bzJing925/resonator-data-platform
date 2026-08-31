@@ -1,5 +1,5 @@
 import React, { memo, Suspense, useEffect, useState } from 'react';
-import { Routes, Route, useLocation } from 'react-router-dom';
+import { Routes, Route, useLocation, Navigate } from 'react-router-dom';
 import Sidebar from './components/Sidebar';
 import ErrorBoundary from './components/ErrorBoundary';
 import FloatingUploadProgress from './components/FloatingUploadProgress';
@@ -8,6 +8,7 @@ import Dashboard from './pages/Dashboard';
 import { getHealth } from './api/endpoints';
 import { UploadProgressProvider } from './contexts/UploadProgressContext';
 import { PageStateProvider } from './contexts/PageStateContext';
+import { IS_STATIC } from './config';
 
 // 路由懒加载：非首屏页面按需加载，显著减小初始 bundle
 const Upload       = React.lazy(() => import('./pages/Upload'));
@@ -44,20 +45,22 @@ const Titlebar = memo(function Titlebar({ health }: { health?: { status?: string
       <div className="brand">
         <span className="mark">Σ</span>
         <span className="name" style={{ fontFamily: 'var(--font-display)', letterSpacing: '0.02em' }}>ALN 谐振器数据平台</span>
-        <span className="ver">v0.2 · 桌面版</span>
+        <span className="ver">{IS_STATIC ? 'v0.2 · 静态快照版' : 'v0.2 · 桌面版'}</span>
       </div>
       <div className="spacer" />
-      <div className="right">
-        <span className={`pill${dot}`}>
-          <span className="dot" />接口 · {statusText}
-        </span>
-        <span className={`pill${health?.db === 'ok' ? '' : ' warn'}`}>
-          <span className="dot" />数据库 · {dbText}
-        </span>
-        <span className={`pill${health?.redis === 'ok' ? '' : ' warn'}`}>
-          <span className="dot" />缓存 · {redisText}
-        </span>
-      </div>
+      {!IS_STATIC && (
+        <div className="right">
+          <span className={`pill${dot}`}>
+            <span className="dot" />接口 · {statusText}
+          </span>
+          <span className={`pill${health?.db === 'ok' ? '' : ' warn'}`}>
+            <span className="dot" />数据库 · {dbText}
+          </span>
+          <span className={`pill${health?.redis === 'ok' ? '' : ' warn'}`}>
+            <span className="dot" />缓存 · {redisText}
+          </span>
+        </div>
+      )}
     </div>
   );
 });
@@ -67,11 +70,17 @@ const Statusbar = memo(function Statusbar() {
   return (
     <div className="statusbar">
       <span className="seg">
-        <span className="dot" />已连接
+        <span className="dot" />{IS_STATIC ? '静态快照' : '已连接'}
       </span>
-      <span className="seg">PostgreSQL 15 数据库</span>
-      <span className="seg">Redis 7 缓存</span>
-      <span className="seg">Celery 任务队列</span>
+      {IS_STATIC ? (
+        <span className="seg">数据随构建同步 · 浏览器端计算</span>
+      ) : (
+        <>
+          <span className="seg">PostgreSQL 15 数据库</span>
+          <span className="seg">Redis 7 缓存</span>
+          <span className="seg">Celery 任务队列</span>
+        </>
+      )}
       <span className="spacer" />
       <span className="seg">
         路径：<b style={{ color: '#fff' }}>{loc.pathname}</b>
@@ -114,10 +123,21 @@ export default function App() {
                   <Route path="/batches" element={<Batches />} />
                   <Route path="/batches/:batchNo" element={<BatchDetail />} />
                   <Route path="/mappings" element={<Mappings />} />
-                  <Route path="/upload" element={<Upload />} />
-                  <Route path="/tasks" element={<Tasks />} />
-                  <Route path="/tasks/:taskId" element={<TaskDetail />} />
-                  <Route path="/impedance" element={<Impedance />} />
+                  {IS_STATIC ? (
+                    <>
+                      <Route path="/upload" element={<Navigate to="/" replace />} />
+                      <Route path="/tasks" element={<Navigate to="/" replace />} />
+                      <Route path="/tasks/:taskId" element={<Navigate to="/" replace />} />
+                      <Route path="/impedance" element={<Navigate to="/" replace />} />
+                    </>
+                  ) : (
+                    <>
+                      <Route path="/upload" element={<Upload />} />
+                      <Route path="/tasks" element={<Tasks />} />
+                      <Route path="/tasks/:taskId" element={<TaskDetail />} />
+                      <Route path="/impedance" element={<Impedance />} />
+                    </>
+                  )}
                   <Route path="/process" element={<Process />} />
                   <Route path="/surrogate" element={<Surrogate />} />
                   <Route path="*" element={<NotFound />} />

@@ -21,6 +21,7 @@ import ReprocessMetricsModal from '../components/ReprocessMetricsModal';
 import RenameBatchModal from '../components/RenameBatchModal';
 import useFields, { displayLabel } from '../hooks/useFields';
 import { usePageState } from '../contexts/PageStateContext';
+import { IS_STATIC } from '../config';
 import type { Batch, Device, FileEntry } from '../types';
 
 interface DeviceRowProps {
@@ -75,7 +76,10 @@ function computeOriginalSpans(items: Device[]): Map<number | string, OriginalCel
 const DeviceRow = memo(function DeviceRow({ device, columns, fmtCell, onRowClick, onDownload, originalSpan }: DeviceRowProps) {
   const d = device;
   return (
-    <tr style={{ cursor: 'pointer' }} onClick={() => onRowClick(d)}>
+    <tr
+      style={{ cursor: IS_STATIC ? 'default' : 'pointer' }}
+      onClick={() => { if (!IS_STATIC) onRowClick(d); }}
+    >
       {(!originalSpan || originalSpan.showCell) && (
         <td rowSpan={originalSpan?.rowSpan}>{d.original_filename || '—'}</td>
       )}
@@ -87,18 +91,20 @@ const DeviceRow = memo(function DeviceRow({ device, columns, fmtCell, onRowClick
       {columns.map((c) => (
         <td key={c.key} className={c.type === 'num' ? 'num mono' : ''}>{fmtCell(d, c)}</td>
       ))}
-      <td>
-        <button className="btn ghost sm" onClick={(e) => { e.stopPropagation(); onRowClick(d); }} title="查看曲线">
-          <I.curve size={12} />
-        </button>
-        <button
-          className="btn ghost sm"
-          onClick={(e) => { e.stopPropagation(); onDownload(d); }}
-          title="下载原始 S 参数文件"
-        >
-          <I.download size={12} />
-        </button>
-      </td>
+      {!IS_STATIC && (
+        <td>
+          <button className="btn ghost sm" onClick={(e) => { e.stopPropagation(); onRowClick(d); }} title="查看曲线">
+            <I.curve size={12} />
+          </button>
+          <button
+            className="btn ghost sm"
+            onClick={(e) => { e.stopPropagation(); onDownload(d); }}
+            title="下载原始 S 参数文件"
+          >
+            <I.download size={12} />
+          </button>
+        </td>
+      )}
     </tr>
   );
 });
@@ -226,9 +232,9 @@ export default function BatchDetail() {
     return () => { cancelled = true; };
   }, [batchNo]);
 
-  // 轮询批次关联任务状态，进行中时禁用重处理按钮
+  // 轮询批次关联任务状态，进行中时禁用重处理按钮（静态版无任务，跳过）
   useEffect(() => {
-    if (!detail?.task_id) return;
+    if (IS_STATIC || !detail?.task_id) return;
     let cancelled = false;
     let timer: number | undefined;
 
@@ -253,7 +259,7 @@ export default function BatchDetail() {
   }, [detail?.task_id]);
 
   useEffect(() => {
-    if (!batchNo) return;
+    if (IS_STATIC || !batchNo) return; // 静态版无源文件
     let cancelled = false;
     setFilesLoading(true);
     listBatchFiles(batchNo, true)
@@ -397,54 +403,59 @@ export default function BatchDetail() {
           disabled={!batchNo || isTaskActive}
           onClick={() => setShowRenameModal(true)}
           title="重命名批次号"
+          style={IS_STATIC ? { display: 'none' } : undefined}
         >
           <I.edit size={13} /> 重命名
         </button>
         <button className="btn" onClick={onExportCsv} disabled={exporting} title="导出当前批次全部 devices 为 CSV">
           <I.download size={13} /> {exporting ? '导出中…' : '导出 CSV'}
         </button>
-        <button className="btn" disabled title="敬请期待">
-          <I.download size={13} /> 导出 Excel
-        </button>
-        <button
-          className="btn"
-          disabled={!detail || detail.raw_zip_deleted || isTaskActive}
-          onClick={async () => {
-            if (!detail) return;
-            try {
-              setError(null);
-              await reextractBatch(detail.batch_no);
-              setTaskStatus('pending');
-            } catch (e: any) {
-              setError(formatApiError(e, '重新解压失败'));
-            }
-          }}
-        >
-          重新解压
-        </button>
-        <button
-          className="btn"
-          disabled={isTaskActive}
-          onClick={async () => {
-            if (!detail) return;
-            try {
-              setError(null);
-              await redeembedBatch(detail.batch_no);
-              setTaskStatus('pending');
-            } catch (e: any) {
-              setError(formatApiError(e, '重新去嵌失败'));
-            }
-          }}
-        >
-          重新去嵌
-        </button>
-        <button
-          className="btn"
-          disabled={isTaskActive}
-          onClick={() => setShowRecomputeModal(true)}
-        >
-          重新计算指标
-        </button>
+        {!IS_STATIC && (
+          <>
+            <button className="btn" disabled title="敬请期待">
+              <I.download size={13} /> 导出 Excel
+            </button>
+            <button
+              className="btn"
+              disabled={!detail || detail.raw_zip_deleted || isTaskActive}
+              onClick={async () => {
+                if (!detail) return;
+                try {
+                  setError(null);
+                  await reextractBatch(detail.batch_no);
+                  setTaskStatus('pending');
+                } catch (e: any) {
+                  setError(formatApiError(e, '重新解压失败'));
+                }
+              }}
+            >
+              重新解压
+            </button>
+            <button
+              className="btn"
+              disabled={isTaskActive}
+              onClick={async () => {
+                if (!detail) return;
+                try {
+                  setError(null);
+                  await redeembedBatch(detail.batch_no);
+                  setTaskStatus('pending');
+                } catch (e: any) {
+                  setError(formatApiError(e, '重新去嵌失败'));
+                }
+              }}
+            >
+              重新去嵌
+            </button>
+            <button
+              className="btn"
+              disabled={isTaskActive}
+              onClick={() => setShowRecomputeModal(true)}
+            >
+              重新计算指标
+            </button>
+          </>
+        )}
       </div>
 
       <div style={{ flex: 1, overflow: 'auto', padding: 14 }}>
@@ -500,14 +511,16 @@ export default function BatchDetail() {
           </div>
         )}
 
-        <div className="chart-card" style={{ margin: 0, marginBottom: 12 }}>
-          <div className="chart-head">
-            <span className="title">源文件管理</span>
+        {!IS_STATIC && (
+          <div className="chart-card" style={{ margin: 0, marginBottom: 12 }}>
+            <div className="chart-head">
+              <span className="title">源文件管理</span>
+            </div>
+            <div style={{ padding: 0, overflow: 'hidden' }}>
+              <FileManager batchNo={batchNo} onError={(msg) => setError(msg)} />
+            </div>
           </div>
-          <div style={{ padding: 0, overflow: 'hidden' }}>
-            <FileManager batchNo={batchNo} onError={(msg) => setError(msg)} />
-          </div>
-        </div>
+        )}
 
         <div className="chart-card" style={{ margin: 0 }}>
           <div className="chart-head">

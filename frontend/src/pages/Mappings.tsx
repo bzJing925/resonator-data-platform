@@ -7,6 +7,7 @@ import {
   deleteMapping,
 } from '../api/endpoints';
 import { usePageState } from '../contexts/PageStateContext';
+import { IS_STATIC } from '../config';
 import type { Mapping, MappingEntry } from '../types';
 
 interface EntryRowProps {
@@ -123,17 +124,21 @@ export default function Mappings() {
           谐振器 <span style={{ color: 'var(--fg-4)' }}>›</span> <b>对照表</b>
         </span>
         <div className="spacer" />
-        <input
-          className="input sm"
-          placeholder="新对照表名称（如 ELB003）"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          style={{ width: 220 }}
-        />
-        <input ref={fileRef} type="file" accept=".xlsx,.xls" />
-        <button className="btn primary" onClick={submit} disabled={uploading}>
-          <I.plus size={13} /> {uploading ? '上传中...' : '上传对照表'}
-        </button>
+        {!IS_STATIC && (
+          <>
+            <input
+              className="input sm"
+              placeholder="新对照表名称（如 ELB003）"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              style={{ width: 220 }}
+            />
+            <input ref={fileRef} type="file" accept=".xlsx,.xls" />
+            <button className="btn primary" onClick={submit} disabled={uploading}>
+              <I.plus size={13} /> {uploading ? '上传中...' : '上传对照表'}
+            </button>
+          </>
+        )}
       </div>
       {error && (
         <div style={{ padding: 12, background: 'var(--fail-soft)', color: 'var(--fail)' }}>{error}</div>
@@ -187,7 +192,7 @@ export default function Mappings() {
             <span className="dim mono" style={{ marginLeft: 8, fontSize: 11 }}>
               {entries.total || 0} 条目
             </span>
-            {cur && (
+            {cur && !IS_STATIC && (
               <button
                 className="btn ghost sm danger"
                 style={{ marginLeft: 'auto', height: 22 }}

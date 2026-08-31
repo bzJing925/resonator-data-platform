@@ -1,6 +1,7 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
 import I from './Icons';
+import { IS_STATIC } from '../config';
 
 const NAV = [
   { to: '/', icon: I.dashboard, label: '仪表盘', end: true },
@@ -14,10 +15,14 @@ const NAV = [
   { to: '/tasks', icon: I.cpu, label: '任务' },
 ];
 
+// 静态网页版：无上传/任务/阻抗曲线（原文件查看依赖后端）
+const STATIC_HIDDEN = new Set(['/upload', '/tasks', '/impedance']);
+const VISIBLE_NAV = IS_STATIC ? NAV.filter((n) => !STATIC_HIDDEN.has(n.to)) : NAV;
+
 export default function Sidebar() {
   return (
     <div className="rail">
-      {NAV.map((n) => {
+      {VISIBLE_NAV.map((n) => {
         const Ico = n.icon;
         return (
           <NavLink
