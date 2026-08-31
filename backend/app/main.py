@@ -37,12 +37,23 @@ log = logging.getLogger("aln")
 
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
+    settings = get_settings()
+    worker_thread = None
+    if settings.is_desktop:
+        from app.desktop_setup import init_desktop_environment
+        from app.workers.local_queue import start_local_worker, stop_local_worker
+
+        init_desktop_environment()
+        worker_thread = start_local_worker()
+
     watcher_task = None
-    if settings.WATCH_ENABLED:
+    if settings.WATCH_ENABLED and not settings.is_desktop:
         from app.watch.watcher import watch_uploads
 
         watcher_task = asyncio.create_task(watch_uploads())
     yield
+    if worker_thread is not None:
+        stop_local_worker()
     if watcher_task is not None:
         watcher_task.cancel()
         try:
@@ -86,7 +97,7 @@ app.add_middleware(GZipMiddleware, minimum_size=1024)
 ROOT_CANDIDATES = [
     Path(__file__).resolve().parent.parent.parent,
     Path(sys.executable).parent,
-    Path(getattr(sys, '_MEIPASS', Path.cwd())),
+    Path(getattr(sys, "_MEIPASS", Path.cwd())),
 ]
 STATIC_DIR = None
 for root in ROOT_CANDIDATES:
@@ -98,6 +109,8 @@ for root in ROOT_CANDIDATES:
 origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
 ]
 if os.environ.get("ALN_DESKTOP") == "1":
     origins.append(f"http://127.0.0.1:{os.environ.get('ALN_BACKEND_PORT', '8000')}")

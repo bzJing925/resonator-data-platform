@@ -41,6 +41,7 @@ def test_systematic_sample_step_calculation() -> None:
     当 n=25000, threshold=20000 时 step=2，采样后约 12500 行。
     当 n=45000, threshold=20000 时 step=3，采样后约 15000 行。
     """
+
     def _step(n: int, threshold: int = _SAMPLE_THRESHOLD) -> int:
         return (n // threshold) + 1
 

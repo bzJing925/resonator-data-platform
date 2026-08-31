@@ -44,6 +44,7 @@ def clean_tables() -> None:
     CI 应当用独立的临时数据库，无需此变量。
     """
     import os
+
     if os.environ.get("ALN_PROTECT_DB") == "1":
         pytest.skip("ALN_PROTECT_DB=1，跳过会清数据的集成测试")
     with engine.begin() as conn:
@@ -72,9 +73,7 @@ def test_fields_metadata(client: TestClient) -> None:
     assert {"fs_ghz", "fp_ghz", "qs", "qp", "k2eff_pct"} <= numeric_names
 
 
-def test_full_upload_query_flow(
-    client: TestClient, sample_mapping: Path, sample_zip: Path
-) -> None:
+def test_full_upload_query_flow(client: TestClient, sample_mapping: Path, sample_zip: Path) -> None:
     # 1. 上传对照表
     with sample_mapping.open("rb") as f:
         r = client.post(
@@ -117,22 +116,25 @@ def test_full_upload_query_flow(
     assert body["status"] == "success", body
     assert body["progress_pct"] == 100
 
-    # 重名上传应该 409
+    # 重名上传应自动重命名
     with sample_zip.open("rb") as f:
         r_dup = client.post(
             "/api/uploads",
             files={"file": ("T8901P.01.zip", f)},
             data={"mapping_id": str(mapping_id)},
         )
-    assert r_dup.status_code == 409
+    assert r_dup.status_code == 202, r_dup.text
+    assert r_dup.json()["batch_no"] == "T8901P.01-1"
 
-    # 4. 批次列表应该有 1 个
+    # 4. 批次列表应该有 2 个
     r = client.get("/api/batches")
     assert r.status_code == 200
     body = r.json()
-    assert body["total"] == 1
-    assert body["items"][0]["batch_no"] == "T8901P.01"
-    assert body["items"][0]["device_count"] >= 20
+    assert body["total"] == 2
+    batch_nos = {item["batch_no"] for item in body["items"]}
+    assert batch_nos == {"T8901P.01", "T8901P.01-1"}
+    for item in body["items"]:
+        assert item["device_count"] >= 20
 
     # 5. 跨批次查询（验证 23 行成功入库）
     r = client.post(
@@ -170,7 +172,7 @@ def test_full_upload_query_flow(
     # 7. distinct
     r = client.get("/api/query/distinct?field=batch_no")
     assert r.status_code == 200
-    assert r.json()["values"] == ["T8901P.01"]
+    assert set(r.json()["values"]) == {"T8901P.01", "T8901P.01-1"}
 
 
 def test_upload_validation(client: TestClient, sample_zip: Path) -> None:
@@ -216,12 +218,14 @@ def test_upload_cleans_orphan_zip_when_db_commit_fails(
     mapping_id = r.json()["id"]
 
     from app.config import get_settings
+
     uploads_dir = get_settings().uploads_dir
     before_zips = sorted(p for p in uploads_dir.rglob("*.zip") if p.is_file())
 
     # patch Session.commit 在第一次调用就抛 IntegrityError
     from sqlalchemy.exc import IntegrityError
     from sqlalchemy.orm import Session as _Session
+
     orig_commit = _Session.commit
     state = {"calls": 0}
 

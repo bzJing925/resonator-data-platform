@@ -161,10 +161,7 @@ def precompute_base_latents(
     with torch.no_grad():
         for batch_id, meta in dataset.batch_meta.items():
             base_spectrum = (
-                torch.from_numpy(meta["base_spectrum"])
-                .float()
-                .unsqueeze(0)
-                .unsqueeze(0)
+                torch.from_numpy(meta["base_spectrum"]).float().unsqueeze(0).unsqueeze(0)
             )
             base_spectrum = base_spectrum.to(device)
             z_base = vae.encode_deterministic(base_spectrum)
@@ -205,9 +202,9 @@ def train_epoch(
 
     for batch in dataloader:
         spectrum = batch["spectrum"].to(device)  # (B, 1, N)
-        params = batch["params"].to(device)      # (B, 6)
-        fs = batch["fs"].to(device)              # (B,)
-        fp = batch["fp"].to(device)              # (B,)
+        params = batch["params"].to(device)  # (B, 6)
+        fs = batch["fs"].to(device)  # (B,)
+        fp = batch["fp"].to(device)  # (B,)
         batch_ids = batch["batch_id"].cpu().numpy()
 
         # 收集该 batch 的基准 latent 和基准频谱
@@ -216,8 +213,8 @@ def train_epoch(
         for bid in batch_ids:
             z_base_list.append(base_latents[int(bid)]["z_base"])
             s_base_list.append(base_latents[int(bid)]["base_spectrum"])
-        z_base = torch.stack(z_base_list, dim=0).to(device)      # (B, D)
-        s_base = torch.stack(s_base_list, dim=0).to(device)      # (B, N)
+        z_base = torch.stack(z_base_list, dim=0).to(device)  # (B, D)
+        s_base = torch.stack(s_base_list, dim=0).to(device)  # (B, N)
         s_base = s_base.unsqueeze(1)  # (B, 1, N)
 
         optimizer.zero_grad()
@@ -239,7 +236,7 @@ def train_epoch(
         sampler_loss = torch.tensor(0.0, device=device)
         if phase == "C" and smart_sampler is not None:
             grads = numerical_gradients(recon_vae)  # (B, 3, N)
-            p = smart_sampler(grads)                # (B, N)
+            p = smart_sampler(grads)  # (B, N)
             mask = enforce_critical_points_mask(p, recon_vae, target_k)
 
             # 降采样后的重建损失（只对保留点计算 MSE）
@@ -437,7 +434,8 @@ def main() -> None:
     n_train = int(0.9 * n_total)
     n_val = n_total - n_train
     train_set, val_set = torch.utils.data.random_split(
-        dataset, [n_train, n_val],
+        dataset,
+        [n_train, n_val],
         generator=torch.Generator().manual_seed(args.seed),
     )
 
@@ -518,8 +516,17 @@ def main() -> None:
         for epoch in range(1, phase_epochs + 1):
             t0 = time.time()
             train_metrics = train_epoch(
-                train_loader, vae, residual_net, smart_samp, pinn_loss,
-                opt, device, _bl, phase_key, args.target_k, epoch,
+                train_loader,
+                vae,
+                residual_net,
+                smart_samp,
+                pinn_loss,
+                opt,
+                device,
+                _bl,
+                phase_key,
+                args.target_k,
+                epoch,
             )
             scheduler.step()
 
@@ -527,7 +534,13 @@ def main() -> None:
             do_validate = (epoch % args.validate_every == 0) or (epoch == phase_epochs)
             if do_validate:
                 val_metrics = validate(
-                    val_loader, vae, residual_net, smart_samp, device, _bl, args.target_k,
+                    val_loader,
+                    vae,
+                    residual_net,
+                    smart_samp,
+                    device,
+                    _bl,
+                    args.target_k,
                 )
                 _bl = precompute_base_latents(dataset, vae, device)
 
@@ -562,7 +575,7 @@ def main() -> None:
                 print(
                     f"Epoch {global_epoch:03d} | loss={train_metrics['loss']:.4f} "
                     f"val_mse={val_metrics['mse']:.6f} val_ssim={val_metrics['ssim']:.4f} "
-                    f"lr={scheduler.get_last_lr()[0]:.6f} {tag} ({time.time()-t0:.1f}s)"
+                    f"lr={scheduler.get_last_lr()[0]:.6f} {tag} ({time.time() - t0:.1f}s)"
                 )
 
                 if patience_counter >= args.early_stop_patience:
@@ -598,14 +611,20 @@ def main() -> None:
         "Phase B: VAE + ResidualNet",
         min(args.phase_b_epochs, args.epochs - args.phase_a_epochs),
         list(vae.parameters()) + list(residual_net.parameters()),
-        "B", None, lr_mult=0.5, bl=base_latents,
+        "B",
+        None,
+        lr_mult=0.5,
+        bl=base_latents,
     )
 
     base_latents = _train_phase(
         "Phase C: + SmartSampler",
         min(args.phase_c_epochs, args.epochs - args.phase_a_epochs - args.phase_b_epochs),
         list(vae.parameters()) + list(residual_net.parameters()) + list(smart_sampler.parameters()),
-        "C", smart_sampler, lr_mult=0.3, bl=base_latents,
+        "C",
+        smart_sampler,
+        lr_mult=0.3,
+        bl=base_latents,
     )
 
     # 恢复最佳状态

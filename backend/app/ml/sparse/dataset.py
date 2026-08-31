@@ -192,7 +192,7 @@ def fixed_rule_sample(
         d_fs = np.abs(freq - fs) / (bw * 0.3)
         d_fp = np.abs(freq - fp) / (bw * 0.3)
         main_weights = np.zeros(n_total, dtype=np.float64)
-        gauss = np.exp(-np.minimum(d_fs, d_fp) ** 2)
+        gauss = np.exp(-(np.minimum(d_fs, d_fp) ** 2))
         main_weights[region_mask["main"]] = gauss[region_mask["main"]]
 
     f_main, z_main = _weighted_sample_from_mask(
@@ -225,6 +225,7 @@ def baseline_interpolate(
         # 点太少，退化为线性插值
         return np.interp(target_freq, sample_freq, sample_z)
     from scipy.interpolate import CubicSpline
+
     cs = CubicSpline(sample_freq, sample_z, extrapolate=True)
     return cs(target_freq).astype(np.float64)
 
@@ -246,17 +247,21 @@ def _load_file_worker(args: tuple[str, int]) -> list[dict] | None:
                 freq, z_db, region_mask, target_k, fs=params["fs"], fp=params["fp"]
             )
             z_baseline = baseline_interpolate(sf, sz, freq)
-            return [{
-                "cond": np.array([params["fs"], params["fp"], params["Qs"],
-                                  params["Qp"], params["kt2"]], dtype=np.float32),
-                "sample_freq": sf.astype(np.float32),
-                "sample_z": sz.astype(np.float32),
-                "target_freq": freq.astype(np.float32),
-                "target_z": z_db.astype(np.float32),
-                "z_baseline": z_baseline.astype(np.float32),
-                "region_ids": region_ids,
-                "filename": f.name,
-            }]
+            return [
+                {
+                    "cond": np.array(
+                        [params["fs"], params["fp"], params["Qs"], params["Qp"], params["kt2"]],
+                        dtype=np.float32,
+                    ),
+                    "sample_freq": sf.astype(np.float32),
+                    "sample_z": sz.astype(np.float32),
+                    "target_freq": freq.astype(np.float32),
+                    "target_z": z_db.astype(np.float32),
+                    "z_baseline": z_baseline.astype(np.float32),
+                    "region_ids": region_ids,
+                    "filename": f.name,
+                }
+            ]
         else:
             z_samples = s2p_to_z_samples(f)
             samples = []
@@ -272,17 +277,21 @@ def _load_file_worker(args: tuple[str, int]) -> list[dict] | None:
                     freq, z_db, region_mask, target_k, fs=params["fs"], fp=params["fp"]
                 )
                 z_baseline = baseline_interpolate(sf, sz, freq)
-                samples.append({
-                    "cond": np.array([params["fs"], params["fp"], params["Qs"],
-                                      params["Qp"], params["kt2"]], dtype=np.float32),
-                    "sample_freq": sf.astype(np.float32),
-                    "sample_z": sz.astype(np.float32),
-                    "target_freq": freq.astype(np.float32),
-                    "target_z": z_db.astype(np.float32),
-                    "z_baseline": z_baseline.astype(np.float32),
-                    "region_ids": region_ids,
-                    "filename": f"{f.stem}_{port_name}.s1p",
-                })
+                samples.append(
+                    {
+                        "cond": np.array(
+                            [params["fs"], params["fp"], params["Qs"], params["Qp"], params["kt2"]],
+                            dtype=np.float32,
+                        ),
+                        "sample_freq": sf.astype(np.float32),
+                        "sample_z": sz.astype(np.float32),
+                        "target_freq": freq.astype(np.float32),
+                        "target_z": z_db.astype(np.float32),
+                        "z_baseline": z_baseline.astype(np.float32),
+                        "region_ids": region_ids,
+                        "filename": f"{f.stem}_{port_name}.s1p",
+                    }
+                )
             return samples
     except Exception as exc:
         log.warning("[跳过] %s: %s", f.name, exc)
@@ -329,8 +338,7 @@ class SparseReconDataset(Dataset):
             return
 
         print(
-            f"SparseReconDataset: 发现 {len(all_files)} 个文件，"
-            f"使用 {num_workers} 进程并行加载..."
+            f"SparseReconDataset: 发现 {len(all_files)} 个文件，使用 {num_workers} 进程并行加载..."
         )
 
         from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -373,12 +381,12 @@ class SparseReconDataset(Dataset):
         samples = np.stack([d["sample_freq"], sample_z], axis=1)  # (K, 2)
 
         return {
-            "cond": torch.from_numpy(d["cond"]).float(),           # (5,)
-            "samples": torch.from_numpy(samples).float(),           # (K, 2)
+            "cond": torch.from_numpy(d["cond"]).float(),  # (5,)
+            "samples": torch.from_numpy(samples).float(),  # (K, 2)
             "target_freq": torch.from_numpy(d["target_freq"]).float(),  # (N,)
-            "target_z": torch.from_numpy(target_z).float(),         # (N,)
-            "z_baseline": torch.from_numpy(d["z_baseline"]).float(),    # (N,)
-            "region_ids": torch.from_numpy(d["region_ids"]).long(),    # (N,)
+            "target_z": torch.from_numpy(target_z).float(),  # (N,)
+            "z_baseline": torch.from_numpy(d["z_baseline"]).float(),  # (N,)
+            "region_ids": torch.from_numpy(d["region_ids"]).long(),  # (N,)
             "filename": d["filename"],
         }
 

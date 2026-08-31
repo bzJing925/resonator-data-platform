@@ -14,9 +14,7 @@ import pytest
 from app.core.touchstone import split_s2p_to_s1p
 
 _GOOD_HEADER = "! comment\n# Hz S MA R 50\n"
-_GOOD_DATA_ROW = (
-    "1.0e9 0.1 -0.2 0.3 -0.4 0.5 -0.6 0.7 -0.8\n"
-)
+_GOOD_DATA_ROW = "1.0e9 0.1 -0.2 0.3 -0.4 0.5 -0.6 0.7 -0.8\n"
 
 
 def _make_s2p(tmp_path: Path, body: str) -> Path:

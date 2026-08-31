@@ -1,5 +1,4 @@
-"""PINN 训练辅助工具：基准选择、频谱预处理、评估指标。
-"""
+"""PINN 训练辅助工具：基准选择、频谱预处理、评估指标。"""
 
 from __future__ import annotations
 
@@ -40,9 +39,7 @@ def select_base_device(devices: list[dict]) -> dict:
     candidates = sorted_by_fs[: max(1, len(sorted_by_fs) // 5)]
 
     # 在候选集中找面积中位数
-    area_vals = [
-        d.get("area_um2") for d in candidates if d.get("area_um2") is not None
-    ]
+    area_vals = [d.get("area_um2") for d in candidates if d.get("area_um2") is not None]
     if area_vals:
         area_median = float(np.median(area_vals))
         base = min(
@@ -118,10 +115,7 @@ def compute_ssim(
     # 构造 1D 高斯核
     sigma = 1.5
     gauss = torch.tensor(
-        [
-            np.exp(-((x - window_size // 2) ** 2) / (2 * sigma**2))
-            for x in range(window_size)
-        ],
+        [np.exp(-((x - window_size // 2) ** 2) / (2 * sigma**2)) for x in range(window_size)],
         dtype=torch.float32,
         device=s1.device,
     )

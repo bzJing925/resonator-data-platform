@@ -15,6 +15,7 @@
 | 上传 | POST | `/api/uploads` | 上传 zip + 启动处理任务 |
 | 上传 | POST | `/api/uploads/chunk` | 分块上传（>100MB 文件用） |
 | 任务 | GET | `/api/tasks/{task_id}` | 任务详情 |
+| 任务 | POST | `/api/tasks/{task_id}/cancel` | 取消进行中的任务并清理上传文件 |
 | 任务 | GET | `/api/tasks/{task_id}/stream` | SSE 实时推进度 |
 | 任务 | GET | `/api/tasks` | 任务列表（最近 50） |
 | 批次 | GET | `/api/batches` | 批次列表（分页） |
@@ -86,13 +87,36 @@
   "id": "9f8e7d6c-...",
   "batch_no": "T8901P.01",
   "status": "running",
+  "kind": "upload",
   "progress_pct": 42,
   "progress_msg": "提取参数中（4382/10000）",
+  "stage": "metrics",
+  "stage_progress_pct": 35,
   "started_at": "2026-05-09T12:34:56Z",
   "finished_at": null,
-  "error_msg": null
+  "cancelled_at": null,
+  "error_msg": null,
+  "raw_zip_deleted": false
 }
 ```
+
+- `kind`：`upload` / `reextract` / `redeembed` / `recompute`。
+- `stage` / `stage_progress_pct`：当前阶段与阶段内进度。
+- `raw_zip_deleted`：原始 zip 是否已清理。
+
+### POST `/api/tasks/{task_id}/cancel`
+
+取消状态为 `pending` 或 `running` 的任务。
+
+- 对 `upload` 任务：停止 worker 后删除 batch（级联删 devices / file_nodes）、解压目录和原始 zip。
+- 对重处理任务（`reextract`/`redeembed`/`recompute`）：仅停止 worker，不删除已有批次数据。
+- 重复取消已 `cancelled` 的任务幂等，直接返回当前任务详情。
+
+**响应** `200 OK`：当前 `TaskDetail`。
+
+**错误**：
+- `404` 任务不存在
+- `409` 任务已结束（`success` / `failed`）
 
 ### GET `/api/tasks/{task_id}/stream`
 

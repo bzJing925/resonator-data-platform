@@ -116,11 +116,13 @@ def parse_s1p_batch(
     for f in files:
         try:
             freq, s11 = parse_s1p(f, target_n_freq)
-            results.append({
-                "filename": f.name,
-                "freq_hz": freq,
-                "s11_db": s11,
-            })
+            results.append(
+                {
+                    "filename": f.name,
+                    "freq_hz": freq,
+                    "s11_db": s11,
+                }
+            )
         except Exception as exc:
             print(f"[警告] 跳过 {f.name}: {exc}")
 

@@ -7,7 +7,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import I from './Icons.jsx';
+import I from './Icons';
 import {
   listFileTree,
   moveFileTreeNodes,
@@ -16,7 +16,7 @@ import {
   renameFileTreeNode,
   deleteFileTreeNodes,
   downloadFileTreeNodesZip,
-} from '../api/endpoints.js';
+} from '../api/endpoints';
 
 function formatBytes(bytes) {
   if (bytes == null || bytes < 0) return '—';

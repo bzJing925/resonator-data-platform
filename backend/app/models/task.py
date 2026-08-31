@@ -9,6 +9,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     Index,
+    Integer,
     SmallInteger,
     Text,
     func,
@@ -21,11 +22,11 @@ from app.models.base import Base
 class UploadTask(Base):
     __tablename__ = "upload_tasks"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True)
     batch_no: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(Text, default="pending", nullable=False)
     progress_pct: Mapped[int] = mapped_column(SmallInteger, default=0, nullable=False)
-    # stage 把整条管线拆成“解压 / 指标计算”两个阶段；stage_progress_pct 是当前阶段内进度。
+    # stage 把整条管线拆成“解压 / 去嵌 / 指标计算”三个阶段；stage_progress_pct 是当前阶段内进度。
     stage: Mapped[str] = mapped_column(Text, default="extract", nullable=False)
     stage_progress_pct: Mapped[int] = mapped_column(SmallInteger, default=0, nullable=False)
     progress_msg: Mapped[str | None] = mapped_column(Text)
@@ -34,16 +35,22 @@ class UploadTask(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     celery_task_id: Mapped[str | None] = mapped_column(Text)
+    kind: Mapped[str] = mapped_column(Text, default="upload", nullable=False)
 
     __table_args__ = (
         CheckConstraint(
-            "status IN ('pending','running','success','failed')",
+            "status IN ('pending','running','success','failed','cancelled')",
             name="ck_uptask_status",
         ),
         CheckConstraint(
-            "stage IN ('extract','metrics','done','failed')",
+            "stage IN ('extract','deembed','metrics','done','failed')",
             name="ck_uptask_stage",
+        ),
+        CheckConstraint(
+            "kind IN ('upload','reextract','redeembed','recompute')",
+            name="ck_uptask_kind",
         ),
         CheckConstraint(
             "progress_pct BETWEEN 0 AND 100",

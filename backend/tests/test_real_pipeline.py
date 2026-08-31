@@ -198,14 +198,11 @@ def run_real_pipeline() -> dict:
     error_count = counters.get("error", 0)
 
     assert progress_count >= MIN_PROGRESS_EVENTS, (
-        f"progress 事件 {progress_count} < {MIN_PROGRESS_EVENTS}，"
-        f"worker 可能没在发心跳"
+        f"progress 事件 {progress_count} < {MIN_PROGRESS_EVENTS}，worker 可能没在发心跳"
     )
     assert error_count == 0, f"不应有 error 事件: {last_payload.get('error')}"
     assert done_count >= 1, f"必须收到至少 1 条 done 事件: {counters}"
-    assert final_status == "success", (
-        f"final status 应该是 success: {final_task_body}"
-    )
+    assert final_status == "success", f"final status 应该是 success: {final_task_body}"
 
     # 8. 验证 batch 入库情况
     print("[step 8] check batches & device_count")

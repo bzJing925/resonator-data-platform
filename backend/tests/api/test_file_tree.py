@@ -86,9 +86,7 @@ def test_file_tree_navigate_and_mkdir(
     zip_node = r.json()[0]
 
     # 进入 zip 文件夹，应看到真实文件
-    r = client.get(
-        "/api/files/tree", params={"batch_no": batch_no, "parent_id": zip_node["id"]}
-    )
+    r = client.get("/api/files/tree", params={"batch_no": batch_no, "parent_id": zip_node["id"]})
     assert r.status_code == 200, r.text
     children = r.json()
     assert len(children) > 0
@@ -127,9 +125,7 @@ def test_file_tree_reorder_and_delete(
 
     r = client.get("/api/files/tree", params={"batch_no": batch_no})
     zip_node = r.json()[0]
-    r = client.get(
-        "/api/files/tree", params={"batch_no": batch_no, "parent_id": zip_node["id"]}
-    )
+    r = client.get("/api/files/tree", params={"batch_no": batch_no, "parent_id": zip_node["id"]})
     children = r.json()
     if len(children) < 2:
         pytest.skip("样例文件不足 2 个，跳过排序测试")
@@ -142,21 +138,15 @@ def test_file_tree_reorder_and_delete(
     )
     assert r.status_code == 200, r.text
 
-    r = client.get(
-        "/api/files/tree", params={"batch_no": batch_no, "parent_id": zip_node["id"]}
-    )
+    r = client.get("/api/files/tree", params={"batch_no": batch_no, "parent_id": zip_node["id"]})
     assert [n["id"] for n in r.json()] == reversed_ids
 
     # 软删除
-    r = client.post(
-        "/api/files/tree/delete", json={"node_ids": [reversed_ids[0]]}
-    )
+    r = client.post("/api/files/tree/delete", json={"node_ids": [reversed_ids[0]]})
     assert r.status_code == 200, r.text
     assert r.json()["deleted"] >= 1
 
-    r = client.get(
-        "/api/files/tree", params={"batch_no": batch_no, "parent_id": zip_node["id"]}
-    )
+    r = client.get("/api/files/tree", params={"batch_no": batch_no, "parent_id": zip_node["id"]})
     assert reversed_ids[0] not in [n["id"] for n in r.json()]
 
 

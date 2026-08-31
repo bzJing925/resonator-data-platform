@@ -65,9 +65,7 @@ def create_upload(
         )
 
     is_snp = (
-        fname_lower.endswith(".s1p")
-        or fname_lower.endswith(".s2p")
-        or fname_lower.endswith(".snp")
+        fname_lower.endswith(".s1p") or fname_lower.endswith(".s2p") or fname_lower.endswith(".snp")
     )
     batch_no = Path(file.filename).stem
     if not batch_no:
@@ -172,9 +170,8 @@ def create_upload(
             process_type=process_type,
         )
         if task is None:
-            # 重复批次：删除刚保存的 zip
             saved_path.unlink(missing_ok=True)
-            raise HTTPException(status_code=409, detail=f"批次 {batch_no} 已存在")
+            raise HTTPException(status_code=500, detail="创建批次失败")
     except HTTPException:
         raise
     except IntegrityError:
@@ -185,16 +182,14 @@ def create_upload(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except TaskDispatchError as exc:
         saved_path.unlink(missing_ok=True)
-        raise HTTPException(
-            status_code=503, detail=f"任务队列不可用: {exc}"
-        ) from exc
+        raise HTTPException(status_code=503, detail=f"任务队列不可用: {exc}") from exc
     except Exception as exc:
         saved_path.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail=f"创建批次失败: {exc!s}") from exc
 
     return UploadAccepted(
         task_id=str(task.id),
-        batch_no=batch_no,
+        batch_no=task.batch_no,
         status=task.status,
         stream_url=f"/api/tasks/{task.id}/stream",
     )

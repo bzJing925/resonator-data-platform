@@ -34,9 +34,7 @@ class ResonatorRow(BaseModel):
     fl: float | None = None
     ag: float | None = None
     pf: PfFlag = "N"
-    area_n: int | None = Field(
-        default=None, description="mark 末尾数字（type 字段，不解释语义）"
-    )
+    area_n: int | None = Field(default=None, description="mark 末尾数字（type 字段，不解释语义）")
     area_um2: int | None = Field(
         default=None, description="从 mapping description 解析（NNN&NNN 的对应面）"
     )

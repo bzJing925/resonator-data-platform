@@ -89,12 +89,8 @@ def main() -> None:
     smart_sampler = SmartSampler(n_freq=args.n_freq).to(device)
 
     vae.load_state_dict(torch.load(ckpt_dir / "vae.pt", map_location=device))
-    residual_net.load_state_dict(
-        torch.load(ckpt_dir / "residual_net.pt", map_location=device)
-    )
-    smart_sampler.load_state_dict(
-        torch.load(ckpt_dir / "smart_sampler.pt", map_location=device)
-    )
+    residual_net.load_state_dict(torch.load(ckpt_dir / "residual_net.pt", map_location=device))
+    smart_sampler.load_state_dict(torch.load(ckpt_dir / "smart_sampler.pt", map_location=device))
     vae.eval()
     residual_net.eval()
     smart_sampler.eval()
@@ -126,8 +122,8 @@ def main() -> None:
     for idx in indices:
         item = dataset[idx]
         spectrum = item["spectrum"].unsqueeze(0).to(device)  # (1, 1, N)
-        params = item["params"].unsqueeze(0).to(device)      # (1, 6)
-        params_orig = params * params_std + params_mean      # 反归一化
+        params = item["params"].unsqueeze(0).to(device)  # (1, 6)
+        params_orig = params * params_std + params_mean  # 反归一化
 
         # 重建
         delta_z = residual_net(params)
@@ -139,13 +135,15 @@ def main() -> None:
         p = smart_sampler(grads)
         mask = enforce_critical_points_mask(p, recon, args.target_k)
 
-        samples.append({
-            "filename": dataset.devices[idx]["filename"],
-            "original": spectrum.squeeze().cpu().numpy(),
-            "recon": recon.squeeze().cpu().numpy(),
-            "mask": mask.squeeze().cpu().numpy(),
-            "params": params_orig.squeeze().cpu().numpy(),
-        })
+        samples.append(
+            {
+                "filename": dataset.devices[idx]["filename"],
+                "original": spectrum.squeeze().cpu().numpy(),
+                "recon": recon.squeeze().cpu().numpy(),
+                "mask": mask.squeeze().cpu().numpy(),
+                "params": params_orig.squeeze().cpu().numpy(),
+            }
+        )
 
     # 尝试用 matplotlib 绘图；若不可用则输出文本报告
     try:

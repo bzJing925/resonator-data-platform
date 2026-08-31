@@ -311,9 +311,7 @@ def run(args: argparse.Namespace) -> int:
         else:
             with ThreadPoolExecutor(max_workers=args.workers) as ex:
                 futures = {
-                    ex.submit(
-                        process_one, client, z, mapping_id, args, existing_batches
-                    ): (i, z)
+                    ex.submit(process_one, client, z, mapping_id, args, existing_batches): (i, z)
                     for i, z in enumerate(zips, 1)
                 }
                 for fut in as_completed(futures):
@@ -351,10 +349,7 @@ def report_result(r: UploadResult) -> None:
     if r.status == "skipped":
         print("       skip: batch already exists")
     elif r.status == "success":
-        print(
-            f"       done: device_count={r.device_count}, "
-            f"time={format_elapsed(r.elapsed_sec)}"
-        )
+        print(f"       done: device_count={r.device_count}, time={format_elapsed(r.elapsed_sec)}")
     else:
         print(f"       FAILED: {r.error_msg}")
 

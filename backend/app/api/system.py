@@ -25,13 +25,16 @@ def health(db: DbSession) -> dict:
         db_status = f"error: {exc!s}"
 
     redis_status = "ok"
-    try:
-        # 用 context manager 关闭连接 — /health 通常被监控按秒级轮询，
-        # 没有 close 会让每次调用都新开一个 pool，逐渐耗光 redis 连接数。
-        with Redis.from_url(settings.REDIS_URL, decode_responses=True) as r:
-            r.ping()
-    except Exception as exc:
-        redis_status = f"error: {exc!s}"
+    if settings.is_desktop:
+        redis_status = "skipped"
+    else:
+        try:
+            # 用 context manager 关闭连接 — /health 通常被监控按秒级轮询，
+            # 没有 close 会让每次调用都新开一个 pool，逐渐耗光 redis 连接数。
+            with Redis.from_url(settings.REDIS_URL, decode_responses=True) as r:
+                r.ping()
+        except Exception as exc:
+            redis_status = f"error: {exc!s}"
 
     disk_free_gb: float | None = None
     disk_total_gb: float | None = None
@@ -42,7 +45,7 @@ def health(db: DbSession) -> dict:
     except Exception:
         pass
 
-    overall = "ok" if db_status == "ok" and redis_status == "ok" else "degraded"
+    overall = "ok" if db_status == "ok" and redis_status in ("ok", "skipped") else "degraded"
     return {
         "status": overall,
         "db": db_status,

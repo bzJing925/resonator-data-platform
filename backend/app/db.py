@@ -63,22 +63,21 @@ _patch_psycopg_server_version()
 
 _settings = get_settings()
 
-# 当 PostgreSQL server_encoding 为 SQL_ASCII 时，psycopg 可能把 TEXT 列以 bytes
-# 返回。通过连接参数强制 client_encoding=utf8，确保字符串列正常解码。
-_connect_args: dict[str, Any] = {}
-if _settings.DATABASE_URL.startswith("postgresql+psycopg://"):
-    _connect_args["options"] = "-c client_encoding=utf8"
+_engine_kwargs: dict[str, Any] = {"pool_pre_ping": True, "future": True}
+if _settings.resolved_database_url.startswith("sqlite"):
+    _engine_kwargs["connect_args"] = {"check_same_thread": False}
+else:
+    # 当 PostgreSQL server_encoding 为 SQL_ASCII 时，psycopg 可能把 TEXT 列以 bytes
+    # 返回。通过连接参数强制 client_encoding=utf8，确保字符串列正常解码。
+    _engine_kwargs.update(
+        pool_size=_settings.DB_POOL_SIZE,
+        max_overflow=_settings.DB_MAX_OVERFLOW,
+        pool_recycle=_settings.DB_POOL_RECYCLE,
+        pool_timeout=_settings.DB_POOL_TIMEOUT,
+    )
+    _engine_kwargs["connect_args"] = {"options": "-c client_encoding=utf8"}
 
-engine = create_engine(
-    _settings.DATABASE_URL,
-    pool_pre_ping=True,
-    future=True,
-    pool_size=_settings.DB_POOL_SIZE,
-    max_overflow=_settings.DB_MAX_OVERFLOW,
-    pool_recycle=_settings.DB_POOL_RECYCLE,
-    pool_timeout=_settings.DB_POOL_TIMEOUT,
-    connect_args=_connect_args,
-)
+engine = create_engine(_settings.resolved_database_url, **_engine_kwargs)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 
 

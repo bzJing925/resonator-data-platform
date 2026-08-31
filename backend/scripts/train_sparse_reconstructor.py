@@ -54,16 +54,18 @@ def get_device(prefer: str = "auto") -> torch.device:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="训练稀疏采样重建网络")
-    parser.add_argument("--s1p-dir", type=str, nargs="+", required=True,
-                        help="S1P/S2P 文件目录（可多个）")
+    parser.add_argument(
+        "--s1p-dir", type=str, nargs="+", required=True, help="S1P/S2P 文件目录（可多个）"
+    )
     parser.add_argument("--piezo-thickness", type=str, default="308", help="压电层厚度标识")
     parser.add_argument("--target-k", type=int, default=300, help="目标采样点数")
     parser.add_argument("--d-model", type=int, default=64, help="Transformer hidden dim")
     parser.add_argument("--n-encoder-layers", type=int, default=4, help="Transformer encoder 层数")
     parser.add_argument("--n-heads", type=int, default=4, help="注意力头数")
     parser.add_argument("--epochs", type=int, default=200, help="总 epoch 数")
-    parser.add_argument("--phase1-epochs", type=int, default=50,
-                        help="Phase 1 epoch 数（固定采样）")
+    parser.add_argument(
+        "--phase1-epochs", type=int, default=50, help="Phase 1 epoch 数（固定采样）"
+    )
     parser.add_argument("--batch-size", type=int, default=8, help="batch size")
     parser.add_argument("--lr", type=float, default=1e-3, help="学习率")
     parser.add_argument("--weight-decay", type=float, default=1e-4, help="权重衰减")
@@ -73,8 +75,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--noise-std", type=float, default=0.05, help="数据增强噪声")
     parser.add_argument("--seed", type=int, default=42, help="随机种子")
     parser.add_argument("--resume", action="store_true", help="从输出目录的 checkpoint 续训")
-    parser.add_argument("--steps-per-run", type=int, default=5,
-                        help="每轮跑的 epoch 数（用于分轮续跑）")
+    parser.add_argument(
+        "--steps-per-run", type=int, default=5, help="每轮跑的 epoch 数（用于分轮续跑）"
+    )
     return parser.parse_args()
 
 
@@ -97,11 +100,11 @@ def train_epoch(
     n_batches = 0
 
     for batch in dataloader:
-        cond = batch["cond"].to(device)              # (B, 5)
-        samples = batch["samples"].to(device)        # (B, K, 2)
+        cond = batch["cond"].to(device)  # (B, 5)
+        samples = batch["samples"].to(device)  # (B, K, 2)
         sample_mask = batch["sample_mask"].to(device)  # (B, K)
         target_freq = batch["target_freq"].to(device)  # (B, N)
-        target_z = batch["target_z"].to(device)      # (B, N)
+        target_z = batch["target_z"].to(device)  # (B, N)
         z_baseline = batch.get("z_baseline")
         if z_baseline is not None:
             z_baseline = z_baseline.to(device)  # (B, N)
@@ -113,9 +116,13 @@ def train_epoch(
             fs_true = cond[:, 0]
             fp_true = cond[:, 1]
             p_norm, y_soft, k_pred = sampler(
-                z_t, region_ids, freq=target_freq,
-                fs=fs_true, fp=fp_true,
-                target_k=target_k, use_gumbel=True,
+                z_t,
+                region_ids,
+                freq=target_freq,
+                fs=fs_true,
+                fp=fp_true,
+                target_k=target_k,
+                use_gumbel=True,
             )
             # 使用 k_pred 作为实际采样点数（自适应）
             b, n = target_z.shape
@@ -137,12 +144,17 @@ def train_epoch(
                 sz = target_z[batch_idx, idx]
                 pad_len = target_k - len(idx)
                 if pad_len > 0:
-                    sf = torch.cat([
-                        sf, torch.full((pad_len,), target_freq[batch_idx, -1].item(), device=device)
-                    ])
-                    sz = torch.cat([
-                        sz, torch.full((pad_len,), target_z[batch_idx, -1].item(), device=device)
-                    ])
+                    sf = torch.cat(
+                        [
+                            sf,
+                            torch.full(
+                                (pad_len,), target_freq[batch_idx, -1].item(), device=device
+                            ),
+                        ]
+                    )
+                    sz = torch.cat(
+                        [sz, torch.full((pad_len,), target_z[batch_idx, -1].item(), device=device)]
+                    )
                 sampled_list.append(torch.stack([sf, sz], dim=1))
             samples = torch.stack(sampled_list, dim=0)
             sample_mask = torch.zeros(b, target_k, dtype=torch.bool, device=device)
@@ -156,9 +168,13 @@ def train_epoch(
         fp_true = cond[:, 1]
 
         loss, loss_dict = criterion(
-            z_pred, target_z, region_ids, target_k,
+            z_pred,
+            target_z,
+            region_ids,
+            target_k,
             freq=target_freq,
-            fs_true=fs_true, fp_true=fp_true,
+            fs_true=fs_true,
+            fp_true=fp_true,
         )
 
         optimizer.zero_grad()
@@ -215,9 +231,13 @@ def validate(
             fs_true = cond[:, 0]
             fp_true = cond[:, 1]
             p_norm, y_soft, k_pred = sampler(
-                z_t, region_ids, freq=target_freq,
-                fs=fs_true, fp=fp_true,
-                target_k=target_k, use_gumbel=False,
+                z_t,
+                region_ids,
+                freq=target_freq,
+                fs=fs_true,
+                fp=fp_true,
+                target_k=target_k,
+                use_gumbel=False,
             )
             b, n = target_z.shape
             sampled_list = []
@@ -237,12 +257,17 @@ def validate(
                 sz = target_z[batch_idx, idx]
                 pad_len = target_k - len(idx)
                 if pad_len > 0:
-                    sf = torch.cat([
-                        sf, torch.full((pad_len,), target_freq[batch_idx, -1].item(), device=device)
-                    ])
-                    sz = torch.cat([
-                        sz, torch.full((pad_len,), target_z[batch_idx, -1].item(), device=device)
-                    ])
+                    sf = torch.cat(
+                        [
+                            sf,
+                            torch.full(
+                                (pad_len,), target_freq[batch_idx, -1].item(), device=device
+                            ),
+                        ]
+                    )
+                    sz = torch.cat(
+                        [sz, torch.full((pad_len,), target_z[batch_idx, -1].item(), device=device)]
+                    )
                 else:
                     sf = sf[:target_k]
                     sz = sz[:target_k]
@@ -256,9 +281,14 @@ def validate(
         fp_true = cond[:, 1]
 
         loss, loss_dict = criterion(
-            z_pred, target_z, region_ids, target_k,
+            z_pred,
+            target_z,
+            region_ids,
+            target_k,
             freq=target_freq,
-            fs_true=fs_true, fp_true=fp_true, k_actual=k_actual,
+            fs_true=fs_true,
+            fp_true=fp_true,
+            k_actual=k_actual,
         )
         total_loss += loss_dict["total"]
         total_recon += loss_dict["recon"]
@@ -397,9 +427,7 @@ def main() -> None:
         train_metrics = train_epoch(
             train_loader, recon, sampler, criterion, optimizer, device, args.target_k, phase
         )
-        val_metrics = validate(
-            val_loader, recon, sampler, criterion, device, args.target_k, phase
-        )
+        val_metrics = validate(val_loader, recon, sampler, criterion, device, args.target_k, phase)
         scheduler.step()
 
         print(
@@ -408,13 +436,15 @@ def main() -> None:
             f"val_recon={val_metrics['recon']:.6f}"
         )
 
-        history.append({
-            "epoch": epoch,
-            "phase": phase,
-            "train_loss": train_metrics["loss"],
-            "val_loss": val_metrics["loss"],
-            "val_recon": val_metrics["recon"],
-        })
+        history.append(
+            {
+                "epoch": epoch,
+                "phase": phase,
+                "train_loss": train_metrics["loss"],
+                "val_loss": val_metrics["loss"],
+                "val_recon": val_metrics["recon"],
+            }
+        )
 
         # 早停（基于 val_recon，避免 Phase2 效率损失干扰）
         if val_metrics["recon"] < best_val_metric:
@@ -439,13 +469,17 @@ def main() -> None:
     print("\n保存 checkpoint...")
     torch.save({"recon": recon.state_dict(), "sampler": sampler.state_dict()}, ckpt_path)
     with open(state_path, "w", encoding="utf-8") as f:
-        json.dump({
-            "epoch": end_epoch,
-            "best_val_metric": best_val_metric,
-            "patience_counter": patience_counter,
-            "best_epoch": best_state["epoch"] if best_state else None,
-            "history": history,
-        }, f, indent=2)
+        json.dump(
+            {
+                "epoch": end_epoch,
+                "best_val_metric": best_val_metric,
+                "patience_counter": patience_counter,
+                "best_epoch": best_state["epoch"] if best_state else None,
+                "history": history,
+            },
+            f,
+            indent=2,
+        )
 
     # --- 如果是最后一轮或早停，保存最终模型 ---
     if end_epoch >= args.epochs or patience_counter >= args.early_stop_patience:

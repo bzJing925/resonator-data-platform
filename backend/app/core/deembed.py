@@ -14,6 +14,7 @@ de_ELB003_VZ.py / de_ELB003_Basic.py）。
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from enum import StrEnum
 from pathlib import Path
 
@@ -94,9 +95,7 @@ def _parse_original(name: str) -> tuple[str | None, str, str]:
 
     # 3. 提取位置（包含 X/Y/N 的连续段）
     position = "GLOBAL"
-    matches = list(
-        re.finditer(r"([A-Z0-9\-]*[XYN][A-Z0-9\-]{2,})", name_body, re.IGNORECASE)
-    )
+    matches = list(re.finditer(r"([A-Z0-9\-]*[XYN][A-Z0-9\-]{2,})", name_body, re.IGNORECASE))
     if matches:
         position = matches[-1].group(1).upper()
     else:
@@ -214,14 +213,8 @@ def _is_calibration_vz(name: str) -> tuple[bool, bool]:
 
 def _is_calibration_basic(name: str) -> tuple[bool, bool]:
     """de_ELB003_Basic.py 的校准文件识别：WO/WS 模式（不含 W1）。"""
-    is_open = (
-        re.search(r"WO", name, re.IGNORECASE)
-        and not re.search(r"W1", name, re.IGNORECASE)
-    )
-    is_short = (
-        re.search(r"WS", name, re.IGNORECASE)
-        and not re.search(r"W1", name, re.IGNORECASE)
-    )
+    is_open = re.search(r"WO", name, re.IGNORECASE) and not re.search(r"W1", name, re.IGNORECASE)
+    is_short = re.search(r"WS", name, re.IGNORECASE) and not re.search(r"W1", name, re.IGNORECASE)
     return is_open, is_short
 
 
@@ -497,9 +490,7 @@ def match_calibration(
         op = open_paths[0] if open_paths else None
         sh = short_paths[0] if short_paths else None
         if not op or not sh:
-            raise DeembedError(
-                f"DEFAULT 方法无法为 {dut_path.name} 找到校准件"
-            )
+            raise DeembedError(f"DEFAULT 方法无法为 {dut_path.name} 找到校准件")
         return op, sh
 
     # 匹配时应保留端口后缀，否则拆分后的 DUT 名如 2_A1-1_X-1Y-1N27_Fail_S11.s1p
@@ -517,9 +508,7 @@ def match_calibration(
     open_name, short_name = matcher(dut_name, cal_names)
 
     if not open_name or not short_name:
-        raise DeembedError(
-            f"{method.value} 方法无法为 {dut_path.name} 匹配校准件"
-        )
+        raise DeembedError(f"{method.value} 方法无法为 {dut_path.name} 匹配校准件")
 
     name_to_path = {p.name: p for p in cal_paths}
     return name_to_path[open_name], name_to_path[short_name]
@@ -559,6 +548,7 @@ def _run_deembed(
     cal_short: dict[str, Path],
     target_dir: Path,
     method: DeembedMethod = DeembedMethod.DEFAULT,
+    progress_callback: Callable[[int, int], None] | None = None,
 ) -> list[tuple[Path, Path]]:
     """对每对 (S11, S22) s1p 用同目录 OPEN/SHORT s2p 做去嵌。
 
@@ -597,7 +587,7 @@ def _run_deembed(
 
     # 2. 逐对 DUT 去嵌
     new_pairs: list[tuple[Path, Path]] = []
-    for s11_path, s22_path in s1p_pairs:
+    for idx, (s11_path, s22_path) in enumerate(s1p_pairs, start=1):
         try:
             op11, sh11 = match_calibration(s11_path, cal_s11, method)
             op22, sh22 = match_calibration(s22_path, cal_s22, method)
@@ -614,5 +604,7 @@ def _run_deembed(
         except Exception as exc:  # pragma: no cover - skrf 异常透传
             raise DeembedError(f"De-embedding 失败 {s11_path.name}: {exc}") from exc
         new_pairs.append((s11_de, s22_de))
+        if progress_callback:
+            progress_callback(idx, len(s1p_pairs))
 
     return new_pairs

@@ -146,15 +146,20 @@ class SparseReconstructor(nn.Module):
 
         freq_t_norm = freq_target / self.max_freq
         q_pos = self.freq_embed(freq_t_norm)
-        q = torch.cat([
-            q_pos,
-            torch.zeros(b, n, self.d_model // 2, device=q_pos.device),
-        ], dim=-1)
+        q = torch.cat(
+            [
+                q_pos,
+                torch.zeros(b, n, self.d_model // 2, device=q_pos.device),
+            ],
+            dim=-1,
+        )
         q = q + c.unsqueeze(1)
         q = self.query_norm(q)
 
         attn_out, _ = self.cross_attn(
-            query=q, key=h, value=h,
+            query=q,
+            key=h,
+            value=h,
             key_padding_mask=sample_mask,
         )
 

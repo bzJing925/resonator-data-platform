@@ -84,8 +84,13 @@ def test_failure_path_marks_upload_task_failed(clean_db, staged_files):
         good_mapping_id = mapping_row.id
 
         batch_row = Batch(
-            batch_no="nope.001", mapping_id=good_mapping_id, file_path="(pending)",
-            device_count=0, deembedded=False, process_type="S1P", uploaded_by="test",
+            batch_no="nope.001",
+            mapping_id=good_mapping_id,
+            file_path="(pending)",
+            device_count=0,
+            deembedded=False,
+            process_type="S1P",
+            uploaded_by="test",
         )
         db.add(batch_row)
         task_row = UploadTask(batch_no="nope.001", status="pending", progress_pct=0)

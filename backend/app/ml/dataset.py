@@ -123,9 +123,7 @@ def generate_synthetic_batch(
         fp = base_fp + fp_offset
 
         # 生成频谱
-        _, spectrum = generate_synthetic_spectrum(
-            n_freq=n_freq, fs=fs, fp=fp, rng=rng
-        )
+        _, spectrum = generate_synthetic_spectrum(n_freq=n_freq, fs=fs, fp=fp, rng=rng)
 
         # 器件参数（归一化前原始值）
         area_um2 = int(rng.integers(100, 5000))
@@ -135,13 +133,15 @@ def generate_synthetic_batch(
         fl = float(rng.uniform(0.1, 1.0))
         ag = float(rng.uniform(0.0, 0.5))
 
-        devices.append({
-            "spectrum": spectrum.astype(np.float32),
-            "params": np.array([area_um2, x, y, eg, fl, ag], dtype=np.float32),
-            "fs_ghz": float(fs),
-            "fp_ghz": float(fp),
-            "batch_id": batch_id,
-        })
+        devices.append(
+            {
+                "spectrum": spectrum.astype(np.float32),
+                "params": np.array([area_um2, x, y, eg, fl, ag], dtype=np.float32),
+                "fs_ghz": float(fs),
+                "fp_ghz": float(fp),
+                "batch_id": batch_id,
+            }
+        )
 
     return devices
 
@@ -301,6 +301,7 @@ class RealSpectrumDataset(Dataset):
 
                     try:
                         import skrf as rf
+
                         net = rf.Network(str(full_path))
                         # 取 S11_dB
                         s11 = net.s_db[:, 0, 0] if net.nports > 1 else net.s_db[:]
@@ -313,22 +314,27 @@ class RealSpectrumDataset(Dataset):
                     except Exception:
                         continue
 
-                    params = np.array([
-                        row.get("area_um2") or 0,
-                        row.get("x") or 0,
-                        row.get("y") or 0,
-                        row.get("eg") or 0.0,
-                        row.get("fl") or 0.0,
-                        row.get("ag") or 0.0,
-                    ], dtype=np.float32)
+                    params = np.array(
+                        [
+                            row.get("area_um2") or 0,
+                            row.get("x") or 0,
+                            row.get("y") or 0,
+                            row.get("eg") or 0.0,
+                            row.get("fl") or 0.0,
+                            row.get("ag") or 0.0,
+                        ],
+                        dtype=np.float32,
+                    )
 
-                    batch_devices.append({
-                        "spectrum": spectrum,
-                        "params": params,
-                        "fs_ghz": row.get("fs_ghz") or 0.0,
-                        "fp_ghz": row.get("fp_ghz") or 0.0,
-                        "batch_id": batch_id,
-                    })
+                    batch_devices.append(
+                        {
+                            "spectrum": spectrum,
+                            "params": params,
+                            "fs_ghz": row.get("fs_ghz") or 0.0,
+                            "fp_ghz": row.get("fp_ghz") or 0.0,
+                            "batch_id": batch_id,
+                        }
+                    )
 
                 if not batch_devices:
                     continue
@@ -337,6 +343,7 @@ class RealSpectrumDataset(Dataset):
 
                 # 选基准
                 from app.ml.utils import select_base_device
+
                 base = select_base_device(batch_devices)
                 self.batch_meta[batch_id] = {
                     "base_spectrum": base["spectrum"],
@@ -436,14 +443,17 @@ class RealS1PBatchDataset(Dataset):
                 continue
 
             params = parse_filename_params(f.name)
-            param_vec = np.array([
-                params.get("area_um2", 0),
-                params.get("x", 0),
-                params.get("y", 0),
-                params.get("eg", 0.0),
-                params.get("fl", 0.0),
-                params.get("ag", 0.0),
-            ], dtype=np.float32)
+            param_vec = np.array(
+                [
+                    params.get("area_um2", 0),
+                    params.get("x", 0),
+                    params.get("y", 0),
+                    params.get("eg", 0.0),
+                    params.get("fl", 0.0),
+                    params.get("ag", 0.0),
+                ],
+                dtype=np.float32,
+            )
 
             # 从频谱中检测 fs/fp（最小/最大 S11 位置）
             fs_idx = int(np.argmin(s11_db))
@@ -459,14 +469,16 @@ class RealS1PBatchDataset(Dataset):
             else:
                 batch_id = 0
 
-            self.devices.append({
-                "spectrum": s11_db.astype(np.float32),
-                "params": param_vec,
-                "fs_ghz": fs_ghz,
-                "fp_ghz": fp_ghz,
-                "batch_id": batch_id,
-                "filename": f.name,
-            })
+            self.devices.append(
+                {
+                    "spectrum": s11_db.astype(np.float32),
+                    "params": param_vec,
+                    "fs_ghz": fs_ghz,
+                    "fp_ghz": fp_ghz,
+                    "batch_id": batch_id,
+                    "filename": f.name,
+                }
+            )
 
         if not self.devices:
             raise ValueError("未成功加载任何 .s1p 文件")

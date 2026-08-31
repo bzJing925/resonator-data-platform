@@ -37,9 +37,9 @@ _RESIDUAL_NET: ResidualNet | None = None
 _DEVICE: torch.device | None = None
 
 # 元数据
-_Z_BASE: torch.Tensor | None = None      # (latent_dim,)
+_Z_BASE: torch.Tensor | None = None  # (latent_dim,)
 _PARAMS_MEAN: torch.Tensor | None = None  # (6,)
-_PARAMS_STD: torch.Tensor | None = None   # (6,)
+_PARAMS_STD: torch.Tensor | None = None  # (6,)
 _N_FREQ: int = 1001
 _LATENT_DIM: int = 8
 
@@ -52,6 +52,7 @@ def _get_checkpoint_dir() -> Path:
 def _init_device() -> torch.device:
     """选择最优推理设备。"""
     import torch
+
     if torch.backends.mps.is_available():
         return torch.device("mps")
     if torch.cuda.is_available():
@@ -126,7 +127,9 @@ def load_models(force: bool = False) -> bool:
     _MODELS_LOADED = True
     log.info(
         "PINN 模型加载完成: device=%s, latent_dim=%d, n_freq=%d",
-        _DEVICE, _LATENT_DIM, _N_FREQ,
+        _DEVICE,
+        _LATENT_DIM,
+        _N_FREQ,
     )
     return True
 
@@ -138,6 +141,7 @@ def _device_to_param_tensor(device: Device) -> torch.Tensor | None:
     任一字段缺失则返回 None（触发 fallback）。
     """
     import torch
+
     vals = [
         device.area_um2,
         device.x,
@@ -181,12 +185,13 @@ def predict_s11_db(device: Device) -> tuple[list[float], list[float]] | None:
 
     try:
         import torch
+
         with torch.no_grad():
             params_norm = (params.to(_DEVICE) - _PARAMS_MEAN) / _PARAMS_STD
             delta_z = _RESIDUAL_NET(params_norm.unsqueeze(0))  # (1, latent_dim)
-            z = _Z_BASE.unsqueeze(0) + delta_z                 # (1, latent_dim)
-            recon = _VAE.decode(z)                             # (1, 1, N)
-            s11_db = recon.squeeze().cpu().numpy().tolist()    # (N,)
+            z = _Z_BASE.unsqueeze(0) + delta_z  # (1, latent_dim)
+            recon = _VAE.decode(z)  # (1, 1, N)
+            s11_db = recon.squeeze().cpu().numpy().tolist()  # (N,)
         return freq_ghz, s11_db
     except Exception:
         log.exception("PINN 推理失败: device_id=%s", device.id)

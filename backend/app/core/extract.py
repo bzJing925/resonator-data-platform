@@ -104,6 +104,7 @@ def _interpolate_nan(arr: np.ndarray, freq: np.ndarray) -> np.ndarray:
 def _smooth_bodeq(bodeq_raw: np.ndarray, freq: np.ndarray, cfg: AlgorithmConfig) -> np.ndarray:
     """Savitzky-Golay 平滑 BodeQ 曲线（窗口随长度缩放，自动处理 NaN）。"""
     from scipy.signal import savgol_filter
+
     window_size = min(cfg.savgol_window, len(freq) // 10 * 2 + 1)
     if window_size <= 5:
         return bodeq_raw

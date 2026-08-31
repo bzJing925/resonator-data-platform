@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 class Device(Base):
     __tablename__ = "devices"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True)
     batch_id: Mapped[int] = mapped_column(
         ForeignKey("batches.id", ondelete="CASCADE"), nullable=False
     )

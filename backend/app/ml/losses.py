@@ -94,17 +94,13 @@ class PINNSpectralLoss(nn.Module):
 
         # 5. 远带回归基准（远离谐振点处应接近基准频谱）
         if s_base is not None and freq is not None and fs_pred is not None and fp_pred is not None:
-            losses["far_band"] = self._far_band_loss(
-                s_pred, s_base, freq, fs_pred, fp_pred
-            )
+            losses["far_band"] = self._far_band_loss(s_pred, s_base, freq, fs_pred, fp_pred)
         else:
             losses["far_band"] = torch.tensor(0.0, device=z.device)
 
         # 6. VAE KL 散度
         if mu is not None and logvar is not None:
-            losses["kl"] = -0.5 * torch.sum(
-                1 + logvar - mu.pow(2) - logvar.exp()
-            ) / mu.shape[0]
+            losses["kl"] = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp()) / mu.shape[0]
         else:
             losses["kl"] = torch.tensor(0.0, device=z.device)
 

@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 class Batch(Base):
     __tablename__ = "batches"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True)
     batch_no: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
     mapping_id: Mapped[int] = mapped_column(
         ForeignKey("mappings.id", ondelete="RESTRICT"), nullable=False
