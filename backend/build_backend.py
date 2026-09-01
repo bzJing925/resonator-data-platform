@@ -151,13 +151,18 @@ def run(onefile: bool = False):
     surr_data = ROOT / "surrogate_data"
     surr_ckpt = ROOT / "checkpoints_surrogate"
     if surr_data.exists() and surr_ckpt.exists():
-        shutil.copytree(surr_data, FRONTEND_BUILD / "surrogate_data", dirs_exist_ok=True)
-        (FRONTEND_BUILD / "checkpoints_surrogate").mkdir(exist_ok=True)
+        # 冻结后运行时代码以 __file__ 解析（app/api/surrogate.py 的 parents[2]
+        # 在冻结包里指向 aln-backend/_internal/），所以 onedir 必须并到
+        # _internal/ 内 —— 放在 FRONTEND_BUILD 顶层（Resources/backend/）会被
+        # 运行时报"产物缺失"。onefile（已弃用）保持旧行为。
+        dest_base = FRONTEND_BUILD if onefile else FRONTEND_BUILD / "aln-backend" / "_internal"
+        shutil.copytree(surr_data, dest_base / "surrogate_data", dirs_exist_ok=True)
+        (dest_base / "checkpoints_surrogate").mkdir(exist_ok=True)
         for f in ("stage1.pt", "stage2.pt", "stage2_ft.pt", "stage2_config.json",
                   "zp_corrector.joblib"):
             src_f = surr_ckpt / f
             if src_f.exists():
-                shutil.copy2(src_f, FRONTEND_BUILD / "checkpoints_surrogate" / f)
+                shutil.copy2(src_f, dest_base / "checkpoints_surrogate" / f)
         print("代理模型产物已并入安装包")
     else:
         print("警告：代理模型产物缺失（backend/surrogate_data 或 checkpoints_surrogate），"
