@@ -30,6 +30,9 @@ class QueryRequest(BaseModel):
     # 为 true 时跳过精确 COUNT(*)，用 LIMIT+1 判断是否有更多数据。
     # 适合大数据量探索分析场景，可显著减少 DB 压力。
     skip_count: bool = False
+    # Analysis worksheets need an exact local snapshot so table rows and chart
+    # points share the same identity. Existing callers retain automatic sampling.
+    sampling: Literal["auto", "none"] = "auto"
 
 
 class QueryResponse(BaseModel):

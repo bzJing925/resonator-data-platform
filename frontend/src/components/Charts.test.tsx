@@ -58,6 +58,28 @@ describe('buildUnifiedSpec 表征（重构须保持的现状行为）', () => {
     expect(spec.placeholder).toBeTruthy();
     expect(spec.allTraces).toHaveLength(0);
   });
+
+  it('多面板预计点数超过阈值时，类别 X 映射为 WebGL 数值刻度', () => {
+    const rows = Array.from({ length: 2000 }, (_, i) => ({
+      __rowId: `device:${i}`, eg: i % 2 ? 'Series' : 'Parallel', qs: i, qp: i + 1, dbqs: i + 2,
+    }));
+    const spec = buildUnifiedSpec({
+      chartType: 'scatter', rows, xFields: [X_CAT],
+      yFields: [Y_QS, { ...Y_QS, name: 'qp' }, { ...Y_QS, name: 'dbqs' }],
+    });
+    expect(spec.allTraces.every((trace) => trace.type === 'scattergl')).toBe(true);
+    expect(spec.layout.xaxis.type).toBe('linear');
+    expect(spec.perfWarn?.pointCount).toBe(6000);
+  });
+
+  it('折线聚合点保留其底层 rowId，供选择和删除使用', () => {
+    const rows = [
+      { __rowId: 'device:1', eg: 'A', qs: 10 },
+      { __rowId: 'device:2', eg: 'A', qs: 20 },
+    ];
+    const spec = buildUnifiedSpec({ chartType: 'line', rows, xFields: [X_CAT], yFields: [Y_QS] });
+    expect(spec.allTraces[0].customdata[0].__memberRowIds).toEqual(['device:1', 'device:2']);
+  });
 });
 
 describe('buildUnifiedSpec facetZ 分面模式', () => {

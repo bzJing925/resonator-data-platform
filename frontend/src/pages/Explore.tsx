@@ -2,10 +2,14 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import I from '../components/Icons';
 import { UnifiedChartGrid, WaferMap } from '../components/Charts';
 import useFields, { displayLabel } from '../hooks/useFields';
-import { queryDevices, queryAggregate, exportCsv } from '../api/endpoints';
+import { queryDevices, queryAggregate } from '../api/endpoints';
 import DeviceModal from '../components/DeviceModal';
 import FilterPanel from '../components/FilterPanel';
 import { usePageState } from '../contexts/PageStateContext';
+import WorksheetGrid from '../features/analysis/WorksheetGrid';
+import WorkspaceTabs from '../features/analysis/WorkspaceTabs';
+import { useAnalysisWorkspace } from '../features/analysis/workspace';
+import { serializeWorksheetCsv } from '../features/analysis/csv';
 
 // Aggregation options for numeric Y/Z fields.
 //   'all' is a UI sentinel meaning "no aggregation, plot raw rows".
@@ -42,18 +46,6 @@ function downloadBlob(blob, filename) {
   window.URL.revokeObjectURL(url);
 }
 
-// Full export field list (mirrors the Device ORM model + virtual batch_no).
-const EXPORT_FIELDS = [
-  'id', 'batch_no',
-  'original_filename', 'display_name', 'mark', 'wafer', 'folder_name', 'coord', 'x', 'y',
-  'eg', 'fl', 'ag', 'pf', 'area_n', 'area_um2',
-  'fs_ghz', 'fp_ghz', 'zs_ohm', 'zp_ohm', 'qs', 'qp',
-  'qs_bodeq', 'qp_bodeq', 'dbqs', 'dbqp',
-  'bodeq_fitted', 'bodeq_smooth', 'bodeq_raw', 'fbode_ghz', 'k2eff_pct',
-  'fp2_ghz', 'fs2_ghz', 'zp2_ohm', 'zs2_ohm',
-  'deembedded', 's_param_path',
-];
-
 // Sections returned by /api/query/fields. Used for grouping in pickers.
 const SECTION_LABELS = {
   categorical: '类别字段',
@@ -72,7 +64,7 @@ const CATEGORICAL_SECTIONS = new Set(['categorical', 'process']);
 // Device structure parameters derived from the mapping (对照表).
 // These are the only fields users may select as the X axis in Explore.
 const X_AXIS_FIELD_NAMES = [
-  'eg', 'fl', 'ag', 'pf', 'area_um2', 'area_n',
+  'structureType', 'eg', 'fl', 'ag', 'pf', 'area_um2', 'area_n',
 ];
 const Y_AXIS_FIELD_NAMES = [
   'fs_ghz', 'fp_ghz', 'qs', 'qp', 'k2eff_pct', 'zs_ohm', 'zp_ohm', 'dbqs', 'dbqp',
@@ -80,6 +72,7 @@ const Y_AXIS_FIELD_NAMES = [
 const X_AXIS_FIELD_SET = new Set(X_AXIS_FIELD_NAMES);
 const Y_AXIS_FIELD_SET = new Set(Y_AXIS_FIELD_NAMES);
 const AXIS_FIELD_LABELS = {
+  structureType: '结构类别',
   eg: 'EG',
   fl: 'FL',
   ag: 'AG',
@@ -113,7 +106,9 @@ function axisPickerLabel(field) {
 function axisFieldOptions(fields, names) {
   if (!fields) return null;
   return names
-    .map((name) => fields.byName?.[name])
+    .map((name) => name === 'structureType'
+      ? { name, label: '结构类别', section: 'derived' }
+      : fields.byName?.[name])
     .filter(Boolean)
     .map((f) => ({ ...f, label: AXIS_FIELD_LABELS[f.name] || f.label || f.name }));
 }
@@ -159,10 +154,14 @@ const Z_MODE_OPTIONS = [
 
 // Sentinel for "no facet" radio in wafer mode.
 const NO_FACET = '__none__';
+const EMPTY_SELECTION = new Set<string>();
 
 // Resolve a field name into an enriched field object (label/unit/section/
 // isCategorical) using the metadata from useFields().
 function enrichField(name, fields) {
+  if (name === 'structureType') {
+    return { name, label: '结构类别', unit: '', section: 'derived', isCategorical: true };
+  }
   if (!name || !fields) return null;
   for (const section of SECTION_ORDER) {
     const f = (fields.raw?.[section] || []).find((x) => x.name === name);
@@ -189,20 +188,39 @@ const EXPLORE_INITIAL_STATE = {
   waferFacet: NO_FACET,
   filters: {},
   limit: 50000,
-  rows: [],
-  stats: null,
-  hiddenIds: new Set(),
-  prevHiddenIds: null,
 };
 
 export default function Explore() {
   const { data: fields, loading: fLoading, error: fErr } = useFields();
+  const {
+    state: workspaceState,
+    chartDataset,
+    activeDataset,
+    loadQueryRows,
+    duplicateDataset,
+    setActiveTab,
+    setChartDataset,
+    setSelection,
+    editCell,
+    deleteSelection,
+    undo,
+    redo,
+  } = useAnalysisWorkspace();
 
-  const [rawState, setRawState] = usePageState(
-    'explore',
-    EXPLORE_INITIAL_STATE,
-    { dataKeys: ['rows'], maxDataBytes: 1024 * 1024 },
-  );
+  const [rawState, setRawState] = usePageState('explore', EXPLORE_INITIAL_STATE);
+  const migratedRowsRef = useRef(false);
+
+  useEffect(() => {
+    if (migratedRowsRef.current) return;
+    migratedRowsRef.current = true;
+    if (Array.isArray(rawState.rows) && rawState.rows.length > 0
+      && workspaceState.datasets.length === 0) {
+      loadQueryRows(rawState.rows, rawState.stats || null);
+    }
+    if ('rows' in rawState || 'hiddenIds' in rawState || 'prevHiddenIds' in rawState || 'stats' in rawState) {
+      setRawState(({ rows: _rows, hiddenIds: _hidden, prevHiddenIds: _prev, stats: _stats, ...rest }) => rest);
+    }
+  }, [loadQueryRows, rawState, setRawState, workspaceState.datasets.length]);
 
   // Normalize persisted axis selections against the current allowed field set.
   const state = useMemo(() => ({
@@ -230,11 +248,9 @@ export default function Explore() {
     waferFacet,
     filters,
     limit,
-    rows,
-    stats,
-    hiddenIds,
-    prevHiddenIds,
   } = state;
+  const rows = chartDataset?.rows || [];
+  const stats = chartDataset?.stats || null;
 
   const setChartType = useCallback((v) => setRawState((s) => ({ ...s, chartType: typeof v === 'function' ? v(s.chartType) : v })), [setRawState]);
   const setXFields = useCallback((v) => setRawState((s) => ({ ...s, xFields: typeof v === 'function' ? v(s.xFields) : v })), [setRawState]);
@@ -245,35 +261,21 @@ export default function Explore() {
   const setWaferFacet = useCallback((v) => setRawState((s) => ({ ...s, waferFacet: typeof v === 'function' ? v(s.waferFacet) : v })), [setRawState]);
   const setFilters = useCallback((v) => setRawState((s) => ({ ...s, filters: typeof v === 'function' ? v(s.filters) : v })), [setRawState]);
   const setLimit = useCallback((v) => setRawState((s) => ({ ...s, limit: typeof v === 'function' ? v(s.limit) : v })), [setRawState]);
-  const setRows = useCallback((v) => setRawState((s) => ({ ...s, rows: typeof v === 'function' ? v(s.rows) : v })), [setRawState]);
-  const setStats = useCallback((v) => setRawState((s) => ({ ...s, stats: typeof v === 'function' ? v(s.stats) : v })), [setRawState]);
-  const setHiddenIds = useCallback((v) => setRawState((s) => ({ ...s, hiddenIds: typeof v === 'function' ? v(s.hiddenIds) : v })), [setRawState]);
-  const setPrevHiddenIds = useCallback((v) => setRawState((s) => ({ ...s, prevHiddenIds: typeof v === 'function' ? v(s.prevHiddenIds) : v })), [setRawState]);
 
   // Transient UI state that does not need to survive route switches.
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [activeDevice, setActiveDevice] = useState(null);
   const [exporting, setExporting] = useState(false);
-
-  // 图上框选隐藏点：纯客户端、跨 chart type 全局。
-  const shiftHeldRef = useRef(false);
+  const [showFilters, setShowFilters] = useState(true);
+  const [showInspector, setShowInspector] = useState(true);
+  const [fullscreen, setFullscreen] = useState(false);
 
   useEffect(() => {
-    const down = (e) => { if (e.key === 'Shift') shiftHeldRef.current = true; };
-    const up   = (e) => { if (e.key === 'Shift') shiftHeldRef.current = false; };
-    // 窗口失焦时把 ref 复位 — 否则用户切窗口期间松开 Shift，回来后
-    // ref 残留 true 会让下一次"只看"误判成"隐藏"。
-    const blur = () => { shiftHeldRef.current = false; };
-    window.addEventListener('keydown', down);
-    window.addEventListener('keyup', up);
-    window.addEventListener('blur', blur);
-    return () => {
-      window.removeEventListener('keydown', down);
-      window.removeEventListener('keyup', up);
-      window.removeEventListener('blur', blur);
-    };
-  }, []);
+    const app = document.querySelector('.app');
+    app?.classList.toggle('analysis-fullscreen', fullscreen);
+    return () => app?.classList.remove('analysis-fullscreen');
+  }, [fullscreen]);
 
   const isWafer = chartType === 'wafer';
 
@@ -320,13 +322,15 @@ export default function Explore() {
   // Aggregate mode requires at least one categorical X. Wafer mode is
   // exempt because its group_by is always (x, y, [facet]).
   const hasCategoricalX = useMemo(() => xMeta.some((f) => f.isCategorical), [xMeta]);
+  const hasDerivedX = xFields.includes('structureType');
   const aggregateXWarning = useMemo(() => {
     if (!needsAggregate || isWafer) return null;
+    if (hasDerivedX) return '工作表派生列暂不参与后端聚合；本次查询按原始行加载';
     if (!hasCategoricalX) return '聚合模式需要至少一个类别 X 字段（已自动 fallback 为 ALL，未真正聚合）';
     return null;
-  }, [needsAggregate, hasCategoricalX, isWafer]);
+  }, [needsAggregate, hasCategoricalX, hasDerivedX, isWafer]);
   // If aggregate would be invalid (no categorical X) we silently fall back.
-  const useAggregate = isWafer ? needsAggregate : (needsAggregate && hasCategoricalX);
+  const useAggregate = isWafer ? needsAggregate : (needsAggregate && hasCategoricalX && !hasDerivedX);
 
   // Y/Z conflict: same field with different aggregations would need two
   // metric columns and a renamed Z key. We refuse the combination and
@@ -359,8 +363,7 @@ export default function Explore() {
           }
           return row;
         });
-        setRows(flat);
-        setStats({ total: flat.length, returned: flat.length, truncated: false });
+        loadQueryRows(flat, { total: flat.length, returned: flat.length, truncated: false });
         return;
       }
 
@@ -368,7 +371,7 @@ export default function Explore() {
       if (!isWafer && useAggregate) {
         // group_by = selected X fields, plus Z if Z is a categorical bucket
         // (otherwise the per-Z lines / boxes would collapse into the X bin).
-        const groupBy = xFields.slice();
+        const groupBy = xFields.filter((name) => name !== 'structureType');
         if (zMeta && zMeta.isCategorical && !groupBy.includes(zMeta.name)) {
           groupBy.push(zMeta.name);
         }
@@ -419,8 +422,7 @@ export default function Explore() {
           }
           return row;
         });
-        setRows(flat);
-        setStats({ total: flat.length, returned: flat.length, truncated: false });
+        loadQueryRows(flat, { total: flat.length, returned: flat.length, truncated: false });
         return;
       }
 
@@ -433,7 +435,7 @@ export default function Explore() {
         // include common identification cols for tooltip / modal.
         ['batch_no', 'wafer', 'folder_name', 'pf'].forEach((k) => fieldSet.add(k));
       } else {
-        xFields.forEach((n) => fieldSet.add(n));
+        xFields.forEach((n) => { if (n !== 'structureType') fieldSet.add(n); });
         yFields.forEach((y) => fieldSet.add(y.name));
         if (zField) fieldSet.add(zField.name);
         // device-identification cols for the modal.
@@ -444,9 +446,9 @@ export default function Explore() {
         fields: Array.from(fieldSet),
         limit,
         skip_count: true,
+        sampling: 'none',
       });
-      setRows(res.rows || []);
-      setStats({
+      loadQueryRows(res.rows || [], {
         total: res.total,
         returned: res.returned,
         truncated: res.truncated,
@@ -455,25 +457,21 @@ export default function Explore() {
       });
     } catch (e) {
       setError(e.message);
-      // Don't leave stale rows on screen with an error banner — the user
-      // would otherwise mistake the previous query's chart for the
-      // current (failed) one.
-      setRows([]);
-      setStats(null);
     } finally {
       setLoading(false);
     }
   };
 
   const onExportCsv = async () => {
+    if (!chartDataset) return;
     setExporting(true);
     setError(null);
     try {
-      const res = await exportCsv({
-        filters, fields: EXPORT_FIELDS, limit: 200000, order_by: 'id',
+      const blob = new Blob([serializeWorksheetCsv(chartDataset.rows)], {
+        type: 'text/csv;charset=utf-8',
       });
       const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-      downloadBlob(res.data, `devices_${ts}.csv`);
+      downloadBlob(blob, `${chartDataset.name}_${ts}.csv`);
     } catch (e) {
       setError(e.message || '导出失败');
     } finally {
@@ -533,7 +531,7 @@ export default function Explore() {
       return `Z 字段 "${w.zField}" 共 ${w.total} 个不同值，分图模式仅显示前 ${w.shown} 个 — 建议改用颜色编码或加筛选条件缩小范围`;
     }
     if (w.kind === 'perf_gl') {
-      return `数据量 ${w.rowCount} 行超过 ${w.threshold} 阈值，已自动切换 WebGL 加速渲染`;
+      return `预计绘制 ${w.pointCount || w.rowCount} 个点，已自动切换 WebGL 加速渲染`;
     }
     if (w.kind === 'x_categories_clamped') {
       return `X 字段 "${w.xField}" 共 ${w.total} 个不同值，超出箱型图/小提琴图/蜂群图渲染上限，仅显示前 ${w.shown} 个 — 建议改用散点图或选数值更少的 X`;
@@ -544,85 +542,55 @@ export default function Explore() {
     return JSON.stringify(w);
   };
 
-  // ── 图上框选隐藏点：派生与 handler ──────────────────────────────────
-  // visibleRows = rows 中 id 不在 hiddenIds 内的子集。hiddenIds 空时直接
-  // 复用 rows 引用，避免重复 filter 触发下游 useMemo。
-  const visibleRows = useMemo(
-    () => (hiddenIds.size === 0 ? rows : rows.filter((r) => !hiddenIds.has(r.id))),
-    [rows, hiddenIds],
-  );
-  // 顶部小条显示的计数：只算当前 rows 里实际命中的，避免 stale id（filters
-  // 改过后 hiddenIds 里有些 id 已经不在 rows 里）让用户误以为还隐藏着很多。
-  const hiddenInCurrentRows = useMemo(
-    () => (hiddenIds.size === 0 ? 0 : rows.reduce((n, r) => n + (hiddenIds.has(r.id) ? 1 : 0), 0)),
-    [rows, hiddenIds],
-  );
-
   const handleSelection = useCallback((e) => {
     if (!e || !Array.isArray(e.points)) return;
-    const selectedIds = new Set();
+    const selectedIds = new Set<string>();
     for (const p of e.points) {
       const row = p.customdata;
-      // 聚合 trace（box/violin/line 的统计点）没有原始 row 或缺 id，跳过。
-      // aggregated 模式（wafer 聚合 / Y/Z 聚合）的 row 也无 id，自动 no-op。
-      if (row && row.id != null) selectedIds.add(row.id);
-    }
-    if (selectedIds.size === 0) return;
-
-    const shift = shiftHeldRef.current;
-    let next;
-    if (shift) {
-      // Shift+拖 = 隐藏选中
-      next = new Set(hiddenIds);
-      for (const id of selectedIds) next.add(id);
-    } else {
-      // 默认拖 = 只看选中。等价于把当前 visible 里未选中的全部加入 hidden。
-      // 防御：如果 visible 里没有一行命中 selectedIds（例如选区完全是
-      // box/violin 的均值点），别误把所有 visible 都隐藏掉。
-      const remainingVisible = visibleRows.reduce(
-        (n, r) => n + (selectedIds.has(r.id) ? 1 : 0),
-        0,
-      );
-      if (remainingVisible === 0) return;
-      next = new Set(hiddenIds);
-      for (const r of visibleRows) {
-        if (!selectedIds.has(r.id)) next.add(r.id);
+      if (Array.isArray(row?.__memberRowIds)) {
+        row.__memberRowIds.forEach((id) => selectedIds.add(id));
+      } else if (typeof row === 'string') {
+        selectedIds.add(row);
+      } else if (row?.__rowId) {
+        selectedIds.add(row.__rowId);
       }
     }
-
-    // no-op 检测：next 与 hiddenIds 完全一致就跳过（避免污染撤销栈）。
-    if (next.size === hiddenIds.size) {
-      let same = true;
-      for (const id of next) if (!hiddenIds.has(id)) { same = false; break; }
-      if (same) return;
+    if (chartDataset && selectedIds.size > 0) {
+      const additive = !!(e.event?.ctrlKey || e.event?.metaKey || e.event?.shiftKey);
+      setSelection(chartDataset.id, [...selectedIds], additive ? 'add' : 'replace');
     }
+  }, [chartDataset, setSelection]);
 
-    setPrevHiddenIds(hiddenIds);
-    setHiddenIds(next);
-  }, [hiddenIds, visibleRows]);
-
-  const handleUndo = useCallback(() => {
-    if (prevHiddenIds == null) return;
-    setHiddenIds(prevHiddenIds);
-    setPrevHiddenIds(null);
-  }, [prevHiddenIds]);
-  const handleClear = useCallback(() => {
-    if (hiddenIds.size === 0) return;
-    setPrevHiddenIds(hiddenIds);
-    setHiddenIds(new Set());
-  }, [hiddenIds]);
-  const handleInvert = useCallback(() => {
-    // 反选保留：现在看见的 → 隐藏；现在隐藏的（且在 rows 里）→ 露出。
-    // hiddenIds 里的 stale id（不在 rows）按反选语义被丢弃。
-    if (visibleRows.length === 0 && hiddenIds.size === 0) return;
-    const next = new Set();
-    for (const r of visibleRows) next.add(r.id);
-    setPrevHiddenIds(hiddenIds);
-    setHiddenIds(next);
-  }, [visibleRows, hiddenIds]);
-
-  const handlePointClick = useCallback((d) => setActiveDevice(d), []);
+  const handlePointClick = useCallback((d) => {
+    if (!chartDataset || !d) return;
+    const ids = Array.isArray(d.__memberRowIds)
+      ? d.__memberRowIds
+      : [typeof d === 'string' ? d : d.__rowId].filter(Boolean);
+    if (ids.length) setSelection(chartDataset.id, ids, 'replace');
+  }, [chartDataset, setSelection]);
   const handleCloseDevice = useCallback(() => setActiveDevice(null), []);
+
+  const openSelectedDevice = useCallback(() => {
+    if (!chartDataset || workspaceState.selectedRowIds.size !== 1) return;
+    const id = [...workspaceState.selectedRowIds][0];
+    const row = chartDataset.rows.find((item) => item.__rowId === id);
+    if (row?.id != null) setActiveDevice(row);
+  }, [chartDataset, workspaceState.selectedRowIds]);
+
+  const handleWorkspaceKeyDown = useCallback((event) => {
+    const target = event.target;
+    if (target instanceof Element
+      && target.closest('input, textarea, select, option, button, [contenteditable="true"]')) return;
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') {
+      event.preventDefault();
+      if (event.shiftKey) redo(); else undo();
+      return;
+    }
+    if (event.key === 'Delete' || event.key === 'Backspace') {
+      event.preventDefault();
+      deleteSelection();
+    }
+  }, [deleteSelection, redo, undo]);
 
   return (
     <>
@@ -647,7 +615,30 @@ export default function Explore() {
           })}
         </div>
         <div className="spacer" />
-        <button className="btn" onClick={onExportCsv} disabled={exporting} title="按当前筛选条件导出为 CSV">
+        <button className={`btn${showFilters ? ' active' : ''}`} onClick={() => setShowFilters((v) => !v)}>
+          <I.filter size={13} /> 筛选
+        </button>
+        <button className={`btn${showInspector ? ' active' : ''}`} onClick={() => setShowInspector((v) => !v)}>
+          <I.settings size={13} /> 配置
+        </button>
+        <button className="btn" onClick={undo} disabled={workspaceState.undoStack.length === 0} title="撤销 (Ctrl/Cmd+Z)">
+          ↶
+        </button>
+        <button className="btn" onClick={redo} disabled={workspaceState.redoStack.length === 0} title="重做 (Ctrl/Cmd+Shift+Z)">
+          ↷
+        </button>
+        <button className="btn" onClick={deleteSelection} disabled={workspaceState.selectedRowIds.size === 0} title="删除选中行">
+          <I.trash size={13} /> {workspaceState.selectedRowIds.size || ''}
+        </button>
+        <button className="btn" onClick={() => setFullscreen((v) => !v)} title={fullscreen ? '退出全屏分析' : '全屏分析'}>
+          <I.expand size={13} />
+        </button>
+        <button
+          className="btn"
+          onClick={onExportCsv}
+          disabled={exporting || !chartDataset}
+          title="导出当前图表引用的数据表（包含本地编辑和删除）"
+        >
           <I.download size={13} /> {exporting ? '导出中…' : '导出 CSV'}
         </button>
         <button className="btn" disabled title="敬请期待">
@@ -663,17 +654,45 @@ export default function Explore() {
         </button>
       </div>
 
-      <div className="workspace">
-        <FilterPanel value={filters} onApply={setFilters} />
+      <div
+        className={`workspace analysis-workspace${fullscreen ? ' fullscreen' : ''}${showFilters ? '' : ' filters-hidden'}${showInspector ? '' : ' inspector-hidden'}`}
+        onKeyDown={handleWorkspaceKeyDown}
+      >
+        {showFilters && <FilterPanel value={filters} onApply={setFilters} />}
         <div className="canvas-wrap">
-          <div className="chart-card">
+          {workspaceState.activeTabId === 'chart' ? <div
+            className="chart-card"
+            tabIndex={0}
+            onMouseDown={(event) => event.currentTarget.focus()}
+          >
             <div className="chart-head">
               <span className="title">{titleText}</span>
               <span className="axes">
                 {stats
-                  ? `${stats.returned}/${stats.total} 行${stats.truncated ? ' · 已截断' : ''}${stats.sampled ? ' · 已采样 (' + Math.round(stats.sample_rate * 100) + '%)' : ''}`
+                  ? `${rows.length.toLocaleString()} 工作区行 · 查询 ${stats.returned}/${stats.total}${stats.truncated ? ' · 已截断' : ''}${stats.sampled ? ' · 已采样 (' + Math.round(stats.sample_rate * 100) + '%)' : ''}`
                   : '尚未查询'}
               </span>
+              <div className="right">
+                {workspaceState.datasets.length > 0 && (
+                  <select
+                    className="select"
+                    value={chartDataset?.id || ''}
+                    onChange={(event) => setChartDataset(event.target.value)}
+                    title="图表数据源"
+                  >
+                    {workspaceState.datasets.map((dataset) => (
+                      <option key={dataset.id} value={dataset.id}>{dataset.name}</option>
+                    ))}
+                  </select>
+                )}
+                <button
+                  className="btn sm"
+                  disabled={workspaceState.selectedRowIds.size !== 1}
+                  onClick={openSelectedDevice}
+                >
+                  查看器件
+                </button>
+              </div>
             </div>
             <div className="chart-body" style={{ minHeight: 480 }}>
               {fErr && (
@@ -711,48 +730,10 @@ export default function Explore() {
                       ))}
                     </div>
                   )}
-                  {hiddenIds.size > 0 && (
-                    <div className="explore-hiddenbar" style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 10,
-                      padding: '6px 12px',
-                      background: 'rgba(44, 121, 246, 0.06)',
-                      borderBottom: '1px solid rgba(44, 121, 246, 0.25)',
-                      fontSize: 11.5,
-                      color: '#1e3a5f',
-                    }}>
-                      <span style={{ fontWeight: 600 }}>
-                        已隐藏 {hiddenInCurrentRows} 个点
-                      </span>
-                      <button
-                        className="btn"
-                        style={{ padding: '2px 8px', fontSize: 11 }}
-                        onClick={handleInvert}
-                        title="把当前可见的点反过来隐藏（露出之前隐藏的）"
-                      >
-                        反选保留
-                      </button>
-                      <button
-                        className="btn"
-                        style={{ padding: '2px 8px', fontSize: 11 }}
-                        onClick={handleUndo}
-                        disabled={prevHiddenIds == null}
-                        title="撤销上一步隐藏操作"
-                      >
-                        撤销
-                      </button>
-                      <button
-                        className="btn"
-                        style={{ padding: '2px 8px', fontSize: 11 }}
-                        onClick={handleClear}
-                        title="清空所有隐藏，显示全部"
-                      >
-                        清空
-                      </button>
-                      <span style={{ marginLeft: 'auto', color: 'var(--fg-4)', fontSize: 11 }}>
-                        提示：先点工具条 lasso / 框选；拖 = 只看选中，Shift+拖 = 隐藏选中
-                      </span>
+                  {workspaceState.selectedRowIds.size > 0 && (
+                    <div className="explore-selectionbar">
+                      已选中 {workspaceState.selectedRowIds.size.toLocaleString()} 行
+                      <span>Delete/Backspace 删除 · Ctrl/Cmd+Z 撤销</span>
                     </div>
                   )}
                   {!isWafer && (xMeta.length === 0 || yMeta.length === 0) && (
@@ -763,7 +744,7 @@ export default function Explore() {
                   {!isWafer && xMeta.length > 0 && yMeta.length > 0 && (
                     <UnifiedChartGrid
                       chartType={chartType}
-                      rows={visibleRows}
+                      rows={rows}
                       xFields={xMeta}
                       yFields={yMeta}
                       zField={zMeta}
@@ -771,11 +752,14 @@ export default function Explore() {
                       onWarningsChange={setChartWarnings}
                       onPointClick={handlePointClick}
                       onSelection={handleSelection}
+                      selectedRowIds={workspaceState.selectionDatasetId === chartDataset?.id
+                        ? workspaceState.selectedRowIds : EMPTY_SELECTION}
+                      revision={chartDataset?.id}
                     />
                   )}
                   {isWafer && (
                     <WaferMap
-                      rows={visibleRows}
+                      rows={rows}
                       valueField={waferZ.name}
                       valueLabel={waferZMeta ? displayLabel(waferZMeta) : waferZ.name}
                       facetField={waferFacet !== NO_FACET ? waferFacet : null}
@@ -785,14 +769,34 @@ export default function Explore() {
                       // 不传 onPointClick 让 WaferMap 内部禁用点击。
                       onPointClick={useAggregate ? undefined : handlePointClick}
                       onSelection={handleSelection}
+                      selectedRowIds={workspaceState.selectionDatasetId === chartDataset?.id
+                        ? workspaceState.selectedRowIds : EMPTY_SELECTION}
+                      revision={chartDataset?.id}
                     />
                   )}
                 </div>
               )}
             </div>
-          </div>
+          </div> : activeDataset ? (
+            <WorksheetGrid
+              dataset={activeDataset}
+              selectedRowIds={workspaceState.selectionDatasetId === activeDataset.id
+                ? workspaceState.selectedRowIds : EMPTY_SELECTION}
+              onSelection={(ids, mode) => setSelection(activeDataset.id, ids, mode)}
+              onEdit={(rowId, column, value) => editCell(activeDataset.id, rowId, column, value)}
+            />
+          ) : (
+            <div className="analysis-empty-table">请先运行查询创建数据表</div>
+          )}
+          <WorkspaceTabs
+            datasets={workspaceState.datasets}
+            activeTabId={workspaceState.activeTabId}
+            chartDatasetId={workspaceState.chartDatasetId}
+            onActivate={setActiveTab}
+            onDuplicate={() => duplicateDataset()}
+          />
         </div>
-        <Inspector
+        {showInspector && <Inspector
           fields={fields}
           chartType={chartType}
           xFields={xFields}
@@ -816,7 +820,7 @@ export default function Explore() {
           limit={limit}
           setLimit={setLimit}
           stats={stats}
-        />
+        />}
       </div>
 
       {activeDevice && <DeviceModal device={activeDevice} onClose={handleCloseDevice} />}

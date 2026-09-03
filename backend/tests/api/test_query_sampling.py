@@ -32,6 +32,16 @@ def test_query_request_skip_count_true() -> None:
     assert req.skip_count is True
 
 
+def test_query_request_sampling_defaults_auto() -> None:
+    """Existing API callers keep the previous automatic sampling behavior."""
+    assert QueryRequest(limit=100).sampling == "auto"
+
+
+def test_query_request_accepts_exact_analysis_snapshot() -> None:
+    """Analysis worksheets may explicitly request all rows up to the query limit."""
+    assert QueryRequest(limit=50_000, sampling="none").sampling == "none"
+
+
 # ── 降采样步长计算（纯数学验证）──────────────────────────────────────────
 
 

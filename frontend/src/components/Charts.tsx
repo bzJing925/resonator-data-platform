@@ -1,6 +1,38 @@
-import React, { useCallback, useEffect, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import Plot from 'react-plotly.js';
 import type { ChartField } from '../types';
+
+let plotlyPromise: Promise<any> | null = null;
+function getPlotly() {
+  if (!plotlyPromise) {
+    plotlyPromise = import('plotly.js-dist-min').then((module) => module.default || module);
+  }
+  return plotlyPromise;
+}
+
+function datumRowIds(datum: any): string[] {
+  if (Array.isArray(datum?.__memberRowIds)) return datum.__memberRowIds;
+  const id = typeof datum === 'string' ? datum : datum?.__rowId;
+  return id ? [id] : [];
+}
+
+function applyPlotSelection(graphDiv: any, selectedRowIds?: Set<string>) {
+  if (!graphDiv?.data) return;
+  const hasSelection = !!selectedRowIds?.size;
+  const traceIndices = graphDiv.data.map((_trace, traceIndex) => traceIndex);
+  const selectedpoints = graphDiv.data.map((trace) => {
+    const custom = Array.isArray(trace.customdata) ? trace.customdata : [];
+    return hasSelection ? custom.flatMap((datum, pointIndex) =>
+      datumRowIds(datum).some((id) => selectedRowIds?.has(id)) ? [pointIndex] : []) : null;
+  });
+  getPlotly().then((Plotly) => {
+    Plotly.restyle(graphDiv, {
+      selectedpoints,
+      'selected.marker.opacity': traceIndices.map(() => 1),
+      'unselected.marker.opacity': traceIndices.map(() => hasSelection ? 0.18 : 1),
+    }, traceIndices).catch(() => undefined);
+  });
+}
 
 // Plotly's bundled TypeScript definitions are very strict about literal
 // unions (axis type, legend orientation, grid roworder, etc.). Our chart
@@ -219,6 +251,7 @@ export function BoxPlot({ rows, xKey, yKey, colorKey, xLabel, yLabel, colorIsCat
           name: String(ck),
           marker: { color: PALETTE[i % PALETTE.length] },
           boxpoints: 'outliers',
+          customdata: grp,
         });
         i++;
       }
@@ -665,7 +698,11 @@ export function WaferMap({
   aggregated = false,
   onPointClick,
   onSelection,
+  selectedRowIds,
+  revision,
 }) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const graphDivRef = useRef<any>(null);
   const { traces, layout } = useMemo(() => {
     const allXs = rows.map((r) => r['x']).filter(Number.isFinite);
     const allYs = rows.map((r) => r['y']).filter(Number.isFinite);
@@ -780,6 +817,10 @@ export function WaferMap({
 
     return { traces: outTraces, layout: outLayout };
   }, [rows, valueField, valueLabel, facetField, facets, aggregated]);
+  const plotLayout = useMemo(
+    () => ({ ...layout, uirevision: revision || 'wafer-analysis' }),
+    [layout, revision],
+  );
 
   const handleClick = useCallback((e) => {
     if (onPointClick && e.points && e.points[0]) {
@@ -787,17 +828,44 @@ export function WaferMap({
     }
   }, [onPointClick]);
 
+  useEffect(() => {
+    applyPlotSelection(graphDivRef.current, selectedRowIds);
+  }, [selectedRowIds, traces]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || typeof ResizeObserver === 'undefined') return;
+    let frame = 0;
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        if (graphDivRef.current) {
+          getPlotly().then((Plotly) => Plotly.Plots.resize(graphDivRef.current));
+        }
+      });
+    });
+    observer.observe(container);
+    return () => { cancelAnimationFrame(frame); observer.disconnect(); };
+  }, []);
+
   return (
+    <div ref={containerRef} style={{ width: '100%', height: '100%' }}>
     <PlotAny
       divId="chart-wafer"
       data={traces}
-      layout={layout}
+      layout={plotLayout}
       config={baseConfig}
       style={{ width: '100%', height: '100%' }}
       useResizeHandler
+      onInitialized={(_figure, graphDiv) => {
+        graphDivRef.current = graphDiv;
+        applyPlotSelection(graphDiv, selectedRowIds);
+      }}
+      onUpdate={(_figure, graphDiv) => { graphDivRef.current = graphDiv; }}
       onClick={handleClick}
       onSelected={onSelection}
     />
+    </div>
   );
 }
 
@@ -871,21 +939,25 @@ function axisTitle(field) {
 /* ----- per-cell trace builders ----- */
 
 // Scatter / strip plot for one (xField, yField, zField) cell.
-function buildScatterTraces({ rows, xField, yField, zField, axisRef, useGl, zCategoryValues, showLegend }) {
+function buildScatterTraces({ rows, xField, yField, zField, axisRef, useGl, zCategoryValues, zGroups, showLegend, xCategoryArray }) {
   const xKey = xField.name;
   const yKey = yField.name;
   const xref = `x${axisRef}`;
   const yref = `y${axisRef}`;
   const xIsCat = !!xField.isCategorical;
   const yIsCat = !!yField.isCategorical;
-  // scattergl does not work cleanly when either axis is categorical → use SVG.
-  const wantGl = useGl && !xIsCat && !yIsCat;
+  // Map categorical X to numeric tick positions in GL mode. Plotly's native
+  // categorical scatter falls back to SVG and becomes the dominant pan cost.
+  const wantGl = useGl && !yIsCat;
   const traces = [];
 
   // When the X (or Y) axis is rendered as a category axis, stringify
   // the trace coordinates so they match the layout's string
   // categoryarray. Numeric axes keep their raw numeric values.
-  const mapX = xIsCat ? (d) => String(d[xKey]) : (d) => d[xKey];
+  const xIndex = new Map((xCategoryArray || []).map((value, index) => [String(value), index]));
+  const mapX = xIsCat
+    ? (wantGl ? (d) => xIndex.get(String(d[xKey])) : (d) => String(d[xKey]))
+    : (d) => d[xKey];
   const mapY = yIsCat ? (d) => String(d[yKey]) : (d) => d[yKey];
 
   if (zField && !zField.isCategorical) {
@@ -920,7 +992,7 @@ function buildScatterTraces({ rows, xField, yField, zField, axisRef, useGl, zCat
     const zVals = zCategoryValues || distinctSortedValues(rows, zKey, { includeNull: true });
     let i = 0;
     for (const zv of zVals) {
-      const grp = rowsForZ(rows, zKey, zv);
+      const grp = zGroups?.get(zv) || rowsForZ(rows, zKey, zv);
       traces.push({
         type: wantGl ? 'scattergl' : 'scatter',
         mode: 'markers',
@@ -973,7 +1045,7 @@ function buildScatterTraces({ rows, xField, yField, zField, axisRef, useGl, zCat
 // across cells. Without this, two cells in the same row whose traces
 // happen to share a name (e.g. both named after Y) end up sharing a
 // global slot table and shift their boxes off-tick.
-function buildBoxTraces({ rows, xField, yField, zField, axisRef, zCategoryValues, showLegend, cellGroup }) {
+function buildBoxTraces({ rows, xField, yField, zField, axisRef, zCategoryValues, zGroups, showLegend, cellGroup }) {
   const xKey = xField.name;
   const yKey = yField.name;
   const xref = `x${axisRef}`;
@@ -992,7 +1064,7 @@ function buildBoxTraces({ rows, xField, yField, zField, axisRef, zCategoryValues
       const zVals = zCategoryValues || distinctSortedValues(rows, zKey, { includeNull: true });
       let i = 0;
       for (const zv of zVals) {
-        const grp = rowsForZ(rows, zKey, zv);
+        const grp = zGroups?.get(zv) || rowsForZ(rows, zKey, zv);
         traces.push({
           type: 'box',
           orientation: 'h',
@@ -1027,6 +1099,7 @@ function buildBoxTraces({ rows, xField, yField, zField, axisRef, zCategoryValues
         showlegend: false,
         marker: { color: PALETTE[0] },
         boxpoints: 'outliers',
+        customdata: rows,
       });
     }
     return traces;
@@ -1037,7 +1110,7 @@ function buildBoxTraces({ rows, xField, yField, zField, axisRef, zCategoryValues
     const zVals = zCategoryValues || distinctSortedValues(rows, zKey, { includeNull: true });
     let i = 0;
     for (const zv of zVals) {
-      const grp = rowsForZ(rows, zKey, zv);
+      const grp = zGroups?.get(zv) || rowsForZ(rows, zKey, zv);
       traces.push({
         type: 'box',
         x: grp.map((d) => String(d[xKey])),
@@ -1051,6 +1124,7 @@ function buildBoxTraces({ rows, xField, yField, zField, axisRef, zCategoryValues
         showlegend: showLegend,
         marker: { color: PALETTE[i % PALETTE.length] },
         boxpoints: 'outliers',
+        customdata: grp,
       });
       i++;
     }
@@ -1072,6 +1146,7 @@ function buildBoxTraces({ rows, xField, yField, zField, axisRef, zCategoryValues
       showlegend: false,
       marker: { color: PALETTE[0] },
       boxpoints: 'outliers',
+      customdata: rows,
     });
   }
   return traces;
@@ -1080,7 +1155,7 @@ function buildBoxTraces({ rows, xField, yField, zField, axisRef, zCategoryValues
 // Violin plot for one cell. Y categorical → horizontal violin (one per Y).
 //
 // `cellGroup` is a unique-per-cell offsetgroup; see buildBoxTraces for why.
-function buildViolinTraces({ rows, xField, yField, zField, axisRef, zCategoryValues, showLegend, cellGroup }) {
+function buildViolinTraces({ rows, xField, yField, zField, axisRef, zCategoryValues, zGroups, showLegend, cellGroup }) {
   const xKey = xField.name;
   const yKey = yField.name;
   const xref = `x${axisRef}`;
@@ -1098,7 +1173,7 @@ function buildViolinTraces({ rows, xField, yField, zField, axisRef, zCategoryVal
       const zVals = zCategoryValues || distinctSortedValues(rows, zKey, { includeNull: true });
       let i = 0;
       for (const zv of zVals) {
-        const grp = rowsForZ(rows, zKey, zv);
+        const grp = zGroups?.get(zv) || rowsForZ(rows, zKey, zv);
         const c = PALETTE[i % PALETTE.length];
         traces.push({
           type: 'violin',
@@ -1119,6 +1194,7 @@ function buildViolinTraces({ rows, xField, yField, zField, axisRef, zCategoryVal
           line: { color: c, width: 1 },
           fillcolor: c + '50',
           spanmode: 'soft',
+          customdata: grp,
         });
         i++;
       }
@@ -1144,6 +1220,7 @@ function buildViolinTraces({ rows, xField, yField, zField, axisRef, zCategoryVal
         line: { color: c, width: 1 },
         fillcolor: c + '50',
         spanmode: 'soft',
+        customdata: rows,
       });
     }
     return traces;
@@ -1154,7 +1231,7 @@ function buildViolinTraces({ rows, xField, yField, zField, axisRef, zCategoryVal
     const zVals = zCategoryValues || distinctSortedValues(rows, zKey, { includeNull: true });
     let i = 0;
     for (const zv of zVals) {
-      const grp = rowsForZ(rows, zKey, zv);
+      const grp = zGroups?.get(zv) || rowsForZ(rows, zKey, zv);
       const c = PALETTE[i % PALETTE.length];
       traces.push({
         type: 'violin',
@@ -1174,6 +1251,7 @@ function buildViolinTraces({ rows, xField, yField, zField, axisRef, zCategoryVal
         line: { color: c, width: 1 },
         fillcolor: c + '50',
         spanmode: 'soft',
+        customdata: grp,
       });
       i++;
     }
@@ -1200,6 +1278,7 @@ function buildViolinTraces({ rows, xField, yField, zField, axisRef, zCategoryVal
       line: { color: c, width: 1 },
       fillcolor: c + '50',
       spanmode: 'soft',
+      customdata: rows,
     });
   }
   return traces;
@@ -1412,7 +1491,7 @@ function buildSwarmTraces({ rows, totalRowCount, xField, yField, zField, axisRef
 //
 // `xCategoryArray` (when xIsCat) gives the visual tick order; we sort by
 // indexOf into that array so the line follows the on-screen tick order.
-function buildLineTraces({ rows, xField, yField, zField, axisRef, zCategoryValues, showLegend, xCategoryArray }) {
+function buildLineTraces({ rows, xField, yField, zField, axisRef, zCategoryValues, zGroups, showLegend, xCategoryArray }) {
   const xKey = xField.name;
   const yKey = yField.name;
   const xref = `x${axisRef}`;
@@ -1450,9 +1529,10 @@ function buildLineTraces({ rows, xField, yField, zField, axisRef, zCategoryValue
       const xv = r[xKey];
       const yv = r[yKey];
       if (xv === null || xv === undefined || !isNum(yv)) continue;
-      const slot = acc.get(xv) || { sum: 0, n: 0 };
+      const slot = acc.get(xv) || { sum: 0, n: 0, memberRowIds: [] };
       slot.sum += yv;
       slot.n += 1;
+      if (r.__rowId) slot.memberRowIds.push(r.__rowId);
       acc.set(xv, slot);
     }
     if (xIsCat) {
@@ -1462,11 +1542,15 @@ function buildLineTraces({ rows, xField, yField, zField, axisRef, zCategoryValue
         return i < 0 ? Number.POSITIVE_INFINITY : i;
       };
       const out = [];
-      for (const [xv, { sum, n }] of acc) out.push({ [xKey]: xv, [yKey]: sum / n });
+      for (const [xv, { sum, n, memberRowIds }] of acc) {
+        out.push({ [xKey]: xv, [yKey]: sum / n, __memberRowIds: memberRowIds });
+      }
       return out.sort((a, b) => idx(a[xKey]) - idx(b[xKey]));
     }
     const out = [];
-    for (const [xv, { sum, n }] of acc) out.push({ [xKey]: xv, [yKey]: sum / n });
+    for (const [xv, { sum, n, memberRowIds }] of acc) {
+      out.push({ [xKey]: xv, [yKey]: sum / n, __memberRowIds: memberRowIds });
+    }
     return out.sort((a, b) => a[xKey] - b[xKey]);
   };
 
@@ -1482,7 +1566,7 @@ function buildLineTraces({ rows, xField, yField, zField, axisRef, zCategoryValue
     for (const zv of zVals) {
       // zVals 含 NULL_KEY 时，对应行的 r[zKey] 是 null/undefined，不是字符串 '∅'。
       // rowsForZ 替我们处理这个映射；用 === 直接比会让 NULL 桶静默掉光。
-      const grp = prep(rowsForZ(rows, zKey, zv));
+      const grp = prep(zGroups?.get(zv) || rowsForZ(rows, zKey, zv));
       const c = PALETTE[i % PALETTE.length];
       traces.push({
         type: 'scatter',
@@ -1496,6 +1580,7 @@ function buildLineTraces({ rows, xField, yField, zField, axisRef, zCategoryValue
         showlegend: showLegend,
         line: { color: c, width: 1.4 },
         marker: { color: c, size: yIsCat ? 6 : 5 },
+        customdata: grp,
       });
       i++;
     }
@@ -1512,6 +1597,7 @@ function buildLineTraces({ rows, xField, yField, zField, axisRef, zCategoryValue
       showlegend: false,
       line: { color: PALETTE[0], width: 1.4 },
       marker: { color: PALETTE[0], size: yIsCat ? 6 : 5 },
+      customdata: sorted,
     });
   }
   return traces;
@@ -1528,7 +1614,9 @@ const BUILDER_MAP = {
 // Chart types that ignore numeric Z (box/violin/swarm/line).
 const Z_NUMERIC_UNSUPPORTED = new Set(['box', 'violin', 'swarm', 'line']);
 
-const PERF_GL_THRESHOLD = 50000;
+// Base the decision on emitted points across all panels. A 5k-row dataset
+// rendered in eight metric panels is already far beyond a comfortable SVG DOM.
+const PERF_GL_THRESHOLD = 5000;
 // Hard ceiling on the number of distinct X categorical ticks per cell.
 // Beyond this Plotly renders unusably (browser stalls, ticks overlap).
 // We surface a warning and clamp the categoryarray to the head.
@@ -1595,14 +1683,30 @@ export function buildUnifiedSpec({
   const nZ = faceting ? zFacetValues.length : 1;
   const totalRows = nRows * nZ;
 
-  const useGl = rows.length >= PERF_GL_THRESHOLD;
-  const pWarn = rows.length >= PERF_GL_THRESHOLD
-    ? { rowCount: rows.length, threshold: PERF_GL_THRESHOLD }
+  const estimatedPointCount = rows.length * Math.max(1, cols * nRows);
+  const useGl = estimatedPointCount >= PERF_GL_THRESHOLD;
+  const pWarn = useGl
+    ? { rowCount: rows.length, pointCount: estimatedPointCount, threshold: PERF_GL_THRESHOLD }
     : null;
 
   const zCategoryValues = effZ && effZ.isCategorical
     ? distinctSortedValues(rows, effZ.name, { includeNull: true })
     : null;
+  const zGroups = effZ && effZ.isCategorical ? groupBy(rows, effZ.name) : null;
+  const categoryCache = new Map<string, string[]>();
+  const rangeCache = new Map<string, number[] | null>();
+  const categoriesFor = (field: ChartField) => {
+    let values = categoryCache.get(field.name);
+    if (!values) {
+      values = distinctSortedValues(rows, field.name).map(String);
+      categoryCache.set(field.name, values);
+    }
+    return values;
+  };
+  const rangeFor = (field: ChartField) => {
+    if (!rangeCache.has(field.name)) rangeCache.set(field.name, numericRange(rows, field.name));
+    return rangeCache.get(field.name) || null;
+  };
 
   const hasNumericZ = effZ && !effZ.isCategorical && chartType === 'scatter';
   const outTraces: any[] = [];
@@ -1633,7 +1737,7 @@ export function buildUnifiedSpec({
 
   if (!placeholder) for (let zi = 0; zi < nZ; zi++) {
     const zv = faceting ? zFacetValues[zi] : null;
-    const cellRows = faceting && effZ ? rowsForZ(rows, effZ.name, zv) : rows;
+    const cellRows = faceting && effZ ? (zGroups?.get(zv) || []) : rows;
 
     for (let r = 0; r < nRows; r++) {
       const yField = yFields[r];
@@ -1658,7 +1762,7 @@ export function buildUnifiedSpec({
         if (xAsCategory) {
           // 类目轴的 tick 集合始终按全量 rows 计算：各 Z 块共享同一套
           // 类目顺序，避免块间 tick 错位、缺失类目整块塌掉。
-          const allCats = distinctSortedValues(rows, xField.name).map(String);
+          const allCats = categoriesFor(xField);
           if (allCats.length > X_CATEGORY_TICK_LIMIT) {
             xCategoryArray = allCats.slice(0, X_CATEGORY_TICK_LIMIT);
             pw.push({
@@ -1670,7 +1774,7 @@ export function buildUnifiedSpec({
           } else {
             xCategoryArray = allCats;
           }
-          if (chartType === 'swarm') {
+          if (chartType === 'swarm' || (chartType === 'scatter' && useGl)) {
             xLayout.type = 'linear';
             xLayout.tickmode = 'array';
             xLayout.tickvals = xCategoryArray.map((_, i) => i);
@@ -1693,7 +1797,7 @@ export function buildUnifiedSpec({
             xLayout.title = undefined;
           }
           if (!xAsCategory) {
-            const xr = numericRange(rows, xField.name);
+            const xr = rangeFor(xField);
             if (xr) xLayout.range = xr;
           }
         }
@@ -1707,7 +1811,7 @@ export function buildUnifiedSpec({
           automargin: true,
         };
         if (yIsCat) {
-          const yCats = distinctSortedValues(rows, yField.name).map(String);
+          const yCats = categoriesFor(yField);
           yLayout.type = 'category';
           yLayout.categoryorder = 'array';
           yLayout.categoryarray = yCats;
@@ -1737,6 +1841,7 @@ export function buildUnifiedSpec({
           axisRef: sfx,
           useGl,
           zCategoryValues,
+          zGroups: faceting ? null : zGroups,
           showLegend: !faceting && cellIdx === COLOR_OWNER_CELL,
           cellGroup: `cell${cellIdx}`,
           xCategoryArray,
@@ -1781,17 +1886,24 @@ export function UnifiedChartGrid({
   onWarningsChange,
   onPointClick,
   onSelection,
+  selectedRowIds,
+  revision,
 }: UnifiedSpecArgs & {
   onWarningsChange?: (warns: any[]) => void;
   onPointClick?: (d: unknown) => void;
   onSelection?: (e: unknown) => void;
+  selectedRowIds?: Set<string>;
+  revision?: string;
 }) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const graphDivRef = useRef<any>(null);
   // Memoize the heavy trace+layout computation so it only re-runs when
   // the data or field configuration actually changes.
   const { allTraces, layout, pendingWarns, perfWarn, placeholder } = useMemo(
     () => buildUnifiedSpec({ chartType, rows, xFields, yFields, zField, facetZ, height, width }),
     [chartType, rows, xFields, yFields, zField, facetZ, height, width],
   );
+  const plotLayout = useMemo(() => ({ ...layout, uirevision: revision || 'analysis' }), [layout, revision]);
 
   // 警告下发用「整体替换」语义：把当前完整警告数组交给父组件替换（而非逐条
   // 追加），父组件因此不需要 reset effect —— 旧实现的子先父后 passive
@@ -1813,6 +1925,29 @@ export function UnifiedChartGrid({
     if (p && p.customdata) onPointClick(p.customdata);
   }, [onPointClick]);
 
+  useEffect(() => {
+    applyPlotSelection(graphDivRef.current, selectedRowIds);
+  }, [allTraces, selectedRowIds]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || typeof ResizeObserver === 'undefined') return;
+    let frame = 0;
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        if (graphDivRef.current) {
+          getPlotly().then((Plotly) => Plotly.Plots.resize(graphDivRef.current));
+        }
+      });
+    });
+    observer.observe(container);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, []);
+
   if (placeholder) {
     return (
       <div style={{ padding: 24, color: 'var(--fg-4)', fontSize: 12 }}>
@@ -1822,16 +1957,22 @@ export function UnifiedChartGrid({
   }
 
   return (
+    <div ref={containerRef} style={{ width: '100%', height: plotLayout.height }}>
     <PlotAny
       divId="chart-unified"
       data={allTraces}
-      layout={layout}
+      layout={plotLayout}
       config={baseConfig}
-      style={{ width: '100%', height: layout.height }}
+      style={{ width: '100%', height: plotLayout.height }}
       useResizeHandler
+      onInitialized={(_figure, graphDiv) => {
+        graphDivRef.current = graphDiv;
+        applyPlotSelection(graphDiv, selectedRowIds);
+      }}
+      onUpdate={(_figure, graphDiv) => { graphDivRef.current = graphDiv; }}
       onClick={handleClick}
       onSelected={onSelection}
     />
+    </div>
   );
 }
-

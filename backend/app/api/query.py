@@ -298,7 +298,7 @@ def query_devices(req: QueryRequest, db: DbSession) -> QueryResponse:
     # 当返回行数超过阈值时，均匀采样到阈值以下，减轻前端渲染负担。
     sampled = False
     sample_rate = None
-    if len(rows_out) > _SAMPLE_THRESHOLD:
+    if req.sampling == "auto" and len(rows_out) > _SAMPLE_THRESHOLD:
         step = (len(rows_out) // _SAMPLE_THRESHOLD) + 1
         rows_out = rows_out[::step]
         sampled = True

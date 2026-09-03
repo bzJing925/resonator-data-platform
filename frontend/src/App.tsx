@@ -9,6 +9,7 @@ import { getHealth } from './api/endpoints';
 import { UploadProgressProvider } from './contexts/UploadProgressContext';
 import { PageStateProvider } from './contexts/PageStateContext';
 import { IS_STATIC } from './config';
+import { AnalysisWorkspaceProvider } from './features/analysis/workspace';
 
 // 路由懒加载：非首屏页面按需加载，显著减小初始 bundle
 const Upload       = React.lazy(() => import('./pages/Upload'));
@@ -111,43 +112,45 @@ export default function App() {
   return (
     <PageStateProvider>
       <UploadProgressProvider>
-        <div className="app">
-          <Titlebar health={health} />
-          <Sidebar />
-          <div className="main">
-            <ErrorBoundary>
-              <Suspense fallback={<PageLoader />}>
-                <Routes>
-                  <Route path="/" element={<Dashboard />} />
-                  <Route path="/explore" element={<Explore />} />
-                  <Route path="/batches" element={<Batches />} />
-                  <Route path="/batches/:batchNo" element={<BatchDetail />} />
-                  <Route path="/mappings" element={<Mappings />} />
-                  {IS_STATIC ? (
-                    <>
-                      <Route path="/upload" element={<Navigate to="/" replace />} />
-                      <Route path="/tasks" element={<Navigate to="/" replace />} />
-                      <Route path="/tasks/:taskId" element={<Navigate to="/" replace />} />
-                      <Route path="/impedance" element={<Navigate to="/" replace />} />
-                    </>
-                  ) : (
-                    <>
-                      <Route path="/upload" element={<Upload />} />
-                      <Route path="/tasks" element={<Tasks />} />
-                      <Route path="/tasks/:taskId" element={<TaskDetail />} />
-                      <Route path="/impedance" element={<Impedance />} />
-                    </>
-                  )}
-                  <Route path="/process" element={<Process />} />
-                  <Route path="/surrogate" element={<Surrogate />} />
-                  <Route path="*" element={<NotFound />} />
-                </Routes>
-              </Suspense>
-            </ErrorBoundary>
+        <AnalysisWorkspaceProvider>
+          <div className="app">
+            <Titlebar health={health} />
+            <Sidebar />
+            <div className="main">
+              <ErrorBoundary>
+                <Suspense fallback={<PageLoader />}>
+                  <Routes>
+                    <Route path="/" element={<Dashboard />} />
+                    <Route path="/explore" element={<Explore />} />
+                    <Route path="/batches" element={<Batches />} />
+                    <Route path="/batches/:batchNo" element={<BatchDetail />} />
+                    <Route path="/mappings" element={<Mappings />} />
+                    {IS_STATIC ? (
+                      <>
+                        <Route path="/upload" element={<Navigate to="/" replace />} />
+                        <Route path="/tasks" element={<Navigate to="/" replace />} />
+                        <Route path="/tasks/:taskId" element={<Navigate to="/" replace />} />
+                        <Route path="/impedance" element={<Navigate to="/" replace />} />
+                      </>
+                    ) : (
+                      <>
+                        <Route path="/upload" element={<Upload />} />
+                        <Route path="/tasks" element={<Tasks />} />
+                        <Route path="/tasks/:taskId" element={<TaskDetail />} />
+                        <Route path="/impedance" element={<Impedance />} />
+                      </>
+                    )}
+                    <Route path="/process" element={<Process />} />
+                    <Route path="/surrogate" element={<Surrogate />} />
+                    <Route path="*" element={<NotFound />} />
+                  </Routes>
+                </Suspense>
+              </ErrorBoundary>
+            </div>
+            <Statusbar />
+            <FloatingUploadProgress />
           </div>
-          <Statusbar />
-          <FloatingUploadProgress />
-        </div>
+        </AnalysisWorkspaceProvider>
       </UploadProgressProvider>
     </PageStateProvider>
   );

@@ -236,7 +236,8 @@ data: {"error_msg": "..."}
   },
   "fields": ["batch_no", "wafer", "coord", "x", "y", "fs_ghz", "qs", "k2eff_pct"],
   "limit": 50000,
-  "order_by": "fs_ghz"
+  "order_by": "fs_ghz",
+  "sampling": "auto"
 }
 ```
 
@@ -256,6 +257,8 @@ data: {"error_msg": "..."}
 **约束**：
 - `limit` 上限硬编码 200000（防爆内存）
 - 超出 `limit` 时 `truncated=true`，前端提示用户加筛选
+- `sampling` 默认为 `auto`，超过 20000 行时自动系统采样；分析工作表使用
+  `none` 获取 `limit` 范围内的精确快照，保证表格行与图表点一一对应
 
 ### POST `/api/query/aggregate`
 
