@@ -28,9 +28,9 @@ python build.py
 
 输出：
 
-- macOS：`frontend/release/ALN Resonator Data Platform-0.2.2-arm64.dmg`
-- Windows：`frontend/release/ALN Resonator Data Platform Setup 0.2.2.exe`
-- Windows 便携版：`frontend/release/ALN Resonator Data Platform 0.2.2.exe`
+- macOS：`frontend/release/ALN Resonator Data Platform-0.2.3-arm64.dmg`
+- Windows：`frontend/release/ALN Resonator Data Platform Setup 0.2.3.exe`
+- Windows 便携版：`frontend/release/ALN Resonator Data Platform 0.2.3.exe`
 
 仅构建 macOS：
 
@@ -131,11 +131,11 @@ A: 生产环境下后端 stdout/stderr 已重定向到 Electron 主进程控制�
 指向固定 tag `latest` 的 release 资产目录。发新版流程：
 
 ```bash
-# 1. 提版本号：frontend/package.json version（如 0.2.1 → 0.2.2）
+# 1. 提版本号：frontend/package.json version（如 0.2.2 → 0.2.3）
 # 2. 完整构建（必须用 backend/.venv 的 python，否则产物缺依赖）
 backend/.venv/bin/python build.py --target mac
 
-# 3. 发布版本归档 release（tag v0.2.2，3 个资产）
+# 3. 发布版本归档 release（tag v0.2.3，3 个资产）
 #    同时同步 latest 通道：删除 latest release 的 3 个旧资产，上传新的
 #    - ALN-Resonator-Data-Platform-X.Y.Z-arm64.dmg
 #    - ALN-Resonator-Data-Platform-X.Y.Z-arm64.dmg.blockmap

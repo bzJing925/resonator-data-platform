@@ -1,7 +1,7 @@
 {
   "name": "aln-data-frontend",
   "private": true,
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "ALN Resonator Test Data Platform",
   "author": "aln-data <dev@aln-data.local>",
   "type": "module",
