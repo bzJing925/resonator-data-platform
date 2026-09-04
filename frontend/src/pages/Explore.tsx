@@ -8,8 +8,16 @@ import FilterPanel from '../components/FilterPanel';
 import { usePageState } from '../contexts/PageStateContext';
 import WorksheetGrid from '../features/analysis/WorksheetGrid';
 import WorkspaceTabs from '../features/analysis/WorkspaceTabs';
+import PointStyleInspector from '../features/analysis/PointStyleInspector';
+import { datumRowIds } from '../features/analysis/chart/chartInteraction';
 import { useAnalysisWorkspace } from '../features/analysis/workspace';
-import { serializeWorksheetCsv } from '../features/analysis/csv';
+import { serializeWorksheetCsv, serializeWorksheetTsv } from '../features/analysis/csv';
+import {
+  showAnalysisContextMenu,
+  useAnalysisCommandBridge,
+  type AnalysisDesktopCommand,
+  type AnalysisSurface,
+} from '../features/analysis/commandBridge';
 
 // Aggregation options for numeric Y/Z fields.
 //   'all' is a UI sentinel meaning "no aggregation, plot raw rows".
@@ -194,15 +202,25 @@ export default function Explore() {
   const { data: fields, loading: fLoading, error: fErr } = useFields();
   const {
     state: workspaceState,
+    datasets,
     chartDataset,
+    chartDatasetId,
     activeDataset,
+    selection,
+    pointStyles,
+    canUndo,
+    canRedo,
     loadQueryRows,
+    addDataset,
+    closeDataset,
     duplicateDataset,
+    renameDataset,
     setActiveTab,
     setChartDataset,
-    setSelection,
+    selectRows,
     editCell,
-    deleteSelection,
+    deleteRows,
+    updatePointStyle,
     undo,
     redo,
   } = useAnalysisWorkspace();
@@ -214,13 +232,13 @@ export default function Explore() {
     if (migratedRowsRef.current) return;
     migratedRowsRef.current = true;
     if (Array.isArray(rawState.rows) && rawState.rows.length > 0
-      && workspaceState.datasets.length === 0) {
+      && datasets.length === 0) {
       loadQueryRows(rawState.rows, rawState.stats || null);
     }
     if ('rows' in rawState || 'hiddenIds' in rawState || 'prevHiddenIds' in rawState || 'stats' in rawState) {
       setRawState(({ rows: _rows, hiddenIds: _hidden, prevHiddenIds: _prev, stats: _stats, ...rest }) => rest);
     }
-  }, [loadQueryRows, rawState, setRawState, workspaceState.datasets.length]);
+  }, [datasets.length, loadQueryRows, rawState, setRawState]);
 
   // Normalize persisted axis selections against the current allowed field set.
   const state = useMemo(() => ({
@@ -270,6 +288,7 @@ export default function Explore() {
   const [showFilters, setShowFilters] = useState(true);
   const [showInspector, setShowInspector] = useState(true);
   const [fullscreen, setFullscreen] = useState(false);
+  const [autorangeRequest, setAutorangeRequest] = useState(0);
 
   useEffect(() => {
     const app = document.querySelector('.app');
@@ -479,6 +498,81 @@ export default function Explore() {
     }
   };
 
+  const activeCommandSurface: AnalysisSurface = workspaceState.activeTabId === 'chart'
+    ? 'chart' : 'worksheet';
+  const inspectorDataset = activeCommandSurface === 'worksheet' ? activeDataset : chartDataset;
+  const runAnalysisCommand = useCallback(async (
+    command: AnalysisDesktopCommand,
+    requestedSurface: AnalysisSurface,
+  ) => {
+    const targetDataset = requestedSurface === 'worksheet' ? activeDataset : chartDataset;
+    const selectedRows = targetDataset && selection.datasetId === targetDataset.id
+      ? targetDataset.rows.filter((row) => selection.rowIds.has(row.rowId))
+      : [];
+    if (command === 'undo') {
+      undo();
+      return;
+    }
+    if (command === 'redo') {
+      redo();
+      return;
+    }
+    if (command === 'deleteSelection') {
+      if (targetDataset && selectedRows.length > 0) {
+        deleteRows(targetDataset.id, selectedRows.map((row) => row.rowId));
+      }
+      return;
+    }
+    if (command === 'selectAll') {
+      if (targetDataset) {
+        selectRows(
+          targetDataset.id,
+          targetDataset.rows.map((row) => row.rowId),
+          'replace',
+          requestedSurface,
+        );
+      }
+      return;
+    }
+    if (command === 'copySelection') {
+      if (selectedRows.length === 0) return;
+      const text = serializeWorksheetTsv(selectedRows);
+      try {
+        if (window.electronAPI?.writeAnalysisClipboard) {
+          await window.electronAPI.writeAnalysisClipboard(text);
+        } else {
+          await navigator.clipboard.writeText(text);
+        }
+      } catch (copyError) {
+        setError(copyError instanceof Error ? copyError.message : '复制失败');
+      }
+      return;
+    }
+    if (command === 'exportSelection') {
+      if (!targetDataset || selectedRows.length === 0) return;
+      const blob = new Blob([serializeWorksheetCsv(selectedRows)], {
+        type: 'text/csv;charset=utf-8',
+      });
+      const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      downloadBlob(blob, `${targetDataset.name}_所选数据_${ts}.csv`);
+      return;
+    }
+    if (command === 'editStyle') {
+      setShowInspector(true);
+      requestAnimationFrame(() => document.getElementById('point-style-title')
+        ?.scrollIntoView({ block: 'nearest' }));
+      return;
+    }
+    if (command === 'autorange' && requestedSurface === 'chart') {
+      setAutorangeRequest((value) => value + 1);
+    }
+  }, [activeDataset, chartDataset, deleteRows, redo, selectRows, selection, undo]);
+
+  useAnalysisCommandBridge({
+    surface: selection.activeSurface || activeCommandSurface,
+    onCommand: runAnalysisCommand,
+  });
+
   // Header title for the chart card.
   const titleText = isWafer
     ? `Wafer 版图 · ${waferZMeta ? displayLabel(waferZMeta) : waferZ?.name || ''}`
@@ -531,6 +625,9 @@ export default function Explore() {
       return `Z 字段 "${w.zField}" 共 ${w.total} 个不同值，分图模式仅显示前 ${w.shown} 个 — 建议改用颜色编码或加筛选条件缩小范围`;
     }
     if (w.kind === 'perf_gl') {
+      if (w.renderedPointCount && w.renderedPointCount < w.pointCount) {
+        return `原始 ${w.pointCount} 个点，视觉层显示 ${w.renderedPointCount} 个代表点；统计和行选择仍映射完整数据`;
+      }
       return `预计绘制 ${w.pointCount || w.rowCount} 个点，已自动切换 WebGL 加速渲染`;
     }
     if (w.kind === 'x_categories_clamped') {
@@ -546,51 +643,37 @@ export default function Explore() {
     if (!e || !Array.isArray(e.points)) return;
     const selectedIds = new Set<string>();
     for (const p of e.points) {
-      const row = p.customdata;
-      if (Array.isArray(row?.__memberRowIds)) {
-        row.__memberRowIds.forEach((id) => selectedIds.add(id));
-      } else if (typeof row === 'string') {
-        selectedIds.add(row);
-      } else if (row?.__rowId) {
-        selectedIds.add(row.__rowId);
-      }
+      datumRowIds(p.customdata).forEach((rowId) => selectedIds.add(rowId));
     }
-    if (chartDataset && selectedIds.size > 0) {
+    if (chartDataset) {
       const additive = !!(e.event?.ctrlKey || e.event?.metaKey || e.event?.shiftKey);
-      setSelection(chartDataset.id, [...selectedIds], additive ? 'add' : 'replace');
+      selectRows(chartDataset.id, [...selectedIds], additive ? 'add' : 'replace', 'chart');
     }
-  }, [chartDataset, setSelection]);
+  }, [chartDataset, selectRows]);
 
-  const handlePointClick = useCallback((d) => {
+  const handlePointClick = useCallback((d, event) => {
     if (!chartDataset || !d) return;
-    const ids = Array.isArray(d.__memberRowIds)
-      ? d.__memberRowIds
-      : [typeof d === 'string' ? d : d.__rowId].filter(Boolean);
-    if (ids.length) setSelection(chartDataset.id, ids, 'replace');
-  }, [chartDataset, setSelection]);
+    const ids = datumRowIds(d);
+    const nativeEvent = event?.event;
+    const mode = nativeEvent?.metaKey || nativeEvent?.ctrlKey
+      ? 'toggle'
+      : nativeEvent?.shiftKey ? 'add' : 'replace';
+    if (ids.length) selectRows(chartDataset.id, ids, mode, 'chart');
+  }, [chartDataset, selectRows]);
+  const handleDeselect = useCallback(() => {
+    if (chartDataset) selectRows(chartDataset.id, [], 'replace', 'chart');
+  }, [chartDataset, selectRows]);
+  const handlePointStyleUpdate = useCallback((rowIds, patch, metric) => {
+    if (inspectorDataset) updatePointStyle(inspectorDataset.id, rowIds, patch, metric);
+  }, [inspectorDataset, updatePointStyle]);
   const handleCloseDevice = useCallback(() => setActiveDevice(null), []);
 
   const openSelectedDevice = useCallback(() => {
-    if (!chartDataset || workspaceState.selectedRowIds.size !== 1) return;
-    const id = [...workspaceState.selectedRowIds][0];
-    const row = chartDataset.rows.find((item) => item.__rowId === id);
+    if (!chartDataset || selection.rowIds.size !== 1) return;
+    const id = [...selection.rowIds][0];
+    const row = chartDataset.rows.find((item) => item.rowId === id);
     if (row?.id != null) setActiveDevice(row);
-  }, [chartDataset, workspaceState.selectedRowIds]);
-
-  const handleWorkspaceKeyDown = useCallback((event) => {
-    const target = event.target;
-    if (target instanceof Element
-      && target.closest('input, textarea, select, option, button, [contenteditable="true"]')) return;
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') {
-      event.preventDefault();
-      if (event.shiftKey) redo(); else undo();
-      return;
-    }
-    if (event.key === 'Delete' || event.key === 'Backspace') {
-      event.preventDefault();
-      deleteSelection();
-    }
-  }, [deleteSelection, redo, undo]);
+  }, [chartDataset, selection.rowIds]);
 
   return (
     <>
@@ -618,17 +701,53 @@ export default function Explore() {
         <button className={`btn${showFilters ? ' active' : ''}`} onClick={() => setShowFilters((v) => !v)}>
           <I.filter size={13} /> 筛选
         </button>
-        <button className={`btn${showInspector ? ' active' : ''}`} onClick={() => setShowInspector((v) => !v)}>
+        <button
+          className={`btn${showInspector ? ' active' : ''}`}
+          onClick={() => showInspector
+            ? setShowInspector(false)
+            : runAnalysisCommand('editStyle', activeCommandSurface)}
+        >
           <I.settings size={13} /> 配置
         </button>
-        <button className="btn" onClick={undo} disabled={workspaceState.undoStack.length === 0} title="撤销 (Ctrl/Cmd+Z)">
+        <button
+          className="btn"
+          onClick={() => runAnalysisCommand('undo', activeCommandSurface)}
+          disabled={!canUndo}
+          title="撤销 (Ctrl/Cmd+Z)"
+        >
           ↶
         </button>
-        <button className="btn" onClick={redo} disabled={workspaceState.redoStack.length === 0} title="重做 (Ctrl/Cmd+Shift+Z)">
+        <button
+          className="btn"
+          onClick={() => runAnalysisCommand('redo', activeCommandSurface)}
+          disabled={!canRedo}
+          title="重做 (Ctrl/Cmd+Shift+Z)"
+        >
           ↷
         </button>
-        <button className="btn" onClick={deleteSelection} disabled={workspaceState.selectedRowIds.size === 0} title="删除选中行">
-          <I.trash size={13} /> {workspaceState.selectedRowIds.size || ''}
+        <button
+          className="btn"
+          onClick={() => runAnalysisCommand('deleteSelection', activeCommandSurface)}
+          disabled={selection.rowIds.size === 0}
+          title="删除选中行"
+        >
+          <I.trash size={13} /> {selection.rowIds.size || ''}
+        </button>
+        <button
+          className="btn"
+          onClick={() => runAnalysisCommand('copySelection', activeCommandSurface)}
+          disabled={selection.rowIds.size === 0}
+          title="复制所选数据 (Ctrl/Cmd+C)"
+        >
+          复制
+        </button>
+        <button
+          className="btn"
+          onClick={() => runAnalysisCommand('autorange', 'chart')}
+          disabled={workspaceState.activeTabId !== 'chart'}
+          title="坐标轴自动调整"
+        >
+          自动坐标轴
         </button>
         <button className="btn" onClick={() => setFullscreen((v) => !v)} title={fullscreen ? '退出全屏分析' : '全屏分析'}>
           <I.expand size={13} />
@@ -656,7 +775,6 @@ export default function Explore() {
 
       <div
         className={`workspace analysis-workspace${fullscreen ? ' fullscreen' : ''}${showFilters ? '' : ' filters-hidden'}${showInspector ? '' : ' inspector-hidden'}`}
-        onKeyDown={handleWorkspaceKeyDown}
       >
         {showFilters && <FilterPanel value={filters} onApply={setFilters} />}
         <div className="canvas-wrap">
@@ -664,30 +782,31 @@ export default function Explore() {
             className="chart-card"
             tabIndex={0}
             onMouseDown={(event) => event.currentTarget.focus()}
+            onContextMenu={(event) => showAnalysisContextMenu(event, 'chart')}
           >
             <div className="chart-head">
               <span className="title">{titleText}</span>
               <span className="axes">
                 {stats
-                  ? `${rows.length.toLocaleString()} 工作区行 · 查询 ${stats.returned}/${stats.total}${stats.truncated ? ' · 已截断' : ''}${stats.sampled ? ' · 已采样 (' + Math.round(stats.sample_rate * 100) + '%)' : ''}`
+                  ? `${rows.length.toLocaleString()} 工作区行 · 查询 ${stats.returned}/${stats.total}${stats.truncated ? ' · 已截断' : ''}${stats.sampled ? ' · 已采样 (' + Math.round(Number(stats.sample_rate) * 100) + '%)' : ''}`
                   : '尚未查询'}
               </span>
               <div className="right">
-                {workspaceState.datasets.length > 0 && (
+                {datasets.length > 0 && (
                   <select
                     className="select"
                     value={chartDataset?.id || ''}
                     onChange={(event) => setChartDataset(event.target.value)}
                     title="图表数据源"
                   >
-                    {workspaceState.datasets.map((dataset) => (
+                    {datasets.map((dataset) => (
                       <option key={dataset.id} value={dataset.id}>{dataset.name}</option>
                     ))}
                   </select>
                 )}
                 <button
                   className="btn sm"
-                  disabled={workspaceState.selectedRowIds.size !== 1}
+                  disabled={selection.rowIds.size !== 1}
                   onClick={openSelectedDevice}
                 >
                   查看器件
@@ -730,9 +849,9 @@ export default function Explore() {
                       ))}
                     </div>
                   )}
-                  {workspaceState.selectedRowIds.size > 0 && (
+                  {selection.rowIds.size > 0 && (
                     <div className="explore-selectionbar">
-                      已选中 {workspaceState.selectedRowIds.size.toLocaleString()} 行
+                      已选中 {selection.rowIds.size.toLocaleString()} 行
                       <span>Delete/Backspace 删除 · Ctrl/Cmd+Z 撤销</span>
                     </div>
                   )}
@@ -752,9 +871,14 @@ export default function Explore() {
                       onWarningsChange={setChartWarnings}
                       onPointClick={handlePointClick}
                       onSelection={handleSelection}
-                      selectedRowIds={workspaceState.selectionDatasetId === chartDataset?.id
-                        ? workspaceState.selectedRowIds : EMPTY_SELECTION}
+                      onDeselect={handleDeselect}
+                      selectedRowIds={selection.datasetId === chartDataset?.id
+                        ? selection.rowIds : EMPTY_SELECTION}
+                      pointStyles={chartDataset ? pointStyles[chartDataset.id] : undefined}
+                      autorangeRequest={autorangeRequest}
                       revision={chartDataset?.id}
+                      datasetRevision={chartDataset?.revision}
+                      analysisLayout
                     />
                   )}
                   {isWafer && (
@@ -769,8 +893,8 @@ export default function Explore() {
                       // 不传 onPointClick 让 WaferMap 内部禁用点击。
                       onPointClick={useAggregate ? undefined : handlePointClick}
                       onSelection={handleSelection}
-                      selectedRowIds={workspaceState.selectionDatasetId === chartDataset?.id
-                        ? workspaceState.selectedRowIds : EMPTY_SELECTION}
+                      selectedRowIds={selection.datasetId === chartDataset?.id
+                        ? selection.rowIds : EMPTY_SELECTION}
                       revision={chartDataset?.id}
                     />
                   )}
@@ -780,20 +904,26 @@ export default function Explore() {
           </div> : activeDataset ? (
             <WorksheetGrid
               dataset={activeDataset}
-              selectedRowIds={workspaceState.selectionDatasetId === activeDataset.id
-                ? workspaceState.selectedRowIds : EMPTY_SELECTION}
-              onSelection={(ids, mode) => setSelection(activeDataset.id, ids, mode)}
+              selectedRowIds={selection.datasetId === activeDataset.id
+                ? selection.rowIds : EMPTY_SELECTION}
+              onSelection={(ids, mode) => selectRows(activeDataset.id, ids, mode, 'worksheet')}
               onEdit={(rowId, column, value) => editCell(activeDataset.id, rowId, column, value)}
+              onDelete={() => runAnalysisCommand('deleteSelection', 'worksheet')}
+              onSelectAll={() => runAnalysisCommand('selectAll', 'worksheet')}
+              onContextMenu={(event) => showAnalysisContextMenu(event, 'worksheet')}
             />
           ) : (
             <div className="analysis-empty-table">请先运行查询创建数据表</div>
           )}
           <WorkspaceTabs
-            datasets={workspaceState.datasets}
+            datasets={datasets}
             activeTabId={workspaceState.activeTabId}
-            chartDatasetId={workspaceState.chartDatasetId}
+            chartDatasetId={chartDatasetId}
             onActivate={setActiveTab}
-            onDuplicate={() => duplicateDataset()}
+            onAdd={() => addDataset()}
+            onDuplicate={duplicateDataset}
+            onRename={renameDataset}
+            onClose={closeDataset}
           />
         </div>
         {showInspector && <Inspector
@@ -820,7 +950,20 @@ export default function Explore() {
           limit={limit}
           setLimit={setLimit}
           stats={stats}
-        />}
+        >
+          {inspectorDataset && !isWafer && (
+            <PointStyleInspector
+              dataset={inspectorDataset}
+              selectedRowIds={selection.datasetId === inspectorDataset.id
+                ? selection.rowIds : EMPTY_SELECTION}
+              anchorRowId={selection.datasetId === inspectorDataset.id
+                ? selection.anchorRowId : null}
+              metrics={yMeta}
+              styles={pointStyles[inspectorDataset.id]}
+              onUpdate={handlePointStyleUpdate}
+            />
+          )}
+        </Inspector>}
       </div>
 
       {activeDevice && <DeviceModal device={activeDevice} onClose={handleCloseDevice} />}
@@ -845,6 +988,7 @@ function Inspector({
   waferFacet, setWaferFacet,
   xMeta, yMeta, violinXWarning, aggregateXWarning, yzFieldConflict,
   limit, setLimit, stats,
+  children,
 }) {
   const isWafer = chartType === 'wafer';
   const xAxisOptions = useMemo(() => axisFieldOptions(fields, X_AXIS_FIELD_NAMES), [fields]);
@@ -863,6 +1007,7 @@ function Inspector({
         <span>图表配置</span>
       </div>
       <div className="panel-body">
+        {children}
         {isWafer ? (
           <>
             <div className="section">

@@ -11,5 +11,5 @@
     "outDir": "electron-dist/electron",
     "noEmit": false
   },
-  "include": ["electron/preload.ts"]
+  "include": ["electron/preload.ts", "electron/analysisCommands.ts"]
 }

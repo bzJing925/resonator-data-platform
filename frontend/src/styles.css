@@ -510,6 +510,74 @@ textarea {
   overflow: auto;
   padding: 10px 12px;
 }
+.point-style-inspector {
+  margin: 0 0 12px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg-panel-2);
+}
+.point-style-inspector h2 {
+  margin: 0;
+  color: var(--fg-1);
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.2px;
+}
+.point-style-summary,
+.point-style-empty {
+  margin: 3px 0 9px;
+  color: var(--fg-4);
+  font-size: 10.5px;
+}
+.point-style-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 8px;
+}
+.point-style-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  color: var(--fg-3);
+  font-size: 10.5px;
+}
+.point-style-field .select {
+  width: 160px;
+}
+.point-style-field.compact {
+  display: grid;
+  grid-template-columns: 1fr 64px;
+  margin: 0;
+}
+.point-style-field.wide {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+.point-style-field.wide .select {
+  width: 100%;
+}
+.point-style-field input[type='color'] {
+  width: 64px;
+  height: 26px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  background: var(--bg-panel);
+  cursor: pointer;
+}
+.point-style-field input:disabled,
+.point-style-field select:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+.point-style-reset {
+  width: 100%;
+  margin-top: 9px;
+}
 .field {
   display: block;
   margin-bottom: 10px;
@@ -692,6 +760,16 @@ textarea {
   min-height: 0;
 }
 
+/* Let Plotly's drag layer own pointer gestures; its spatial index still
+   resolves the underlying raw point for hover/click/select events. */
+.analysis-plot .scatterlayer .point {
+  pointer-events: none !important;
+}
+
+.analysis-tabs-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
 .analysis-tabs {
   height: 32px;
   display: flex;
@@ -701,7 +779,8 @@ textarea {
   background: var(--bg-panel-2);
   border-top: 1px solid var(--border);
 }
-.analysis-tabs button {
+.analysis-tabs > button,
+.analysis-tab-item > button {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -714,13 +793,76 @@ textarea {
   cursor: pointer;
   white-space: nowrap;
 }
-.analysis-tabs button.active {
+.analysis-tabs > button.active,
+.analysis-tab-item > button.active {
   color: var(--primary);
   background: var(--bg-panel);
   box-shadow: inset 0 2px var(--primary);
 }
 .analysis-tabs button:disabled { opacity: 0.4; cursor: not-allowed; }
 .analysis-tabs .analysis-tab-add { min-width: 34px; width: 34px; padding: 0 10px; }
+.analysis-tab-item { display: flex; align-items: stretch; }
+.analysis-tab-item > input {
+  width: 132px;
+  margin: 4px;
+  border: 1px solid var(--primary);
+  background: var(--bg-panel);
+  color: var(--fg-1);
+  outline: none;
+}
+.analysis-tab-actions { display: inline-flex; border-right: 1px solid var(--border); }
+.analysis-tab-actions button {
+  width: 25px;
+  padding: 0;
+  border: 0;
+  background: var(--bg-panel);
+  color: var(--fg-3);
+  cursor: pointer;
+}
+.analysis-tab-actions button:hover { color: var(--primary); }
+.analysis-tab-reference {
+  position: absolute;
+  right: 8px;
+  bottom: 36px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-2);
+  background: var(--bg-panel-2);
+  box-shadow: var(--shadow-2);
+  color: var(--fg-2);
+  font-size: 11px;
+}
+.analysis-tab-reference select,
+.analysis-tab-reference button {
+  height: 26px;
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--fg-2);
+}
+.analysis-tab-menu {
+  position: fixed;
+  z-index: 50;
+  display: grid;
+  min-width: 126px;
+  padding: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-2);
+  background: var(--bg-panel-2);
+  box-shadow: var(--shadow-2);
+}
+.analysis-tab-menu button {
+  padding: 6px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--fg-2);
+  text-align: left;
+  cursor: pointer;
+}
+.analysis-tab-menu button:hover { background: var(--primary-soft); }
 
 .analysis-sheet {
   flex: 1;
@@ -748,6 +890,7 @@ textarea {
 .analysis-sheet-status > :first-child { color: var(--primary); font-weight: 600; }
 .analysis-sheet-local { margin-left: auto; color: var(--warn); }
 .analysis-grid-viewport { flex: 1; min-height: 0; overflow: auto; outline: none; }
+.analysis-grid-viewport:focus { box-shadow: inset 0 0 0 1px var(--primary); }
 .analysis-grid-header {
   position: sticky;
   top: 0;
@@ -761,11 +904,13 @@ textarea {
 .analysis-grid-spacer { position: relative; min-width: max-content; }
 .analysis-grid-row {
   position: absolute;
+  top: 0;
   left: 0;
   right: 0;
   height: 28px;
   display: grid;
   min-width: max-content;
+  user-select: none;
 }
 .analysis-grid-row:hover { background: rgba(95,168,211,0.06); }
 .analysis-grid-row.selected { background: rgba(95,168,211,0.18); }
@@ -779,7 +924,7 @@ textarea {
   border-bottom: 1px solid var(--border-soft);
   font-size: 11px;
 }
-.analysis-grid-cell.row-number, .analysis-grid-cell.corner {
+.analysis-grid-cell.row-number {
   position: sticky;
   left: 0;
   z-index: 2;
@@ -787,6 +932,18 @@ textarea {
   color: var(--fg-4);
   background: var(--bg-panel-2);
 }
+.analysis-grid-cell.selection {
+  position: sticky;
+  left: 44px;
+  z-index: 2;
+  padding-left: 0;
+  padding-right: 0;
+  color: var(--primary);
+  text-align: center;
+  background: var(--bg-panel-2);
+}
+.analysis-grid-row.selected .analysis-grid-cell.row-number,
+.analysis-grid-row.selected .analysis-grid-cell.selection { background: #243541; }
 .analysis-grid-cell.mono { font-family: var(--font-mono); color: var(--fg-4); }
 .analysis-grid-cell.editable { cursor: text; }
 .analysis-grid-cell input {

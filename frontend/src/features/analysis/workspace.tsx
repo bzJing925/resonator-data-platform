@@ -1,296 +1,276 @@
 import React, { createContext, useCallback, useContext, useMemo, useReducer } from 'react';
+import {
+  commandLabel,
+  executeAnalysisCommand,
+  isUndoableCommand,
+  type AnalysisCommand,
+  type PointStylePatch,
+  type PointStyleState,
+  type WorkspacePresent,
+} from './model/commands';
+import {
+  CHART_PAGE_ID,
+  createAnalysisDataset,
+  createDatasetRegistry,
+  duplicateAnalysisDataset,
+  normalizeAnalysisRows,
+  type AnalysisDataset,
+  type AnalysisRow,
+  type DatasetId,
+  type RowId,
+} from './model/dataset';
+import {
+  createHistoryState,
+  pushHistory,
+  redoHistory,
+  undoHistory,
+  type HistoryState,
+} from './model/history';
+import {
+  selectActiveDataset,
+  selectCanRedo,
+  selectCanUndo,
+  selectChartDataset,
+  selectDatasets,
+} from './model/selectors';
+import {
+  createSelectionState,
+  type ActiveSurface,
+  type SelectionMode,
+  type SelectionState,
+} from './model/selection';
 
-export type AnalysisRow = Record<string, any> & { __rowId: string };
+export type {
+  AnalysisDataset,
+  AnalysisRow,
+  DatasetId,
+  RowId,
+  ActiveSurface,
+  SelectionMode,
+  SelectionState,
+};
+export { normalizeAnalysisRows };
 
-export interface AnalysisDataset {
-  id: string;
-  name: string;
-  kind: 'query' | 'derived';
-  rows: AnalysisRow[];
-  stats: Record<string, any> | null;
-  revision: number;
+export interface WorkspaceState extends WorkspacePresent {
+  history: HistoryState<WorkspacePresent>;
 }
 
-type SelectionMode = 'replace' | 'toggle' | 'add';
-
-interface EditCommand {
-  type: 'edit';
-  datasetId: string;
-  rowId: string;
-  column: string;
-  before: unknown;
-  after: unknown;
-}
-
-interface DeleteCommand {
-  type: 'delete';
-  datasetId: string;
-  removed: Array<{ index: number; row: AnalysisRow }>;
-}
-
-type Command = EditCommand | DeleteCommand;
-
-interface WorkspaceState {
-  datasets: AnalysisDataset[];
-  activeTabId: 'chart' | string;
-  chartDatasetId: string | null;
-  selectedRowIds: Set<string>;
-  selectionDatasetId: string | null;
-  undoStack: Command[];
-  redoStack: Command[];
-}
-
-const INITIAL_STATE: WorkspaceState = {
-  datasets: [],
-  activeTabId: 'chart',
-  chartDatasetId: null,
-  selectedRowIds: new Set(),
-  selectionDatasetId: null,
-  undoStack: [],
-  redoStack: [],
+export const INITIAL_WORKSPACE_STATE: WorkspaceState = {
+  registry: createDatasetRegistry(),
+  activeTabId: CHART_PAGE_ID,
+  selection: createSelectionState(),
+  pointStyles: {},
+  history: createHistoryState<WorkspacePresent>(),
 };
 
-type Action =
-  | { type: 'load'; dataset: AnalysisDataset }
-  | { type: 'duplicate'; dataset: AnalysisDataset }
-  | { type: 'tab'; tabId: string }
-  | { type: 'chartDataset'; datasetId: string }
-  | { type: 'select'; datasetId: string; rowIds: string[]; mode: SelectionMode }
-  | { type: 'edit'; datasetId: string; rowId: string; column: string; value: unknown }
-  | { type: 'deleteSelection' }
+export type WorkspaceAction =
+  | { type: 'execute'; command: AnalysisCommand }
   | { type: 'undo' }
   | { type: 'redo' };
 
-function replaceDataset(
-  state: WorkspaceState,
-  datasetId: string,
-  update: (dataset: AnalysisDataset) => AnalysisDataset,
-) {
-  return state.datasets.map((dataset) => dataset.id === datasetId ? update(dataset) : dataset);
+function workspacePresent(state: WorkspaceState): WorkspacePresent {
+  const { history: _history, ...present } = state;
+  return present;
 }
 
-function applyCommand(state: WorkspaceState, command: Command, reverse: boolean): WorkspaceState {
-  if (command.type === 'edit') {
-    const value = reverse ? command.before : command.after;
-    const datasets = replaceDataset(state, command.datasetId, (dataset) => ({
-      ...dataset,
-      revision: dataset.revision + 1,
-      rows: dataset.rows.map((row) => row.__rowId === command.rowId
-        ? { ...row, [command.column]: value }
-        : row),
-    }));
-    return { ...state, datasets };
+export function workspaceReducer(state: WorkspaceState, action: WorkspaceAction): WorkspaceState {
+  if (action.type === 'execute') {
+    const before = workspacePresent(state);
+    const after = executeAnalysisCommand(before, action.command);
+    if (after === before) return state;
+    const history = isUndoableCommand(action.command)
+      ? pushHistory(state.history, { label: commandLabel(action.command), before, after })
+      : state.history;
+    return { ...after, history };
   }
-
-  const datasets = replaceDataset(state, command.datasetId, (dataset) => {
-    if (!reverse) {
-      const removedIds = new Set(command.removed.map(({ row }) => row.__rowId));
-      return {
-        ...dataset,
-        revision: dataset.revision + 1,
-        rows: dataset.rows.filter((row) => !removedIds.has(row.__rowId)),
-      };
-    }
-    const rows = dataset.rows.slice();
-    for (const { index, row } of [...command.removed].sort((a, b) => a.index - b.index)) {
-      rows.splice(Math.min(index, rows.length), 0, row);
-    }
-    return { ...dataset, revision: dataset.revision + 1, rows };
-  });
-  return { ...state, datasets };
-}
-
-export function workspaceReducer(state: WorkspaceState, action: Action): WorkspaceState {
-  switch (action.type) {
-    case 'load':
-      return {
-        ...state,
-        datasets: [...state.datasets, action.dataset],
-        chartDatasetId: action.dataset.id,
-        activeTabId: 'chart',
-        selectedRowIds: new Set(),
-        selectionDatasetId: action.dataset.id,
-        undoStack: [],
-        redoStack: [],
-      };
-    case 'duplicate':
-      return {
-        ...state,
-        datasets: [...state.datasets, action.dataset],
-        activeTabId: action.dataset.id,
-        selectedRowIds: new Set(),
-        selectionDatasetId: action.dataset.id,
-      };
-    case 'tab':
-      return { ...state, activeTabId: action.tabId };
-    case 'chartDataset':
-      return {
-        ...state,
-        chartDatasetId: action.datasetId,
-        selectedRowIds: new Set(),
-        selectionDatasetId: action.datasetId,
-      };
-    case 'select': {
-      const next = action.mode === 'replace' || state.selectionDatasetId !== action.datasetId
-        ? new Set<string>()
-        : new Set(state.selectedRowIds);
-      for (const id of action.rowIds) {
-        if (action.mode === 'toggle' && next.has(id)) next.delete(id);
-        else next.add(id);
-      }
-      return { ...state, selectedRowIds: next, selectionDatasetId: action.datasetId };
-    }
-    case 'edit': {
-      const dataset = state.datasets.find((item) => item.id === action.datasetId);
-      const row = dataset?.rows.find((item) => item.__rowId === action.rowId);
-      if (!row || row[action.column] === action.value) return state;
-      const command: EditCommand = {
-        type: 'edit', datasetId: action.datasetId, rowId: action.rowId,
-        column: action.column, before: row[action.column], after: action.value,
-      };
-      const next = applyCommand(state, command, false);
-      return { ...next, undoStack: [...state.undoStack, command], redoStack: [] };
-    }
-    case 'deleteSelection': {
-      if (!state.selectionDatasetId || state.selectedRowIds.size === 0) return state;
-      const dataset = state.datasets.find((item) => item.id === state.selectionDatasetId);
-      if (!dataset) return state;
-      const removed = dataset.rows.flatMap((row, index) =>
-        state.selectedRowIds.has(row.__rowId) ? [{ index, row }] : []);
-      if (removed.length === 0) return state;
-      const command: DeleteCommand = { type: 'delete', datasetId: dataset.id, removed };
-      const next = applyCommand(state, command, false);
-      return {
-        ...next,
-        selectedRowIds: new Set(),
-        undoStack: [...state.undoStack, command],
-        redoStack: [],
-      };
-    }
-    case 'undo': {
-      const command = state.undoStack.at(-1);
-      if (!command) return state;
-      const next = applyCommand(state, command, true);
-      return {
-        ...next,
-        undoStack: state.undoStack.slice(0, -1),
-        redoStack: [...state.redoStack, command],
-      };
-    }
-    case 'redo': {
-      const command = state.redoStack.at(-1);
-      if (!command) return state;
-      const next = applyCommand(state, command, false);
-      return {
-        ...next,
-        undoStack: [...state.undoStack, command],
-        redoStack: state.redoStack.slice(0, -1),
-      };
-    }
-    default:
-      return state;
+  const before = workspacePresent(state);
+  if (action.type === 'undo') {
+    const result = undoHistory(before, state.history);
+    return result.present === before ? state : { ...result.present, history: result.history };
   }
+  const result = redoHistory(before, state.history);
+  return result.present === before ? state : { ...result.present, history: result.history };
 }
 
 let datasetSequence = 1;
 
-export function normalizeAnalysisRows(rows: Record<string, any>[], datasetId: string): AnalysisRow[] {
-  return rows.map((row, index) => ({
-    ...row,
-    structureType: row.structureType ?? '',
-    __rowId: row.id != null ? `device:${row.id}` : `${datasetId}:row:${index}`,
-  }));
-}
-
 interface WorkspaceApi {
   state: WorkspaceState;
+  datasets: AnalysisDataset[];
   chartDataset: AnalysisDataset | null;
+  chartDatasetId: DatasetId | null;
   activeDataset: AnalysisDataset | null;
-  loadQueryRows: (rows: Record<string, any>[], stats?: Record<string, any> | null) => void;
-  duplicateDataset: (datasetId?: string) => void;
+  selection: SelectionState;
+  pointStyles: PointStyleState;
+  canUndo: boolean;
+  canRedo: boolean;
+  loadQueryRows: (rows: Record<string, unknown>[], stats?: Record<string, unknown> | null) => void;
+  addDataset: (name?: string) => DatasetId;
+  closeDataset: (datasetId: DatasetId, replacementDatasetId?: DatasetId | null) => void;
+  duplicateDataset: (datasetId?: DatasetId) => void;
+  renameDataset: (datasetId: DatasetId, name: string) => void;
   setActiveTab: (tabId: string) => void;
-  setChartDataset: (datasetId: string) => void;
-  setSelection: (datasetId: string, rowIds: string[], mode?: SelectionMode) => void;
-  editCell: (datasetId: string, rowId: string, column: string, value: unknown) => void;
+  setChartDataset: (datasetId: DatasetId) => void;
+  selectRows: (
+    datasetId: DatasetId,
+    rowIds: RowId[],
+    mode?: SelectionMode,
+    activeSurface?: ActiveSurface,
+  ) => void;
+  updateRows: (
+    datasetId: DatasetId,
+    updates: Array<{ rowId: RowId; changes: Record<string, unknown> }>,
+  ) => void;
+  editCell: (datasetId: DatasetId, rowId: RowId, column: string, value: unknown) => void;
+  deleteRows: (datasetId: DatasetId, rowIds: RowId[]) => void;
   deleteSelection: () => void;
+  updatePointStyle: (
+    datasetId: DatasetId,
+    rowIds: RowId[],
+    patch: PointStylePatch,
+    metric?: string,
+  ) => void;
   undo: () => void;
   redo: () => void;
 }
 
 const WorkspaceContext = createContext<WorkspaceApi | null>(null);
 
-export function AnalysisWorkspaceProvider({ children }: { children: React.ReactNode }) {
-  const [state, dispatch] = useReducer(workspaceReducer, INITIAL_STATE);
+function nextDatasetIdentity() {
+  const number = datasetSequence;
+  datasetSequence += 1;
+  return { id: `analysis-${number}`, name: `数据表${number}` };
+}
 
-  const loadQueryRows = useCallback((rows: Record<string, any>[], stats = null) => {
-    const number = datasetSequence++;
-    const id = `analysis-${number}`;
-    dispatch({
-      type: 'load',
-      dataset: {
-        id,
-        name: `数据表${number}`,
-        kind: 'query',
-        rows: normalizeAnalysisRows(rows, id),
-        stats,
-        revision: 1,
-      },
-    });
+export function AnalysisWorkspaceProvider({ children }: { children: React.ReactNode }) {
+  const [state, dispatch] = useReducer(workspaceReducer, INITIAL_WORKSPACE_STATE);
+  const datasets = useMemo(() => selectDatasets(state), [state]);
+  const chartDataset = selectChartDataset(state);
+  const activeDataset = selectActiveDataset(state);
+  const chartDatasetId = state.registry.chartPages[CHART_PAGE_ID]?.datasetId || null;
+
+  const execute = useCallback((command: AnalysisCommand) => {
+    dispatch({ type: 'execute', command });
   }, []);
 
-  const duplicateDataset = useCallback((datasetId?: string) => {
-    const source = state.datasets.find((item) => item.id === (datasetId || state.chartDatasetId));
-    if (!source) return;
-    const number = datasetSequence++;
-    const id = `analysis-${number}`;
-    dispatch({
-      type: 'duplicate',
-      dataset: {
-        ...source,
-        id,
-        name: `数据表${number}`,
-        kind: 'derived',
-        rows: source.rows.map((row, index) => ({ ...row, __rowId: `${id}:row:${index}` })),
-        revision: 1,
-      },
+  const loadQueryRows = useCallback((
+    rows: Record<string, unknown>[],
+    stats: Record<string, unknown> | null = null,
+  ) => {
+    const identity = nextDatasetIdentity();
+    execute({
+      type: 'addDataset',
+      dataset: createAnalysisDataset({ ...identity, kind: 'query', rows, stats }),
+      activate: 'chart',
     });
-  }, [state.chartDatasetId, state.datasets]);
+  }, [execute]);
 
-  const setActiveTab = useCallback((tabId: string) => dispatch({ type: 'tab', tabId }), []);
+  const addDataset = useCallback((name?: string) => {
+    const identity = nextDatasetIdentity();
+    execute({
+      type: 'addDataset',
+      dataset: createAnalysisDataset({
+        ...identity,
+        name: name || identity.name,
+        kind: 'empty',
+        rows: [],
+      }),
+      activate: 'dataset',
+    });
+    return identity.id;
+  }, [execute]);
+
+  const closeDataset = useCallback((
+    datasetId: DatasetId,
+    replacementDatasetId?: DatasetId | null,
+  ) => execute({ type: 'closeDataset', datasetId, replacementDatasetId }), [execute]);
+
+  const duplicateDataset = useCallback((datasetId?: DatasetId) => {
+    const source = state.registry.byId[datasetId || chartDatasetId || ''];
+    if (!source) return;
+    const identity = nextDatasetIdentity();
+    execute({
+      type: 'duplicateDataset',
+      dataset: duplicateAnalysisDataset(source, identity.id, identity.name),
+    });
+  }, [chartDatasetId, execute, state.registry.byId]);
+  const renameDataset = useCallback(
+    (datasetId: DatasetId, name: string) => execute({ type: 'renameDataset', datasetId, name }),
+    [execute],
+  );
+
+  const setActiveTab = useCallback((tabId: string) => execute({
+    type: 'activateTab',
+    tabId,
+    activeSurface: tabId === CHART_PAGE_ID ? 'chart' : 'worksheet',
+  }), [execute]);
   const setChartDataset = useCallback(
-    (datasetId: string) => dispatch({ type: 'chartDataset', datasetId }),
-    [],
+    (datasetId: DatasetId) => execute({ type: 'setChartDataset', datasetId }),
+    [execute],
   );
-  const setSelection = useCallback(
-    (datasetId: string, rowIds: string[], mode: SelectionMode = 'replace') =>
-      dispatch({ type: 'select', datasetId, rowIds, mode }),
-    [],
+  const selectRows = useCallback((
+    datasetId: DatasetId,
+    rowIds: RowId[],
+    mode: SelectionMode = 'replace',
+    activeSurface?: ActiveSurface,
+  ) => execute({ type: 'selectRows', datasetId, rowIds, mode, activeSurface }), [execute]);
+  const updateRows = useCallback((
+    datasetId: DatasetId,
+    updates: Array<{ rowId: RowId; changes: Record<string, unknown> }>,
+  ) => execute({ type: 'updateRows', datasetId, updates }), [execute]);
+  const editCell = useCallback((
+    datasetId: DatasetId,
+    rowId: RowId,
+    column: string,
+    value: unknown,
+  ) => updateRows(datasetId, [{ rowId, changes: { [column]: value } }]), [updateRows]);
+  const deleteRows = useCallback(
+    (datasetId: DatasetId, rowIds: RowId[]) => execute({ type: 'deleteRows', datasetId, rowIds }),
+    [execute],
   );
-  const editCell = useCallback(
-    (datasetId: string, rowId: string, column: string, value: unknown) =>
-      dispatch({ type: 'edit', datasetId, rowId, column, value }),
-    [],
-  );
-  const deleteSelection = useCallback(() => dispatch({ type: 'deleteSelection' }), []);
+  const deleteSelection = useCallback(() => {
+    if (!state.selection.datasetId || state.selection.rowIds.size === 0) return;
+    deleteRows(state.selection.datasetId, [...state.selection.rowIds]);
+  }, [deleteRows, state.selection]);
+  const updatePointStyle = useCallback((
+    datasetId: DatasetId,
+    rowIds: RowId[],
+    patch: PointStylePatch,
+    metric?: string,
+  ) => execute({ type: 'updatePointStyle', datasetId, rowIds, patch, metric }), [execute]);
   const undo = useCallback(() => dispatch({ type: 'undo' }), []);
   const redo = useCallback(() => dispatch({ type: 'redo' }), []);
 
   const api = useMemo<WorkspaceApi>(() => ({
     state,
-    chartDataset: state.datasets.find((item) => item.id === state.chartDatasetId) || null,
-    activeDataset: state.datasets.find((item) => item.id === state.activeTabId) || null,
+    datasets,
+    chartDataset,
+    chartDatasetId,
+    activeDataset,
+    selection: state.selection,
+    pointStyles: state.pointStyles,
+    canUndo: selectCanUndo(state),
+    canRedo: selectCanRedo(state),
     loadQueryRows,
+    addDataset,
+    closeDataset,
     duplicateDataset,
+    renameDataset,
     setActiveTab,
     setChartDataset,
-    setSelection,
+    selectRows,
+    updateRows,
     editCell,
+    deleteRows,
     deleteSelection,
+    updatePointStyle,
     undo,
     redo,
   }), [
-    state, loadQueryRows, duplicateDataset, setActiveTab, setChartDataset,
-    setSelection, editCell, deleteSelection, undo, redo,
+    state, datasets, chartDataset, chartDatasetId, activeDataset, loadQueryRows,
+    addDataset, closeDataset, duplicateDataset, renameDataset, setActiveTab, setChartDataset,
+    selectRows, updateRows, editCell, deleteRows, deleteSelection, updatePointStyle,
+    undo, redo,
   ]);
 
   return <WorkspaceContext.Provider value={api}>{children}</WorkspaceContext.Provider>;

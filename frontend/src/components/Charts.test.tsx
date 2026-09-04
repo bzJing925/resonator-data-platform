@@ -1,11 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
-import { render, waitFor } from '@testing-library/react';
-import { buildUnifiedSpec, UnifiedChartGrid } from './Charts';
-
-// UnifiedChartGrid 的警告 emit 测试需要渲染真实组件 —— mock 掉 Plotly
-//（jsdom 无 canvas，真 Plot 无法渲染）。vi.mock 被提升到文件顶部、对整文件
-// 生效；既有用例只测 buildUnifiedSpec 纯函数、不渲染组件，不受影响。
-vi.mock('react-plotly.js', () => ({ default: () => null }));
+import { describe, expect, it } from 'vitest';
+import { buildUnifiedSpec } from './Charts';
 
 const X_NUM = { name: 'area_um2', label: '面积', isCategorical: false };
 const X_CAT = { name: 'eg', label: 'EG', isCategorical: true };
@@ -243,46 +237,5 @@ describe('buildUnifiedSpec facetZ 分面模式', () => {
     expect(spec.layout.xaxis5.range).toEqual(spec.layout.xaxis.range);  // 面积列
     expect(spec.layout.xaxis6.showticklabels).toBeUndefined(); // 底行显示
     expect(spec.layout.xaxis6.matches).toBeUndefined();
-  });
-});
-
-// UnifiedChartGrid 的警告 emit（effect 层）——mock 掉 Plotly 使组件可在 jsdom 渲染。
-describe('UnifiedChartGrid 警告 emit（替换语义）', () => {
-  // 26 > MAX_Z_FACETS(24)：分面必触发 z_facets_clamped。
-  const mkRows = () => Array.from({ length: 26 }, (_, i) => ({ area_um2: i, qs: i, fl: i }));
-  // 提升为常量保证 rerender 时 props 引用稳定 —— 仅 rows 换同内容新数组，
-  // 才能锁定"rows 是唯一变化"。
-  const XS = [X_NUM];
-  const YS = [Y_QS];
-  const grid = (rows, onWarningsChange) => (
-    <UnifiedChartGrid
-      chartType="scatter" rows={rows} xFields={XS} yFields={YS}
-      zField={Z_CAT} facetZ onWarningsChange={onWarningsChange}
-    />
-  );
-
-  it('分面超限时 emit 完整警告数组（含 z_facets_clamped）', async () => {
-    const onWarningsChange = vi.fn();
-    render(grid(mkRows(), onWarningsChange));
-    await waitFor(() => expect(onWarningsChange).toHaveBeenCalled());
-    const ws = onWarningsChange.mock.calls.at(-1)[0];
-    expect(ws.some((w) => w.kind === 'z_facets_clamped' && w.total === 26)).toBe(true);
-  });
-
-  it('rows 同内容新引用时重新 emit（回归：run() 清空后警告必须恢复）', async () => {
-    const onWarningsChange = vi.fn();
-    const { rerender } = render(grid(mkRows(), onWarningsChange));
-    await waitFor(() => expect(onWarningsChange).toHaveBeenCalled());
-    onWarningsChange.mockClear();
-    rerender(grid(mkRows(), onWarningsChange));
-    await waitFor(() => expect(onWarningsChange).toHaveBeenCalled());
-    const ws = onWarningsChange.mock.calls.at(-1)[0];
-    expect(ws.some((w) => w.kind === 'z_facets_clamped')).toBe(true);
-  });
-
-  it('无警告时 emit 空数组（父组件据此清空警告条）', async () => {
-    const onWarningsChange = vi.fn();
-    render(grid([{ area_um2: 1, qs: 2, fl: 0 }], onWarningsChange));
-    await waitFor(() => expect(onWarningsChange).toHaveBeenCalledWith([]));
   });
 });

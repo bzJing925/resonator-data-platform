@@ -16,7 +16,9 @@
     "electron:preview": "npm run build && electron .",
     "electron:pack": "npm run build && electron-builder",
     "dist": "npm run build && electron-builder",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:e2e": "npm run electron:build-main && playwright test",
+    "test:e2e:perf": "npm run electron:build-main && ALN_RUN_PERF=1 playwright test performance.spec.ts"
   },
   "homepage": ".",
   "build": {
@@ -116,6 +118,7 @@
     "axios": "^1.7.9",
     "electron-updater": "^6.8.9",
     "onnxruntime-web": "^1.27.0",
+    "plotly.js": "^3.7.0",
     "plotly.js-dist-min": "^2.35.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
@@ -123,6 +126,7 @@
     "react-router-dom": "^6.28.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@testing-library/react": "^16.3.2",
     "@types/node": "^20.19.43",
     "@types/react": "^18.3.31",

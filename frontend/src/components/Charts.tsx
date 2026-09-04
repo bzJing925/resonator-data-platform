@@ -1,37 +1,76 @@
 import React, { useCallback, useEffect, useMemo, useRef } from 'react';
-import Plot from 'react-plotly.js';
+import Plotly from 'plotly.js/dist/plotly';
+import createPlotlyComponent from 'react-plotly.js/factory';
+import { buildCachedJmpChartScene } from '../features/analysis/chart/chartSceneCache';
+import {
+  buildSelectionRestyle,
+  buildYAxisAutorangeUpdate,
+} from '../features/analysis/chart/chartInteraction';
+import { buildPointStyleRestyles } from '../features/analysis/pointStyle';
+import type { PointStyleOverride } from '../features/analysis/model/commands';
 import type { ChartField } from '../types';
 
-let plotlyPromise: Promise<any> | null = null;
-function getPlotly() {
-  if (!plotlyPromise) {
-    plotlyPromise = import('plotly.js-dist-min').then((module) => module.default || module);
-  }
-  return plotlyPromise;
-}
+const Plot = createPlotlyComponent(Plotly);
+const getPlotly = () => Promise.resolve(Plotly);
 
-function datumRowIds(datum: any): string[] {
-  if (Array.isArray(datum?.__memberRowIds)) return datum.__memberRowIds;
-  const id = typeof datum === 'string' ? datum : datum?.__rowId;
-  return id ? [id] : [];
+function reportPlotlyError(operation: string, error: unknown) {
+  console.error(`[AnalysisChart] Plotly ${operation} failed`, error);
 }
 
 function applyPlotSelection(graphDiv: any, selectedRowIds?: Set<string>) {
   if (!graphDiv?.data) return;
+  const { traceIndices, selectedpoints } = buildSelectionRestyle(graphDiv.data, selectedRowIds);
+  if (traceIndices.length === 0) return;
   const hasSelection = !!selectedRowIds?.size;
-  const traceIndices = graphDiv.data.map((_trace, traceIndex) => traceIndex);
-  const selectedpoints = graphDiv.data.map((trace) => {
-    const custom = Array.isArray(trace.customdata) ? trace.customdata : [];
-    return hasSelection ? custom.flatMap((datum, pointIndex) =>
-      datumRowIds(datum).some((id) => selectedRowIds?.has(id)) ? [pointIndex] : []) : null;
-  });
+  const hasAppliedSelection = traceIndices.some((traceIndex) =>
+    graphDiv.data[traceIndex]?.selectedpoints != null);
+  if (!hasSelection && !hasAppliedSelection) return;
   getPlotly().then((Plotly) => {
-    Plotly.restyle(graphDiv, {
-      selectedpoints,
-      'selected.marker.opacity': traceIndices.map(() => 1),
-      'unselected.marker.opacity': traceIndices.map(() => hasSelection ? 0.18 : 1),
-    }, traceIndices).catch(() => undefined);
-  });
+    try {
+      traceIndices.reduce<Promise<unknown>>((pending, traceIndex, index) => pending.then(() =>
+        Plotly.restyle(graphDiv, {
+          selectedpoints: [selectedpoints[index]],
+          'selected.marker.opacity': 1,
+          'unselected.marker.opacity': hasSelection ? 0.18 : 1,
+        }, [traceIndex])), Promise.resolve())
+        .catch((error) => reportPlotlyError('restyle selection', error));
+    } catch (error) {
+      reportPlotlyError('restyle selection', error);
+    }
+  }).catch((error) => reportPlotlyError('load for selection', error));
+}
+
+function applyYAxisAutorange(graphDiv: any) {
+  if (!graphDiv?.layout) return;
+  const update = buildYAxisAutorangeUpdate(graphDiv.layout);
+  if (Object.keys(update).length === 0) return;
+  getPlotly().then((Plotly) => {
+    try {
+      Promise.resolve(Plotly.relayout(graphDiv, update))
+        .catch((error) => reportPlotlyError('relayout Y autorange', error));
+    } catch (error) {
+      reportPlotlyError('relayout Y autorange', error);
+    }
+  }).catch((error) => reportPlotlyError('load for Y autorange', error));
+}
+
+function applyPlotPointStyles(
+  graphDiv: any,
+  sourceTraces: any[],
+  pointStyles?: Record<string, PointStyleOverride>,
+) {
+  if (!graphDiv?.data) return;
+  const restyles = buildPointStyleRestyles(sourceTraces, pointStyles);
+  if (restyles.length === 0) return;
+  getPlotly().then((Plotly) => {
+    try {
+      restyles.reduce<Promise<unknown>>((pending, { traceIndex, update }) => pending.then(() =>
+        Plotly.restyle(graphDiv, update, [traceIndex])), Promise.resolve())
+        .catch((error) => reportPlotlyError('restyle point styles', error));
+    } catch (error) {
+      reportPlotlyError('restyle point styles', error);
+    }
+  }).catch((error) => reportPlotlyError('load for point styles', error));
 }
 
 // Plotly's bundled TypeScript definitions are very strict about literal
@@ -1532,7 +1571,8 @@ function buildLineTraces({ rows, xField, yField, zField, axisRef, zCategoryValue
       const slot = acc.get(xv) || { sum: 0, n: 0, memberRowIds: [] };
       slot.sum += yv;
       slot.n += 1;
-      if (r.__rowId) slot.memberRowIds.push(r.__rowId);
+      const rowId = r.rowId ?? r.__rowId;
+      if (rowId) slot.memberRowIds.push(rowId);
       acc.set(xv, slot);
     }
     if (xIsCat) {
@@ -1636,6 +1676,8 @@ interface UnifiedSpecArgs {
   facetZ?: boolean;
   height?: number;
   width?: number | null;
+  analysisLayout?: boolean;
+  datasetRevision?: number | string;
 }
 
 // Pure chart-spec builder extracted from UnifiedChartGrid's useMemo so the
@@ -1886,24 +1928,58 @@ export function UnifiedChartGrid({
   onWarningsChange,
   onPointClick,
   onSelection,
+  onDeselect,
   selectedRowIds,
+  pointStyles,
+  autorangeRequest = 0,
   revision,
+  analysisLayout = false,
+  datasetRevision,
 }: UnifiedSpecArgs & {
   onWarningsChange?: (warns: any[]) => void;
-  onPointClick?: (d: unknown) => void;
+  onPointClick?: (d: unknown, event: any) => void;
   onSelection?: (e: unknown) => void;
+  onDeselect?: () => void;
   selectedRowIds?: Set<string>;
+  pointStyles?: Record<string, PointStyleOverride>;
+  autorangeRequest?: number;
   revision?: string;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const graphDivRef = useRef<any>(null);
+  const pendingYAxisAutorangeRef = useRef(false);
+  const previousRowsRef = useRef({ datasetId: revision, rowCount: rows.length });
+  if (analysisLayout
+    && previousRowsRef.current.datasetId === revision
+    && previousRowsRef.current.rowCount !== rows.length) {
+    pendingYAxisAutorangeRef.current = true;
+  }
+  previousRowsRef.current = { datasetId: revision, rowCount: rows.length };
   // Memoize the heavy trace+layout computation so it only re-runs when
   // the data or field configuration actually changes.
   const { allTraces, layout, pendingWarns, perfWarn, placeholder } = useMemo(
-    () => buildUnifiedSpec({ chartType, rows, xFields, yFields, zField, facetZ, height, width }),
-    [chartType, rows, xFields, yFields, zField, facetZ, height, width],
+    () => analysisLayout
+      ? buildCachedJmpChartScene(
+        revision,
+        { chartType, rows, yFields, datasetRevision, height, width },
+      )
+      : buildUnifiedSpec({ chartType, rows, xFields, yFields, zField, facetZ, height, width }),
+    [analysisLayout, chartType, rows, xFields, yFields, zField, facetZ, height, width, datasetRevision],
   );
   const plotLayout = useMemo(() => ({ ...layout, uirevision: revision || 'analysis' }), [layout, revision]);
+  const plotConfig = useMemo(() => analysisLayout ? {
+    ...baseConfig,
+    displayModeBar: true,
+    scrollZoom: true,
+    doubleClick: 'reset+autosize',
+  } : baseConfig, [analysisLayout]);
+  const hasAppliedPointStylesRef = useRef(false);
+  const syncPointStyles = useCallback((graphDiv: any) => {
+    const hasStyles = Object.keys(pointStyles || {}).length > 0;
+    if (!hasStyles && !hasAppliedPointStylesRef.current) return;
+    hasAppliedPointStylesRef.current = hasStyles;
+    applyPlotPointStyles(graphDiv, allTraces, pointStyles);
+  }, [allTraces, pointStyles]);
 
   // 警告下发用「整体替换」语义：把当前完整警告数组交给父组件替换（而非逐条
   // 追加），父组件因此不需要 reset effect —— 旧实现的子先父后 passive
@@ -1922,12 +1998,20 @@ export function UnifiedChartGrid({
   const handleClick = useCallback((e) => {
     if (!onPointClick) return;
     const p = e.points && e.points[0];
-    if (p && p.customdata) onPointClick(p.customdata);
+    if (p && p.customdata) onPointClick(p.customdata, e);
   }, [onPointClick]);
 
   useEffect(() => {
     applyPlotSelection(graphDivRef.current, selectedRowIds);
-  }, [allTraces, selectedRowIds]);
+  }, [selectedRowIds]);
+
+  useEffect(() => {
+    syncPointStyles(graphDivRef.current);
+  }, [syncPointStyles]);
+
+  useEffect(() => {
+    if (autorangeRequest > 0) applyYAxisAutorange(graphDivRef.current);
+  }, [autorangeRequest]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -1958,21 +2042,33 @@ export function UnifiedChartGrid({
 
   return (
     <div ref={containerRef} style={{ width: '100%', height: plotLayout.height }}>
-    <PlotAny
-      divId="chart-unified"
-      data={allTraces}
-      layout={plotLayout}
-      config={baseConfig}
-      style={{ width: '100%', height: plotLayout.height }}
-      useResizeHandler
-      onInitialized={(_figure, graphDiv) => {
-        graphDivRef.current = graphDiv;
-        applyPlotSelection(graphDiv, selectedRowIds);
-      }}
-      onUpdate={(_figure, graphDiv) => { graphDivRef.current = graphDiv; }}
-      onClick={handleClick}
-      onSelected={onSelection}
-    />
+      <PlotAny
+        key={`${analysisLayout ? 'analysis' : 'generic'}:${chartType}`}
+        divId="chart-unified"
+        className={analysisLayout ? 'analysis-plot' : undefined}
+        data={allTraces}
+        layout={plotLayout}
+        config={plotConfig}
+        style={{ width: '100%', height: plotLayout.height }}
+        useResizeHandler
+        onInitialized={(_figure, graphDiv) => {
+          graphDivRef.current = graphDiv;
+          syncPointStyles(graphDiv);
+          applyPlotSelection(graphDiv, selectedRowIds);
+        }}
+        onUpdate={(_figure, graphDiv) => {
+          graphDivRef.current = graphDiv;
+        }}
+        onAfterPlot={() => {
+          if (!pendingYAxisAutorangeRef.current) return;
+          pendingYAxisAutorangeRef.current = false;
+          applyYAxisAutorange(graphDivRef.current);
+        }}
+        onClick={handleClick}
+        onSelected={onSelection}
+        onDeselect={onDeselect}
+        onError={(error) => reportPlotlyError('react', error)}
+      />
     </div>
   );
 }

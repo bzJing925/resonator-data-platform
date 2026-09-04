@@ -5,8 +5,9 @@ import { spawn, ChildProcess } from 'node:child_process';
 import net from 'node:net';
 import fs from 'node:fs';
 import os from 'node:os';
+import type { AnalysisDesktopCommand, AnalysisSurface } from './analysisCommands.js';
 
-const { app, BrowserWindow, ipcMain, shell, Menu } = electron;
+const { app, BrowserWindow, clipboard, ipcMain, shell, Menu } = electron;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -33,6 +34,9 @@ console.error = (...args: any[]) => {
 
 const isPackaged = app.isPackaged;
 const isDev = !isPackaged;
+const e2eUrl = process.env.ALN_E2E_URL?.startsWith('http://127.0.0.1:')
+  ? process.env.ALN_E2E_URL
+  : undefined;
 
 let mainWindow: electron.BrowserWindow | null = null;
 let splashWindow: electron.BrowserWindow | null = null;
@@ -41,6 +45,11 @@ let backendUrl = '';
 let backendReady = false;
 let healthCheckTimer: NodeJS.Timeout | null = null;
 let backendLogFd: number | null = null;
+let analysisContext: { webContentsId: number; surface: AnalysisSurface } | null = null;
+
+function isAnalysisSurface(value: unknown): value is AnalysisSurface {
+  return value === 'chart' || value === 'worksheet';
+}
 
 function closeBackendLogFd() {
   if (backendLogFd !== null) {
@@ -186,11 +195,14 @@ async function startBackend(): Promise<void> {
     ALN_BACKEND_PORT: String(port),
     MPLCONFIGDIR: mplDir,
     KEEP_RAW_ZIP: 'true',
-    // 代理模型产物随安装包放在 Resources/backend/ 下（dev 模式不设，走后端默认相对路径）
+    // PyInstaller onedir 的运行时代码与模型均在 _internal；不能指向
+    // Resources/backend 顶层，否则桌面版会报告 surrogate_data/checkpoints_surrogate 缺失。
     ...(isPackaged
       ? {
-          SURROGATE_DATA_DIR: path.join(process.resourcesPath, 'backend', 'surrogate_data'),
-          SURROGATE_CKPT_DIR: path.join(process.resourcesPath, 'backend', 'checkpoints_surrogate'),
+          SURROGATE_DATA_DIR: path.join(
+            process.resourcesPath, 'backend', 'aln-backend', '_internal', 'surrogate_data'),
+          SURROGATE_CKPT_DIR: path.join(
+            process.resourcesPath, 'backend', 'aln-backend', '_internal', 'checkpoints_surrogate'),
         }
       : {}),
   };
@@ -274,6 +286,167 @@ function stopBackend() {
   closeBackendLogFd();
 }
 
+function sendAnalysisCommand(
+  command: AnalysisDesktopCommand,
+  browserWindow: electron.BrowserWindow | null | undefined,
+  surface?: AnalysisSurface,
+) {
+  if (!browserWindow || browserWindow.isDestroyed()) return false;
+  if (!analysisContext || analysisContext.webContentsId !== browserWindow.webContents.id) return false;
+  browserWindow.webContents.send('analysis:command', {
+    command,
+    surface: surface || analysisContext.surface,
+  });
+  return true;
+}
+
+function runEditCommand(
+  command: 'deleteSelection' | 'undo' | 'redo' | 'selectAll' | 'copySelection',
+  baseWindow: electron.BaseWindow | undefined,
+) {
+  const browserWindow = baseWindow instanceof BrowserWindow ? baseWindow : undefined;
+  if (sendAnalysisCommand(command, browserWindow)) return;
+  const contents = browserWindow?.webContents;
+  if (!contents) return;
+  if (command === 'deleteSelection') contents.delete();
+  if (command === 'undo') contents.undo();
+  if (command === 'redo') contents.redo();
+  if (command === 'selectAll') contents.selectAll();
+  if (command === 'copySelection') contents.copy();
+}
+
+function editMenuItem(
+  id: string,
+  label: string,
+  command: Parameters<typeof runEditCommand>[0],
+  accelerator?: string,
+): electron.MenuItemConstructorOptions {
+  return {
+    id,
+    label,
+    accelerator,
+    click: (_item, browserWindow) => runEditCommand(command, browserWindow),
+  };
+}
+
+function analysisMenuItem(
+  id: string,
+  label: string,
+  command: AnalysisDesktopCommand,
+  accelerator?: string,
+): electron.MenuItemConstructorOptions {
+  return {
+    id,
+    label,
+    accelerator,
+    click: (_item, baseWindow) => sendAnalysisCommand(
+      command,
+      baseWindow instanceof BrowserWindow ? baseWindow : undefined,
+    ),
+  };
+}
+
+function buildApplicationMenu() {
+  const template: electron.MenuItemConstructorOptions[] = [];
+  if (process.platform === 'darwin') {
+    template.push({
+      label: app.name,
+      submenu: [
+        { role: 'about' },
+        { type: 'separator' },
+        { role: 'services' },
+        { type: 'separator' },
+        { role: 'hide' },
+        { role: 'hideOthers' },
+        { role: 'unhide' },
+        { type: 'separator' },
+        { role: 'quit' },
+      ],
+    });
+  } else {
+    template.push({ label: '文件', submenu: [{ role: 'quit' }] });
+  }
+  template.push(
+    {
+      label: '编辑',
+      submenu: [
+        editMenuItem('analysis.undo', '撤销', 'undo', 'CommandOrControl+Z'),
+        editMenuItem('analysis.redo', '重做', 'redo', 'CommandOrControl+Shift+Z'),
+        { type: 'separator' },
+        { role: 'cut' },
+        editMenuItem('analysis.copy', '复制', 'copySelection', 'CommandOrControl+C'),
+        { role: 'paste' },
+        editMenuItem('analysis.delete', '删除所选数据', 'deleteSelection'),
+        { type: 'separator' },
+        editMenuItem('analysis.select-all', '全选', 'selectAll', 'CommandOrControl+A'),
+      ],
+    },
+    {
+      label: '分析',
+      submenu: [
+        analysisMenuItem('analysis.export-selection', '导出所选数据…', 'exportSelection'),
+        analysisMenuItem('analysis.edit-style', '编辑数据点样式…', 'editStyle'),
+        analysisMenuItem('analysis.autorange', '坐标轴自动调整', 'autorange'),
+      ],
+    },
+    {
+      label: '视图',
+      submenu: [
+        { role: 'reload' },
+        { role: 'forceReload' },
+        { role: 'toggleDevTools' },
+        { type: 'separator' },
+        { role: 'resetZoom' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' },
+      ],
+    },
+    { label: '窗口', submenu: [{ role: 'minimize' }, { role: 'close' }] },
+  );
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
+function showAnalysisContextMenu(
+  browserWindow: electron.BrowserWindow,
+  surface: AnalysisSurface,
+) {
+  const item = (
+    id: string,
+    label: string,
+    command: AnalysisDesktopCommand,
+  ): electron.MenuItemConstructorOptions => ({
+    id,
+    label,
+    click: (_menuItem, baseWindow) => sendAnalysisCommand(
+      command,
+      baseWindow instanceof BrowserWindow ? baseWindow : browserWindow,
+      surface,
+    ),
+  });
+  const template: electron.MenuItemConstructorOptions[] = [
+    item('analysis.context.delete', '删除所选数据', 'deleteSelection'),
+    { type: 'separator' },
+    item('analysis.context.undo', '撤销', 'undo'),
+    item('analysis.context.redo', '重做', 'redo'),
+    { type: 'separator' },
+    item('analysis.context.select-all', '全选', 'selectAll'),
+    item('analysis.context.copy', '复制所选数据', 'copySelection'),
+    item('analysis.context.export', '导出所选数据…', 'exportSelection'),
+    item('analysis.context.style', '编辑数据点样式…', 'editStyle'),
+  ];
+  if (surface === 'chart') {
+    template.push(item(
+      'analysis.context.autorange',
+      '坐标轴自动调整',
+      'autorange',
+    ));
+  }
+  const menu = Menu.buildFromTemplate(template);
+  menu.popup({ window: browserWindow });
+}
+
 function createSplashWindow() {
   splashWindow = new BrowserWindow({
     width: 480,
@@ -311,7 +484,9 @@ function createMainWindow() {
     },
   });
 
-  if (isDev) {
+  if (e2eUrl) {
+    mainWindow.loadURL(e2eUrl);
+  } else if (isDev) {
     mainWindow.loadURL('http://localhost:5173');
   } else {
     const indexPath = path.join(__dirname, '..', '..', 'dist', 'index.html');
@@ -329,7 +504,7 @@ function createMainWindow() {
       splashWindow.close();
     }
     mainWindow?.show();
-    if (isDev) mainWindow?.webContents.openDevTools({ mode: 'detach' });
+    if (isDev && !e2eUrl) mainWindow?.webContents.openDevTools({ mode: 'detach' });
   });
 
   mainWindow.on('closed', () => {
@@ -338,31 +513,11 @@ function createMainWindow() {
 }
 
 app.whenReady().then(async () => {
-  if (process.platform === 'darwin') {
-    Menu.setApplicationMenu(
-      Menu.buildFromTemplate([
-        {
-          label: app.name,
-          submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'quit' }],
-        },
-        { label: '编辑', submenu: [{ role: 'cut' }, { role: 'copy' }, { role: 'paste' }] },
-        { label: '窗口', submenu: [{ role: 'minimize' }, { role: 'close' }] },
-        {
-          label: '视图',
-          submenu: [
-            { role: 'reload' },
-            { role: 'forceReload' },
-            { role: 'toggleDevTools' },
-            { type: 'separator' },
-            { role: 'resetZoom' },
-            { role: 'zoomIn' },
-            { role: 'zoomOut' },
-          ],
-        },
-      ])
-    );
-  } else {
-    Menu.setApplicationMenu(null);
+  buildApplicationMenu();
+
+  if (e2eUrl) {
+    createMainWindow();
+    return;
   }
 
   createSplashWindow();
@@ -403,3 +558,20 @@ ipcMain.handle('app:get-version', () => app.getVersion());
 ipcMain.handle('app:get-backend-url', () => backendUrl);
 ipcMain.handle('app:open-external', (_event, url: string) => shell.openExternal(url));
 ipcMain.handle('backend:is-ready', () => backendReady);
+ipcMain.on('analysis:set-context', (event, value: unknown) => {
+  if (event.sender !== mainWindow?.webContents || !value || typeof value !== 'object') return;
+  const { active, surface } = value as { active?: unknown; surface?: unknown };
+  if (typeof active !== 'boolean' || !isAnalysisSurface(surface)) return;
+  analysisContext = active ? { webContentsId: event.sender.id, surface } : null;
+});
+ipcMain.on('analysis:show-context-menu', (event, surface: unknown) => {
+  if (event.sender !== mainWindow?.webContents || !isAnalysisSurface(surface)) return;
+  const browserWindow = BrowserWindow.fromWebContents(event.sender);
+  if (browserWindow) showAnalysisContextMenu(browserWindow, surface);
+});
+ipcMain.handle('analysis:write-clipboard', (event, text: unknown) => {
+  if (event.sender !== mainWindow?.webContents
+    || typeof text !== 'string'
+    || text.length > 10_000_000) throw new Error('Invalid analysis clipboard payload');
+  clipboard.writeText(text);
+});

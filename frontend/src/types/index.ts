@@ -1,3 +1,8 @@
+import type {
+  AnalysisCommandMessage,
+  AnalysisSurface,
+} from '../../electron/analysisCommands';
+
 export interface ElectronAPI {
   getVersion: () => Promise<string>;
   getBackendUrl: () => Promise<string>;
@@ -8,6 +13,10 @@ export interface ElectronAPI {
   platform: string;
   checkForUpdates?: () => Promise<{ version: string; available: boolean }>;
   installUpdate?: () => Promise<void>;
+  setAnalysisContext?: (active: boolean, surface: AnalysisSurface) => void;
+  onAnalysisCommand?: (cb: (message: AnalysisCommandMessage) => void) => (() => void) | void;
+  showAnalysisContextMenu?: (surface: AnalysisSurface) => void;
+  writeAnalysisClipboard?: (text: string) => Promise<void>;
 }
 
 declare global {
