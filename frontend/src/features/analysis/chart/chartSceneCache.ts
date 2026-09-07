@@ -10,8 +10,8 @@ interface CacheEntry {
 
 const sceneCache = new Map<string, CacheEntry>();
 
-function fieldSignature(args: ChartSceneArgs) {
-  return args.yFields.map((field) => [
+function fieldsSignature(fields: ChartSceneArgs['yFields']) {
+  return fields.map((field) => [
     field.name,
     field.label || '',
     field.unit || '',
@@ -24,8 +24,10 @@ function sceneKey(datasetKey: string, args: ChartSceneArgs) {
     datasetKey,
     args.datasetRevision,
     args.chartType,
-    ['structureType', 'areaReality'],
-    fieldSignature(args),
+    args.showDataPoints !== false,
+    fieldsSignature(args.xFields),
+    fieldsSignature(args.yFields),
+    args.zField ? fieldsSignature([args.zField])[0] : null,
     args.height ?? 250,
     args.width ?? null,
   ]);

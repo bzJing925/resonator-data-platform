@@ -69,10 +69,9 @@ const SECTION_ORDER = ['categorical', 'process', 'geometric', 'numeric'];
 // continuous.
 const CATEGORICAL_SECTIONS = new Set(['categorical', 'process']);
 
-// Device structure parameters derived from the mapping (对照表).
-// These are the only fields users may select as the X axis in Explore.
+// Actual fields exposed by the query API that users may select as X.
 const X_AXIS_FIELD_NAMES = [
-  'structureType', 'eg', 'fl', 'ag', 'pf', 'area_um2', 'area_n',
+  'eg', 'fl', 'ag', 'pf', 'area_um2', 'area_n',
 ];
 const Y_AXIS_FIELD_NAMES = [
   'fs_ghz', 'fp_ghz', 'qs', 'qp', 'k2eff_pct', 'zs_ohm', 'zp_ohm', 'dbqs', 'dbqp',
@@ -80,7 +79,6 @@ const Y_AXIS_FIELD_NAMES = [
 const X_AXIS_FIELD_SET = new Set(X_AXIS_FIELD_NAMES);
 const Y_AXIS_FIELD_SET = new Set(Y_AXIS_FIELD_NAMES);
 const AXIS_FIELD_LABELS = {
-  structureType: '结构类别',
   eg: 'EG',
   fl: 'FL',
   ag: 'AG',
@@ -114,9 +112,7 @@ function axisPickerLabel(field) {
 function axisFieldOptions(fields, names) {
   if (!fields) return null;
   return names
-    .map((name) => name === 'structureType'
-      ? { name, label: '结构类别', section: 'derived' }
-      : fields.byName?.[name])
+    .map((name) => fields.byName?.[name])
     .filter(Boolean)
     .map((f) => ({ ...f, label: AXIS_FIELD_LABELS[f.name] || f.label || f.name }));
 }
@@ -154,9 +150,9 @@ const CHART_TYPES = [
   { key: 'wafer',   label: 'Wafer 版图', icon: 'wafer' },
 ];
 
-// Z 展示方式：facet = 每个 Z 值一组竖排子图；color = 原颜色编码。
+// Z 展示方式：facet = JMP 式按实际值分组；color = 原颜色编码。
 const Z_MODE_OPTIONS = [
-  { key: 'facet', label: '按值分图' },
+  { key: 'facet', label: '按值分图（JMP）' },
   { key: 'color', label: '颜色编码（原效果）' },
 ];
 
@@ -167,9 +163,6 @@ const EMPTY_SELECTION = new Set<string>();
 // Resolve a field name into an enriched field object (label/unit/section/
 // isCategorical) using the metadata from useFields().
 function enrichField(name, fields) {
-  if (name === 'structureType') {
-    return { name, label: '结构类别', unit: '', section: 'derived', isCategorical: true };
-  }
   if (!name || !fields) return null;
   for (const section of SECTION_ORDER) {
     const f = (fields.raw?.[section] || []).find((x) => x.name === name);
@@ -289,6 +282,7 @@ export default function Explore() {
   const [showInspector, setShowInspector] = useState(true);
   const [fullscreen, setFullscreen] = useState(false);
   const [autorangeRequest, setAutorangeRequest] = useState(0);
+  const [showDataPoints, setShowDataPoints] = useState(true);
 
   useEffect(() => {
     const app = document.querySelector('.app');
@@ -320,8 +314,8 @@ export default function Explore() {
     return m ? { ...m, aggregation: zField.aggregation || 'all' } : null;
   }, [zField, fields]);
 
-  // 分面生效条件：用户选了「按值分图」且 Z 是类别字段（数值 Z 永不进入分面）。
-  const faceting = zMode === 'facet' && !!zMeta?.isCategorical;
+  // JMP 分图将所选 Z 的实际值作为离散外层；数值 Z 同样可按值分组。
+  const faceting = zMode === 'facet' && !!zMeta;
   const waferZMeta = useMemo(() => {
     if (!waferZ) return null;
     const m = enrichField(waferZ.name, fields);
@@ -334,32 +328,31 @@ export default function Explore() {
       return !!(waferZ && waferZ.aggregation && waferZ.aggregation !== 'all');
     }
     if (yMeta.some((f) => f.isCategorical ? false : (f.aggregation && f.aggregation !== 'all'))) return true;
-    if (zMeta && !zMeta.isCategorical && zMeta.aggregation && zMeta.aggregation !== 'all') return true;
+    if (zMode !== 'facet' && zMeta && !zMeta.isCategorical
+      && zMeta.aggregation && zMeta.aggregation !== 'all') return true;
     return false;
-  }, [isWafer, waferZ, yMeta, zMeta]);
+  }, [isWafer, waferZ, yMeta, zMeta, zMode]);
 
   // Aggregate mode requires at least one categorical X. Wafer mode is
   // exempt because its group_by is always (x, y, [facet]).
   const hasCategoricalX = useMemo(() => xMeta.some((f) => f.isCategorical), [xMeta]);
-  const hasDerivedX = xFields.includes('structureType');
   const aggregateXWarning = useMemo(() => {
     if (!needsAggregate || isWafer) return null;
-    if (hasDerivedX) return '工作表派生列暂不参与后端聚合；本次查询按原始行加载';
     if (!hasCategoricalX) return '聚合模式需要至少一个类别 X 字段（已自动 fallback 为 ALL，未真正聚合）';
     return null;
-  }, [needsAggregate, hasCategoricalX, hasDerivedX, isWafer]);
+  }, [needsAggregate, hasCategoricalX, isWafer]);
   // If aggregate would be invalid (no categorical X) we silently fall back.
-  const useAggregate = isWafer ? needsAggregate : (needsAggregate && hasCategoricalX && !hasDerivedX);
+  const useAggregate = isWafer ? needsAggregate : (needsAggregate && hasCategoricalX);
 
   // Y/Z conflict: same field with different aggregations would need two
   // metric columns and a renamed Z key. We refuse the combination and
-  // tell the user — Z=Y is rarely meaningful anyway (the color encodes
-  // the same thing the Y-axis already shows).
+  // tell the user — Z=Y is rarely meaningful because the grouping/encoding
+  // repeats the same information already shown on the Y axis.
   const yzFieldConflict = useMemo(() => {
     if (!zMeta) return null;
     const yHit = yMeta.find((y) => y.name === zMeta.name);
     if (!yHit) return null;
-    return `Z 字段 "${zMeta.name}" 与 Y 字段重复，颜色编码与 Y 轴信息一致 — 建议改选其他 Z 字段`;
+    return `Z 字段 "${zMeta.name}" 与 Y 字段重复，分组/编码与 Y 轴信息一致 — 建议改选其他 Z 字段`;
   }, [yMeta, zMeta]);
 
   const run = async () => {
@@ -388,10 +381,10 @@ export default function Explore() {
 
       // ── Generic aggregate branch (Y/Z aggregation requested + categorical X)
       if (!isWafer && useAggregate) {
-        // group_by = selected X fields, plus Z if Z is a categorical bucket
-        // (otherwise the per-Z lines / boxes would collapse into the X bin).
-        const groupBy = xFields.filter((name) => name !== 'structureType');
-        if (zMeta && zMeta.isCategorical && !groupBy.includes(zMeta.name)) {
+        // group_by = selected X fields, plus Z whenever it drives JMP groups
+        // (or categorical color groups), so distinct Z values do not collapse.
+        const groupBy = [...xFields];
+        if (zMeta && (zMode === 'facet' || zMeta.isCategorical) && !groupBy.includes(zMeta.name)) {
           groupBy.push(zMeta.name);
         }
         // Build metrics: collect ops per field across Y and (numeric) Z.
@@ -410,7 +403,8 @@ export default function Explore() {
           }
         }
         let zOp = null;
-        if (zMeta && !zMeta.isCategorical && zMeta.aggregation && zMeta.aggregation !== 'all') {
+        if (zMode !== 'facet' && zMeta && !zMeta.isCategorical
+          && zMeta.aggregation && zMeta.aggregation !== 'all') {
           zOp = aggWireName(zMeta.aggregation);
           if (!opsByField.has(zMeta.name)) opsByField.set(zMeta.name, new Set());
           opsByField.get(zMeta.name).add(zOp);
@@ -454,7 +448,7 @@ export default function Explore() {
         // include common identification cols for tooltip / modal.
         ['batch_no', 'wafer', 'folder_name', 'pf'].forEach((k) => fieldSet.add(k));
       } else {
-        xFields.forEach((n) => { if (n !== 'structureType') fieldSet.add(n); });
+        xFields.forEach((name) => fieldSet.add(name));
         yFields.forEach((y) => fieldSet.add(y.name));
         if (zField) fieldSet.add(zField.name);
         // device-identification cols for the modal.
@@ -749,6 +743,15 @@ export default function Explore() {
         >
           自动坐标轴
         </button>
+        {!isWafer && (
+          <button
+            className={`btn${showDataPoints ? ' active' : ''}`}
+            onClick={() => setShowDataPoints((value) => !value)}
+            title={showDataPoints ? '隐藏原始数据点' : '显示原始数据点'}
+          >
+            {showDataPoints ? '隐藏数据点' : '显示数据点'}
+          </button>
+        )}
         <button className="btn" onClick={() => setFullscreen((v) => !v)} title={fullscreen ? '退出全屏分析' : '全屏分析'}>
           <I.expand size={13} />
         </button>
@@ -878,7 +881,8 @@ export default function Explore() {
                       autorangeRequest={autorangeRequest}
                       revision={chartDataset?.id}
                       datasetRevision={chartDataset?.revision}
-                      analysisLayout
+                      analysisLayout={!zMeta || zMode === 'facet'}
+                      showDataPoints={showDataPoints}
                     />
                   )}
                   {isWafer && (
@@ -994,11 +998,13 @@ function Inspector({
   const xAxisOptions = useMemo(() => axisFieldOptions(fields, X_AXIS_FIELD_NAMES), [fields]);
   const yAxisOptions = useMemo(() => axisFieldOptions(fields, Y_AXIS_FIELD_NAMES), [fields]);
 
-  // Grid preview text (X cols × Y rows; facet mode adds a Z-block outer loop).
-  const zFacetActive = !!zField && zMode === 'facet' && !!zMeta?.isCategorical;
+  // JMP uses a shared composite X axis; color mode retains the generic grid.
+  const zFacetActive = !!zField && zMode === 'facet' && !!zMeta;
   const gridText = zFacetActive
-    ? `按 Z 值分图：每个 Z 值渲染 ${yMeta.length || '?'} 行 × ${xMeta.length || '?'} 列子图，竖向排列`
-    : `将渲染 ${yMeta.length || '?'} 行 × ${xMeta.length || '?'} 列 = ${(yMeta.length || 0) * (xMeta.length || 0) || '?'} 个子图`;
+    ? `JMP 分图：${yMeta.length || '?'} 个 Y 纵向排列，按所选 Z 的实际值分组，组内使用所选 X`
+    : zField && zMode === 'color'
+      ? `颜色编码：${yMeta.length || '?'} 行 × ${xMeta.length || '?'} 列子图`
+      : `JMP 布局：${yMeta.length || '?'} 个 Y 纵向排列，使用所选 X 的实际值分组`;
 
   return (
     <div className="panel right">
@@ -1081,27 +1087,28 @@ function Inspector({
               {zField && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
                   <span style={{ fontSize: 10.5, color: 'var(--fg-3)' }}>展示方式：</span>
-                  {zMeta?.isCategorical ? (
-                    Z_MODE_OPTIONS.map((o) => (
-                      <label
-                        key={o.key}
-                        className={`explore-fieldchip${zMode === o.key ? ' checked' : ''} radio`}
-                      >
-                        <input
-                          type="radio"
-                          checked={zMode === o.key}
-                          onChange={() => setZMode(o.key)}
-                          style={{ position: 'absolute', opacity: 0, pointerEvents: 'none' }}
-                        />
-                        <span className="explore-fieldchip-radio" aria-hidden>
-                          {zMode === o.key && <span className="dot" />}
-                        </span>
-                        <span className="explore-fieldchip-label">{o.label}</span>
-                      </label>
-                    ))
-                  ) : (
-                    <span className="hint" style={{ fontSize: 10.5 }}>数值 Z 仅支持颜色编码</span>
-                  )}
+                  {Z_MODE_OPTIONS.map((o) => (
+                    <label
+                      key={o.key}
+                      className={`explore-fieldchip${zMode === o.key ? ' checked' : ''} radio`}
+                    >
+                      <input
+                        type="radio"
+                        checked={zMode === o.key}
+                        onChange={() => {
+                          setZMode(o.key);
+                          if (o.key === 'facet' && zField.aggregation !== 'all') {
+                            setZField({ ...zField, aggregation: 'all' });
+                          }
+                        }}
+                        style={{ position: 'absolute', opacity: 0, pointerEvents: 'none' }}
+                      />
+                      <span className="explore-fieldchip-radio" aria-hidden>
+                        {zMode === o.key && <span className="dot" />}
+                      </span>
+                      <span className="explore-fieldchip-label">{o.label}</span>
+                    </label>
+                  ))}
                 </div>
               )}
               <FieldRadioWithAgg
@@ -1112,6 +1119,7 @@ function Inspector({
                 allowedSections={['categorical', 'process', 'numeric', 'geometric']}
                 allowNone={true}
                 noneLabel="不编码"
+                showAggregation={zMode !== 'facet'}
               />
             </div>
             <div className="explore-grid-hint">{gridText}</div>
@@ -1331,7 +1339,7 @@ function AxisFieldCheckListWithAgg({ options, value, onChange, disabled = false 
  * ----------------------------------------------------------------------- */
 function FieldRadioWithAgg({
   hint, fields, value, onChange,
-  allowedSections, allowNone = true, noneLabel = '不编码',
+  allowedSections, allowNone = true, noneLabel = '不编码', showAggregation = true,
 }) {
   if (!fields) return <div className="dim" style={{ fontSize: 11 }}>加载中…</div>;
   const allowed = new Set(allowedSections);
@@ -1356,7 +1364,7 @@ function FieldRadioWithAgg({
           <span className="hint">{hint}</span>
         </div>
       )}
-      {showAgg && (
+      {showAgg && showAggregation && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
           <span style={{ fontSize: 10.5, color: 'var(--fg-3)' }}>聚合：</span>
           <select

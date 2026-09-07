@@ -14,22 +14,27 @@ function isAnalysisChartType(value: string): value is AnalysisChartType {
 export function buildJmpChartScene({
   chartType,
   rows,
+  xFields,
   yFields,
+  zField,
   datasetRevision,
+  showDataPoints = true,
   height = 250,
   width = null,
 }: ChartSceneArgs): ChartScene {
-  const placeholder = yFields.length === 0
-    ? '请至少选一个 Y 字段'
+  const placeholder = xFields.length === 0 || yFields.length === 0
+    ? '请至少选一个 X 和 Y 字段'
     : !isAnalysisChartType(chartType) ? `未知图表类型：${chartType}` : null;
-  const hierarchy = buildChartHierarchy(rows);
-  const layout = buildAxisLayout(hierarchy, yFields, datasetRevision, height, width);
+  const hierarchy = buildChartHierarchy(rows, xFields, zField);
+  const layout = buildAxisLayout(hierarchy, xFields, yFields, zField, datasetRevision, height, width);
   if (placeholder) {
     return { allTraces: [], layout, pendingWarns: [], perfWarn: null, placeholder };
   }
 
   const effectiveChartType = chartType as AnalysisChartType;
-  const raw = buildRawPointTraces({ chartType: effectiveChartType, rows, yFields, hierarchy });
+  const raw = showDataPoints
+    ? buildRawPointTraces({ chartType: effectiveChartType, rows, yFields, hierarchy })
+    : [];
   const display = effectiveChartType === 'box' || effectiveChartType === 'violin'
     ? buildDistributionTraces({ kind: effectiveChartType, rows, yFields, hierarchy })
     : effectiveChartType === 'line' ? buildSummaryTraces({ rows, yFields, hierarchy }) : [];

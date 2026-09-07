@@ -5,25 +5,32 @@ export type AnalysisChartType = 'scatter' | 'box' | 'violin' | 'swarm' | 'line';
 export interface ChartSceneArgs {
   chartType: string;
   rows: Record<string, unknown>[];
+  xFields: ChartField[];
   yFields: ChartField[];
+  zField?: ChartField | null;
   datasetRevision?: number | string;
+  showDataPoints?: boolean;
   height?: number;
   width?: number | null;
 }
 
 export interface ChartSlot {
   index: number;
-  structureType: string;
-  areaReality: number | string;
+  xValues: Array<number | string>;
+  label: string;
+  zValue?: number | string;
   key: string;
 }
 
 export interface ChartHierarchy {
+  xFieldNames: string[];
+  zFieldName: string | null;
   slots: ChartSlot[];
   slotByKey: Map<string, ChartSlot>;
   rowSlotIndices: WeakMap<Record<string, unknown>, number>;
-  structures: Array<{
-    name: string;
+  groups: Array<{
+    key: string;
+    label: string | null;
     start: number;
     end: number;
   }>;

@@ -13,36 +13,88 @@ function naturalCompare(left: number | string, right: number | string) {
   return String(left).localeCompare(String(right), undefined, { numeric: true });
 }
 
-export function hierarchyKey(structureType: unknown, areaReality: unknown) {
-  return `${JSON.stringify(String(displayBucket(structureType)))}:${JSON.stringify(displayBucket(areaReality))}`;
+function compareValueLists(left: Array<number | string>, right: Array<number | string>) {
+  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+    if (left[index] === undefined) return -1;
+    if (right[index] === undefined) return 1;
+    const compared = naturalCompare(left[index], right[index]);
+    if (compared !== 0) return compared;
+  }
+  return 0;
 }
 
-export function buildChartHierarchy(rows: Record<string, unknown>[]): ChartHierarchy {
-  const areasByStructure = new Map<string, Set<number | string>>();
-  const rowKeys: string[] = [];
-  for (const row of rows) {
-    const structure = String(displayBucket(row.structureType));
-    const area = displayBucket(row.areaReality);
-    rowKeys.push(hierarchyKey(structure, area));
-    if (!areasByStructure.has(structure)) areasByStructure.set(structure, new Set());
-    areasByStructure.get(structure)?.add(area);
+function valueKey(value: number | string) {
+  return JSON.stringify([typeof value, value]);
+}
+
+export function hierarchyKey(xValues: unknown[], zValue?: unknown) {
+  const displayedX = xValues.map(displayBucket);
+  const displayedZ = zValue === undefined ? undefined : displayBucket(zValue);
+  return JSON.stringify({
+    x: displayedX.map(valueKey),
+    z: displayedZ === undefined ? null : valueKey(displayedZ),
+  });
+}
+
+export function buildChartHierarchy(
+  rows: Record<string, unknown>[],
+  xFields: ChartField[],
+  zField?: ChartField | null,
+): ChartHierarchy {
+  if (xFields.length === 0) {
+    return {
+      xFieldNames: [],
+      zFieldName: zField?.name || null,
+      slots: [],
+      slotByKey: new Map(),
+      rowSlotIndices: new WeakMap(),
+      groups: [],
+    };
   }
 
-  const structures = [...areasByStructure.keys()].sort(naturalCompare);
-  const slots: ChartHierarchy['slots'] = [];
-  const groups: ChartHierarchy['structures'] = [];
-  for (const structureType of structures) {
-    const start = slots.length;
-    const areas = [...(areasByStructure.get(structureType) || [])].sort(naturalCompare);
-    for (const areaReality of areas) {
-      slots.push({
-        index: slots.length,
-        structureType,
-        areaReality,
-        key: hierarchyKey(structureType, areaReality),
+  const slotsByGroup = new Map<string, {
+    label: string | null;
+    value?: number | string;
+    xValues: Map<string, Array<number | string>>;
+  }>();
+  const rowKeys: string[] = [];
+  for (const row of rows) {
+    const xValues = xFields.map((field) => displayBucket(row[field.name]));
+    const zValue = zField ? displayBucket(row[zField.name]) : undefined;
+    const groupKey = zValue === undefined ? '__all__' : valueKey(zValue);
+    const slotKey = hierarchyKey(xValues, zValue);
+    rowKeys.push(slotKey);
+    if (!slotsByGroup.has(groupKey)) {
+      slotsByGroup.set(groupKey, {
+        label: zValue === undefined ? null : String(zValue),
+        value: zValue,
+        xValues: new Map(),
       });
     }
-    groups.push({ name: structureType, start, end: slots.length - 1 });
+    slotsByGroup.get(groupKey)?.xValues.set(slotKey, xValues);
+  }
+
+  const orderedGroups = [...slotsByGroup.entries()].sort(([, left], [, right]) => {
+    if (left.value === undefined) return -1;
+    if (right.value === undefined) return 1;
+    return naturalCompare(left.value, right.value);
+  });
+  const slots: ChartHierarchy['slots'] = [];
+  const groups: ChartHierarchy['groups'] = [];
+  for (const [groupKey, group] of orderedGroups) {
+    const start = slots.length;
+    const orderedXValues = [...group.xValues.entries()]
+      .sort(([, left], [, right]) => compareValueLists(left, right));
+    for (const [key, xValues] of orderedXValues) {
+      slots.push({
+        index: slots.length,
+        xValues,
+        label: xValues.map(String).join(' / '),
+        zValue: group.value,
+        key,
+      });
+    }
+    groups.push({ key: groupKey, label: group.label, start, end: slots.length - 1 });
   }
 
   const slotByKey = new Map(slots.map((slot) => [slot.key, slot]));
@@ -53,17 +105,21 @@ export function buildChartHierarchy(rows: Record<string, unknown>[]): ChartHiera
   });
 
   return {
+    xFieldNames: xFields.map((field) => field.name),
+    zFieldName: zField?.name || null,
     slots,
     slotByKey,
     rowSlotIndices,
-    structures: groups,
+    groups,
   };
 }
 
 export function slotForRow(hierarchy: ChartHierarchy, row: Record<string, unknown>) {
   const cachedIndex = hierarchy.rowSlotIndices.get(row);
   if (cachedIndex !== undefined) return hierarchy.slots[cachedIndex];
-  return hierarchy.slotByKey.get(hierarchyKey(row.structureType, row.areaReality));
+  const xValues = hierarchy.xFieldNames.map((name) => row[name]);
+  const zValue = hierarchy.zFieldName ? row[hierarchy.zFieldName] : undefined;
+  return hierarchy.slotByKey.get(hierarchyKey(xValues, zValue));
 }
 
 function axisSuffix(index: number) {
@@ -84,7 +140,9 @@ const axisStyle = {
 
 export function buildAxisLayout(
   hierarchy: ChartHierarchy,
+  xFields: ChartField[],
   yFields: ChartField[],
+  zField: ChartField | null | undefined,
   datasetRevision: number | string | undefined,
   panelHeight: number,
   width: number | null,
@@ -95,7 +153,7 @@ export function buildAxisLayout(
     paper_bgcolor: '#181B21',
     plot_bgcolor: '#181B21',
     font: { family: 'Inter, system-ui, sans-serif', size: 11, color: '#C4C8D0' },
-    margin: { l: 72, r: 28, t: 36, b: 136 },
+    margin: { l: 72, r: 28, t: 36, b: zField ? 136 : 92 },
     height: metricCount * panelHeight + 148,
     grid: {
       rows: metricCount,
@@ -113,8 +171,8 @@ export function buildAxisLayout(
     annotations: [],
     meta: {
       analysisLayout: {
-        outerX: 'structureType',
-        innerX: 'areaReality',
+        xFields: xFields.map((field) => field.name),
+        zField: zField?.name || null,
         yMetrics: yFields.map((field) => field.name),
       },
       datasetRevision,
@@ -123,7 +181,7 @@ export function buildAxisLayout(
   if (width) layout.width = width;
 
   const tickvals = hierarchy.slots.map((slot) => slot.index);
-  const ticktext = hierarchy.slots.map((slot) => String(slot.areaReality));
+  const ticktext = hierarchy.slots.map((slot) => slot.label);
   const range = hierarchy.slots.length ? [-0.55, hierarchy.slots.length - 0.45] : [-0.5, 0.5];
 
   yFields.forEach((field, index) => {
@@ -140,7 +198,10 @@ export function buildAxisLayout(
       range,
       matches: index === 0 ? undefined : 'x',
       showticklabels: isBottom,
-      title: isBottom ? { text: '实际面积（Area_reality）', standoff: 12 } : undefined,
+      title: isBottom ? {
+        text: [zField ? axisTitle(zField) : null, ...xFields.map(axisTitle)].filter(Boolean).join(' / '),
+        standoff: 12,
+      } : undefined,
     };
     layout[yKey] = {
       ...axisStyle,
@@ -148,7 +209,7 @@ export function buildAxisLayout(
     };
   });
 
-  for (const group of hierarchy.structures) {
+  for (const group of zField ? hierarchy.groups : []) {
     const center = (group.start + group.end) / 2;
     layout.annotations.push({
       xref: bottomAxis,
@@ -156,7 +217,7 @@ export function buildAxisLayout(
       x: center,
       y: -0.1,
       yanchor: 'top',
-      text: group.name,
+      text: group.label,
       showarrow: false,
       font: { size: 11, color: '#C4C8D0' },
     });

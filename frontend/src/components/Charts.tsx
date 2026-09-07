@@ -1678,6 +1678,7 @@ interface UnifiedSpecArgs {
   width?: number | null;
   analysisLayout?: boolean;
   datasetRevision?: number | string;
+  showDataPoints?: boolean;
 }
 
 // Pure chart-spec builder extracted from UnifiedChartGrid's useMemo so the
@@ -1935,6 +1936,7 @@ export function UnifiedChartGrid({
   revision,
   analysisLayout = false,
   datasetRevision,
+  showDataPoints = true,
 }: UnifiedSpecArgs & {
   onWarningsChange?: (warns: any[]) => void;
   onPointClick?: (d: unknown, event: any) => void;
@@ -1961,10 +1963,10 @@ export function UnifiedChartGrid({
     () => analysisLayout
       ? buildCachedJmpChartScene(
         revision,
-        { chartType, rows, yFields, datasetRevision, height, width },
+        { chartType, rows, xFields, yFields, zField, datasetRevision, showDataPoints, height, width },
       )
       : buildUnifiedSpec({ chartType, rows, xFields, yFields, zField, facetZ, height, width }),
-    [analysisLayout, chartType, rows, xFields, yFields, zField, facetZ, height, width, datasetRevision],
+    [analysisLayout, chartType, rows, xFields, yFields, zField, facetZ, height, width, datasetRevision, showDataPoints],
   );
   const plotLayout = useMemo(() => ({ ...layout, uirevision: revision || 'analysis' }), [layout, revision]);
   const plotConfig = useMemo(() => analysisLayout ? {

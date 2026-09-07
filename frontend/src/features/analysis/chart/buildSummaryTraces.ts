@@ -23,22 +23,24 @@ export function buildSummaryTraces({
       values.get(slot.index)?.push(y);
     }
     const color = SUMMARY_COLORS[metricIndex % SUMMARY_COLORS.length];
-    return hierarchy.structures.map((structure) => {
+    return hierarchy.groups.map((group) => {
       const summaries = [...values.entries()]
-        .filter(([x]) => x >= structure.start && x <= structure.end)
+        .filter(([x]) => x >= group.start && x <= group.end)
         .sort(([left], [right]) => left - right)
         .map(([x, ys]) => ({
           x,
           y: ys.reduce((sum, value) => sum + value, 0) / ys.length,
           count: ys.length,
         }));
-      const traceKey = `analysis:line:${field.name}:summary:${structure.name}`;
+      const traceKey = `analysis:line:${field.name}:summary:${group.key}`;
       return {
         type: 'scatter',
         mode: 'lines+markers',
         ...sceneAxisRefs(metricIndex),
         uid: stableTraceUid(traceKey),
-        name: `${field.label || field.name} 均值 · ${structure.name}`,
+        name: group.label
+          ? `${field.label || field.name} 均值 · ${group.label}`
+          : `${field.label || field.name} 均值`,
         showlegend: false,
         x: summaries.map((summary) => summary.x),
         y: summaries.map((summary) => summary.y),
