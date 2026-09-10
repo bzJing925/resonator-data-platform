@@ -85,6 +85,32 @@ class FBARParams:
 
 
 @dataclass(frozen=True)
+class EPEStackParams:
+    """EPE 单层堆叠几何参数（非对称电极 + 可选 PF 质量加载层）。
+
+    堆叠（自上而下）：
+        PF 质量加载层(t_pf, t_pf=0 时跳过) / Top Mo(t_top) / Piezo(t_piezo) / Bottom Mo(t_bot)
+
+    Attributes:
+        t_piezo: 压电层厚度 (m)
+        t_top: 顶 Mo 电极厚度 (m)
+        t_bot: 底 Mo 电极厚度 (m)
+        t_pf: PF 钝化层厚度 (m)，0 表示无 PF 层
+        area: 有源区面积 (m^2)
+        alpha: 压电层声学衰减系数 (dB/m, 默认 0.02)
+        zref: 参考阻抗 (Ω)，默认 50
+    """
+
+    t_piezo: float
+    t_top: float
+    t_bot: float
+    t_pf: float
+    area: float
+    alpha: float = 0.02
+    zref: float = 50.0
+
+
+@dataclass(frozen=True)
 class EPPEParams:
     """EPPE（极性反转双层压电，无中间电极）几何参数。
 
@@ -591,14 +617,14 @@ def solve_fbar_one_port(
 
 @dataclass
 class FBARSweepResult:
-    """FBAR（EPE）扫频结果。"""
+    """FBAR / EPE 堆叠扫频结果（run_fbar_sweep 与 run_epe_stack_sweep 共用）。"""
 
     freq: np.ndarray
     z11: np.ndarray
     s11: np.ndarray
     abs_z11_db: np.ndarray
     abs_s11_db: np.ndarray
-    params: FBARParams
+    params: FBARParams | EPEStackParams
 
 
 def run_fbar_sweep(
@@ -612,6 +638,142 @@ def run_fbar_sweep(
 
     for idx, f in enumerate(freq):
         z11[idx], _ = solve_fbar_one_port(f, piezo, electrode, params)
+
+    s11 = s11_from_z11(z11, params.zref)
+
+    return FBARSweepResult(
+        freq=freq,
+        z11=z11,
+        s11=s11,
+        abs_z11_db=db20(z11),
+        abs_s11_db=db20(s11),
+        params=params,
+    )
+
+
+# ============================================================
+# EPE stack (asymmetric electrodes + optional PF mass-loading) one-port model
+# ============================================================
+def build_epe_stack_one_port(
+    circ: MNACircuit,
+    freq: float,
+    piezo: PiezoMaterial,
+    electrode: AcousticMaterial,
+    pf_material: AcousticMaterial,
+    params: EPEStackParams,
+) -> dict[str, object]:
+    """构建 EPE 单层堆叠（非对称电极 + 可选 PF 质量加载层）一端口电路。
+
+    堆叠结构（从上到下）：
+        PF 质量加载层（t_pf=0 时跳过）
+        Top Mo electrode (t_top)
+        Piezo layer (t_piezo)
+        Bottom Mo electrode (t_bot)
+
+    边界条件与 build_fbar_one_port 完全一致：
+    - 最外声学表面（PF 顶面，或无 PF 时顶 Mo 顶面 / 底 Mo 底面）的声学端口接地，
+      力-电压类比下对应应力自由边界（空气背衬近似），激励基模 TE1 谐振。
+    - 顶电极接地、底电极接 IN；1V 源激励 IN 对地，z11 = 1 / i_in。
+
+    节点命名与 stamp 顺序刻意与 build_fbar_one_port 保持一致：
+    t_pf=0 且 t_top=t_bot 时两者 MNA 矩阵相同，z11 逐位一致（回归黄金判据）。
+    """
+    # 声学节点（与 build_fbar_one_port 同名，保证退化情形逐位一致）
+    top_mo_bot = "top_mo_bot"  # 接压电层上表面
+    aln_bot = "aln_bot"  # 接底部 Mo 上表面
+
+    top_electrode = "0"  # 上电极接地
+    bot_electrode = "IN"  # 下电极接信号
+
+    # PF 质量加载层（声学传输线，无压电耦合），上表面接地；t_pf=0 时跳过
+    if params.t_pf > 0.0:
+        pf_bot = "pf_bot"  # PF 底面 = 顶 Mo 顶面
+        add_acoustic_tline(
+            circ=circ,
+            prefix="PF",
+            port_top="0",
+            port_bot=pf_bot,
+            mat=pf_material,
+            thk=params.t_pf,
+            freq=freq,
+        )
+        top_mo_top: str | None = pf_bot
+    else:
+        top_mo_top = "0"
+
+    # 顶部 Mo 电极（声学传输线）
+    add_acoustic_tline(
+        circ=circ,
+        prefix="TOP_MO",
+        port_top=top_mo_top,
+        port_bot=top_mo_bot,
+        mat=electrode,
+        thk=params.t_top,
+        freq=freq,
+    )
+
+    # 压电层
+    add_piezo_layer_four_port(
+        circ=circ,
+        prefix="ALN",
+        port1=top_electrode,  # 上电极（接地）
+        port2=bot_electrode,  # 下电极（信号）
+        port3=top_mo_bot,  # 层顶面接顶部 Mo
+        port4=aln_bot,  # 层底面
+        mat=piezo,
+        area=params.area,
+        thk=params.t_piezo,
+        alpha=params.alpha,
+        freq=freq,
+    )
+
+    # 底部 Mo 电极（声学传输线），下表面接地
+    add_acoustic_tline(
+        circ=circ,
+        prefix="BOT_MO",
+        port_top=aln_bot,  # 接压电层
+        port_bot="0",
+        mat=electrode,
+        thk=params.t_bot,
+        freq=freq,
+    )
+
+    # 1V 输入源：IN 对地
+    src_label = circ.add_vsource("IN", "0", 1.0, "VIN")
+
+    return {"src_label": src_label}
+
+
+def solve_epe_stack_one_port(
+    freq: float,
+    piezo: PiezoMaterial,
+    electrode: AcousticMaterial,
+    pf_material: AcousticMaterial,
+    params: EPEStackParams,
+) -> tuple[complex, dict[str, object]]:
+    """求解单个频点的 EPE 堆叠输入阻抗 Z11。"""
+    circ = MNACircuit()
+    build_info = build_epe_stack_one_port(circ, freq, piezo, electrode, pf_material, params)
+    src_label = build_info["src_label"]
+
+    x, _node_idx, extra_idx = circ.solve()
+    i_in = -x[extra_idx[src_label]]
+    z11 = 1.0 / i_in
+    return z11, build_info
+
+
+def run_epe_stack_sweep(
+    freq: np.ndarray,
+    piezo: PiezoMaterial,
+    electrode: AcousticMaterial,
+    pf_material: AcousticMaterial,
+    params: EPEStackParams,
+) -> FBARSweepResult:
+    """执行 EPE 堆叠一端口扫频（复用 FBARSweepResult 容器）。"""
+    z11 = np.zeros_like(freq, dtype=complex)
+
+    for idx, f in enumerate(freq):
+        z11[idx], _ = solve_epe_stack_one_port(f, piezo, electrode, pf_material, params)
 
     s11 = s11_from_z11(z11, params.zref)
 

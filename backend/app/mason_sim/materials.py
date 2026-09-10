@@ -95,3 +95,14 @@ MO = AcousticMaterial(
     v=6290.0,
     alpha=0.0,
 )
+
+# SiN 钝化层（PF）等效质量加载材料参数。
+# PF 层在 Mason 模型里只作声学传输线（无压电耦合）；65 nm 在 5 GHz 处
+# 远小于半波长（v/(2f) ~ 1100 nm 量级），相移可忽略、质量加载为主导，
+# 因此 v 的取值不敏感，取 SiN 纵波典型值即可。
+SIN = AcousticMaterial(
+    name="SiN",
+    rho=3170.0,
+    v=11000.0,
+    alpha=0.0,
+)
