@@ -26,8 +26,9 @@ import numpy as np
 
 from app.mason_sim.materials import AcousticMaterial, PiezoMaterial
 
-# dB/m → Np/m 换算因子 20*log10(e)，用于把声学衰减 alpha (dB/m)
-# 写入传播常数 k = 2*pi*f/v * (1 - j*alpha/DB_PER_NEPER)（沿用 vendor/ADS 写法）
+# 声学衰减 alpha 的 vendor 单位约定：写入传播常数 k = β(1 − j·alpha/DB_PER_NEPER)，
+# β = 2πf/v，DB_PER_NEPER = 20*log10(e)（沿用 vendor/ADS 写法；alpha 是该公式中的
+# 衰减参数，按 vendor 脚本数值口径使用，不宜直接当作 SI 的 dB/m 解读）
 DB_PER_NEPER = 8.686
 
 
@@ -73,7 +74,7 @@ class FBARParams:
         t_aln: 压电层厚度 (m)
         t_mo: Mo 电极厚度 (m)，上下电极对称
         area: 有源区面积 (m^2)
-        alpha: 压电层声学衰减系数 (dB/m, 默认 0.02)
+        alpha: 压电层声学衰减参数（vendor 约定 k = β(1 − j·alpha/8.686)；默认 0.02）
         zref: 参考阻抗 (Ω)，默认 50
     """
 
@@ -97,7 +98,7 @@ class EPEStackParams:
         t_bot: 底 Mo 电极厚度 (m)
         t_pf: PF 钝化层厚度 (m)，0 表示无 PF 层
         area: 有源区面积 (m^2)
-        alpha: 压电层声学衰减系数 (dB/m, 默认 0.02)
+        alpha: 压电层声学衰减参数（vendor 约定 k = β(1 − j·alpha/8.686)；默认 0.02）
         zref: 参考阻抗 (Ω)，默认 50
     """
 
@@ -126,7 +127,7 @@ class EPPEParams:
         t_mo_bot: 底 Mo 电极厚度 (m)
         t_mo_top: 顶 Mo 电极厚度 (m)
         area: 有源区面积 (m^2)
-        alpha: 压电层声学衰减系数 (dB/m, 默认 0.02)
+        alpha: 压电层声学衰减参数（vendor 约定 k = β(1 − j·alpha/8.686)；默认 0.02）
         reverse_bot: 下层压电极性符号（+1 正极性 / -1 反极性），默认 +1
         reverse_top: 上层压电极性符号，默认 -1（EPPE 反极性）
         zref: 参考阻抗 (Ω)，默认 50

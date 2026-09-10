@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS_DIR = ROOT / "scripts"
@@ -23,11 +24,12 @@ if str(SCRIPTS_DIR) not in sys.path:
 import build_mason_epe_corpus as corpus  # noqa: E402
 
 # 端到端测试用脚本默认种子（= 生产配置，先于测试存在，非挑种子）：2026-09-10 实测
-# 该种子 12 样本全有效（ALN1 与 ALSCN 口径均 12/12）。注：靠窗沿（fs<3.1 或 fp>7.9 GHz，
-# 在 find_te1_resonances 的 edge_skip=100 点之外）或越窗角点样本被丢弃是【正确行为】
-# （ALN1 口径宽网格真值验证：seed=12345 的 2 个丢弃样本真 TE1 为 (7.814,7.992) 与
-# (3.042,3.118) GHz，峰贴窗沿，强行保留会得到有偏标签）；语料级真实产量率以
-# --smoke 200 实测为准（ALSCN 口径约 91.5%）。
+# ALN1/ALSCN 口径均 12/12 全有效；产量断言保留 ≥11 以容忍跨平台数值微扰导致个别
+# 窗沿样本判定翻转（非放水：语料级真实产量率以 --smoke 200 实测为准，ALSCN 口径
+# 约 91.5%）。注：靠窗沿（fs<3.1 或 fp>7.9 GHz，在 find_te1_resonances 的
+# edge_skip=100 点之外）或越窗角点样本被丢弃是【正确行为】（ALN1 口径宽网格真值
+# 验证：seed=12345 的 2 个丢弃样本真 TE1 为 (7.814,7.992) 与 (3.042,3.118) GHz，
+# 峰贴窗沿，强行保留会得到有偏标签）。
 TEST_SEED = corpus.SEED_DEFAULT
 EXPECTED_PARAM_COLS = ["fs_ghz", "fp_ghz", "k2eff_pct", "qs", "qp", "qs_bodeq", "qp_bodeq"]
 
@@ -104,9 +106,10 @@ def test_end_to_end_12_samples(tmp_path: Path) -> None:
     assert np.isfinite(z.real).all() and np.isfinite(z.imag).all()
     np.testing.assert_allclose(f, 4.0 + 0.003 * np.arange(1001), rtol=0.0, atol=1e-12)
 
-    # 物理范围：fs/fp 在求解窗内（含边距），fp>fs，k2eff 合理
-    assert float(y[:, 0].min()) > 3.0
-    assert float(y[:, 1].max()) < 8.0
+    # 物理范围：fs/fp 落在 edge-margin 守卫边界内（验证守卫确实生效于产物），
+    # fp>fs，k2eff 合理
+    assert float(y[:, 0].min()) >= 3.15
+    assert float(y[:, 1].max()) <= 7.85
     assert (y[:, 1] > y[:, 0]).all()
     # k²eff 上限 sanity（ALSCN 口径）：材料 kt2=19.44% 是物理天花板，电极质量
     # 加载把有效 k²eff 压到 ~15-16% 量级（2026-09-10 ALSCN 冒烟 200 实测 max=15.69%）；
@@ -121,11 +124,18 @@ def test_end_to_end_12_samples(tmp_path: Path) -> None:
     assert meta["n_produced"] == m
     assert meta["n_dropped"] == 12 - m
     assert sum(meta["drop_reasons"].values()) == meta["n_dropped"]
-    assert set(meta["drop_reasons"]) == {"no_resonance", "label_nan", "edge_margin"}
+    assert set(meta["drop_reasons"]) == {
+        "no_resonance",
+        "label_nan",
+        "edge_margin",
+        "solver_error",
+    }
     assert meta["label_provenance"] == "production extract.py k2eff512+q_phase+calc_bodeq"
     assert meta["param_cols"] == EXPECTED_PARAM_COLS
     assert meta["geom_cols"] == ["t_piezo_nm", "t_top_nm", "t_bot_nm", "t_pf_nm", "area_um2"]
-    assert isinstance(meta["mason_sim_commit_sha"], str) and len(meta["mason_sim_commit_sha"]) == 40
+    # commit SHA 允许带 -dirty 后缀（工作区不干净时，P8）
+    sha_base = meta["mason_sim_commit_sha"].removesuffix("-dirty")
+    assert len(sha_base) == 40 and all(c in "0123456789abcdef" for c in sha_base)
     assert meta["wall_time_sec"] > 0.0
     assert meta["ranges_nm"]["t_piezo"] == list(corpus.T_PIEZO_RANGE_NM)
     assert meta["area_levels_um2"] == list(corpus.AREA_LEVELS_UM2)
@@ -205,3 +215,76 @@ def test_pf_monotonicity_through_pipeline() -> None:
     fs0 = r0["y"][0]
     fs80 = r80["y"][0]
     assert fs80 < fs0
+
+
+def test_resume_with_mismatched_config_errors(tmp_path: Path) -> None:
+    """P1 回归：shard 配置指纹不匹配（material 或 seed 不同）续跑必须报错退出。
+
+    不得静默混料、也不得静默重算——报错让用户决定换 --shard-dir。
+    """
+    out, shards = _run_12(tmp_path)
+
+    def _args(seed: str) -> list[str]:
+        return [
+            "--n",
+            "12",
+            "--out",
+            str(out),
+            "--shard-dir",
+            str(shards),
+            "--shard-size",
+            "5",
+            "--nprocs",
+            "2",
+            "--seed",
+            seed,
+        ]
+
+    # material 不同（t_piezo 范围也随之不同）→ 报错
+    with pytest.raises(SystemExit, match="配置指纹不匹配"):
+        corpus.main([*_args(str(TEST_SEED)), "--material", "ALN1"])
+    # seed 不同 → 报错
+    with pytest.raises(SystemExit, match="配置指纹不匹配"):
+        corpus.main(_args("999"))
+    # 同配置 → 正常续跑
+    assert corpus.main(_args(str(TEST_SEED))) == 0
+
+
+def test_solver_error_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    """P2：求解器异常（如 LinAlgError）兜底为 reason=solver_error，不炸整轮。"""
+
+    def _boom(*args: object, **kwargs: object) -> None:
+        raise np.linalg.LinAlgError("Singular matrix")
+
+    monkeypatch.setattr(corpus, "run_epe_stack_sweep", _boom)
+    r = corpus.solve_extract_one((450.0, 150.0, 150.0, 0.0, 2000.0))
+    assert r["valid"] is False
+    assert r["reason"] == "solver_error"
+    assert "LinAlgError" in r["error"]
+
+
+def test_edge_margin_guard_triggers() -> None:
+    """P3：fs ∈ [3.10, 3.15) GHz（可检测但贴窗沿）→ 守卫剔除，reason=edge_margin。
+
+    几何标定于 2026-09-10：ALSCN (t_piezo=494.78, 250/250/50, area=2000)，
+    宽网格（2.5–8 GHz）真值 fs=3.121 GHz、fp=3.306 GHz——在 3–8 GHz 求解窗内
+    可被 prodlabels 正常提取，但 fs 距窗沿 <150 MHz，必须被守卫拦下。
+    """
+    r = corpus.solve_extract_one((494.78, 250.0, 250.0, 50.0, 2000.0))
+    assert r["valid"] is False
+    assert r["reason"] == "edge_margin"
+
+
+def test_cli_rejects_non_positive_numbers() -> None:
+    """P5：--n/--nprocs/--shard-size/--smoke 非正数 → 人类可读报错（exit code 2）。"""
+    for flag in ("--n", "--nprocs", "--shard-size", "--smoke"):
+        with pytest.raises(SystemExit) as exc_info:
+            corpus.main([flag, "0"])
+        assert exc_info.value.code == 2, flag
+
+
+def test_meta_path_suffix_validation() -> None:
+    """P6：_meta_path 用 with_suffix 派生 .meta.json；非 .npz 输入报错。"""
+    assert corpus._meta_path(Path("/x/epe_corpus.npz")) == Path("/x/epe_corpus.meta.json")
+    with pytest.raises(ValueError, match="npz"):
+        corpus._meta_path(Path("/x/epe_corpus.txt"))

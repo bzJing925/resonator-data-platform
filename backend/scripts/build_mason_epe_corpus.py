@@ -36,6 +36,9 @@ EPE 预训练→EPPE(AlN+AlScN) 微调迁移要求 EPE 侧与 EPPE 的 AlScN 层
 
 并行与断点续跑：ProcessPoolExecutor（--nprocs 默认 cpu_count()-1）；每 --shard-size
 个样本落一个 shard npz 到 --shard-dir，已存在 shard 直接跳过，最后合并。
+每个 shard 内含 config_tag 配置指纹（seed/n/material/shard_size/厚度范围/求解窗等）：
+续跑跳过时校验，不匹配即报错退出（防止不同配置的 shard 静默混料；
+此时请更换 --shard-dir 或清空目录重跑）。shard 与最终产物均为 tmp+replace 原子写。
 
 用法：
     uv run python scripts/build_mason_epe_corpus.py --calibrate     # 复现 t_piezo 标定
@@ -169,24 +172,38 @@ def solve_extract_one(
     Returns:
         dict(valid, reason, x, y, z)：
         - valid=True：y 为 7 参数 list（PARAM_COLS 序），z 为 (1001,) complex64；
-        - valid=False：y/z 为 None，reason ∈ {no_resonance, label_nan, edge_margin}。
+        - valid=False：y/z 为 None，
+          reason ∈ {no_resonance, label_nan, edge_margin, solver_error}；
+          solver_error 时附 error 字段（异常类型与消息）——求解器异常兜底丢弃，
+          不让单个坏样本（如 MNA 奇异矩阵）炸掉整轮生成。
     """
     t_piezo_nm, t_top_nm, t_bot_nm, t_pf_nm, area_um2 = row
-    params = EPEStackParams(
-        t_piezo=nm_to_m(t_piezo_nm),
-        t_top=nm_to_m(t_top_nm),
-        t_bot=nm_to_m(t_bot_nm),
-        t_pf=nm_to_m(t_pf_nm),
-        area=um2_to_m2(area_um2),
-        alpha=ALPHA,
-        zref=ZREF,
-    )
-    with warnings.catch_warnings(), np.errstate(all="ignore"):
-        warnings.simplefilter("ignore")
-        z11 = run_epe_stack_sweep(SOLVE_FREQ_HZ, piezo, MO, SIN, params).z11
-        labels = extract_epe_production_labels(SOLVE_FREQ_HZ, z11)
-
     x = [float(v) for v in row]
+    try:
+        params = EPEStackParams(
+            t_piezo=nm_to_m(t_piezo_nm),
+            t_top=nm_to_m(t_top_nm),
+            t_bot=nm_to_m(t_bot_nm),
+            t_pf=nm_to_m(t_pf_nm),
+            area=um2_to_m2(area_um2),
+            alpha=ALPHA,
+            zref=ZREF,
+        )
+        with warnings.catch_warnings(), np.errstate(all="ignore"):
+            warnings.simplefilter("ignore")
+            z11 = run_epe_stack_sweep(SOLVE_FREQ_HZ, piezo, MO, SIN, params).z11
+            # 显式传 zref=ZREF：不依赖 prodlabels 默认值与本脚本常量恰好一致
+            labels = extract_epe_production_labels(SOLVE_FREQ_HZ, z11, zref=ZREF)
+    except Exception as exc:  # noqa: BLE001 —— worker 兜底，异常样本计为丢弃
+        return {
+            "valid": False,
+            "reason": "solver_error",
+            "x": x,
+            "y": None,
+            "z": None,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
     if not labels["valid"]:
         fs_g, fp_g = labels["fs_ghz"], labels["fp_ghz"]
         if not (np.isfinite(fs_g) and np.isfinite(fp_g)) or fp_g <= fs_g:
@@ -282,14 +299,58 @@ def run_calibration(material: str = PIEZO_DEFAULT) -> None:
 # ============================================================
 # shard 落盘 / 合并
 # ============================================================
-def _write_shard(shard_path: Path, results: list[dict], n_attempted: int) -> None:
-    """把一个 shard 的有效样本写入 npz（原子替换）。"""
-    valid = [r for r in results if r["valid"]]
-    drop_counts = {
-        "no_resonance": sum(1 for r in results if r["reason"] == "no_resonance"),
-        "label_nan": sum(1 for r in results if r["reason"] == "label_nan"),
-        "edge_margin": sum(1 for r in results if r["reason"] == "edge_margin"),
+def _config_tag(n: int, seed: int, material: str, shard_size: int) -> str:
+    """语料配置指纹（canonical JSON）：凡影响 shard 内容的量都计入。
+
+    断点续跑只许"同配置续跑"；指纹不匹配必须报错（防止静默混料）。
+    """
+    payload = {
+        "seed": seed,
+        "n": n,
+        "material": material,
+        "shard_size": shard_size,
+        "ranges_nm": {
+            "t_piezo": list(T_PIEZO_RANGE_NM_BY_MATERIAL[material]),
+            "t_top": list(T_TOP_RANGE_NM),
+            "t_bot": list(T_BOT_RANGE_NM),
+            "t_pf": list(T_PF_RANGE_NM),
+        },
+        "area_levels_um2": list(AREA_LEVELS_UM2),
+        "solve_grid": {"f_start_ghz": 3.0, "f_stop_ghz": 8.0, "f_step_mhz": 1.0},
+        "edge_margin_mhz": EDGE_MARGIN_HZ / 1e6,
+        "alpha": ALPHA,
+        "zref_ohm": ZREF,
     }
+    return json.dumps(payload, sort_keys=True)
+
+
+def _check_shard_tag(shard_path: Path, expected_tag: str) -> None:
+    """校验已存在 shard 的配置指纹；不匹配即中止（不静默重算/混料）。"""
+    with np.load(shard_path) as d:
+        stored = str(d["config_tag"]) if "config_tag" in d else None
+    if stored != expected_tag:
+        raise SystemExit(
+            f"shard 配置指纹不匹配：{shard_path}\n"
+            "该 shard 由不同配置（seed/n/material/shard_size/范围/求解窗等）生成，"
+            "为避免静默混料已中止。请更换 --shard-dir 或清空该目录后重跑。"
+        )
+
+
+def _write_shard(
+    shard_path: Path,
+    results: list[dict],
+    n_attempted: int,
+    config_tag: str,
+) -> None:
+    """把一个 shard 的有效样本写入 npz（tmp + os.replace 原子替换）。
+
+    shard 内含 config_tag（配置指纹）与 drop_counts_json（丢弃原因计数）。
+    """
+    valid = [r for r in results if r["valid"]]
+    drop_counts: dict[str, int] = {}
+    for r in results:
+        if not r["valid"]:
+            drop_counts[r["reason"]] = drop_counts.get(r["reason"], 0) + 1
     if valid:
         x = np.array([r["x"] for r in valid], dtype=np.float64)
         y = np.array([r["y"] for r in valid], dtype=np.float64)
@@ -307,29 +368,39 @@ def _write_shard(shard_path: Path, results: list[dict], n_attempted: int) -> Non
             y_params=y,
             z_dense=z,
             n_attempted=np.int64(n_attempted),
-            n_no_resonance=np.int64(drop_counts["no_resonance"]),
-            n_label_nan=np.int64(drop_counts["label_nan"]),
-            n_edge_margin=np.int64(drop_counts["edge_margin"]),
+            drop_counts_json=np.str_(json.dumps(drop_counts, sort_keys=True)),
+            config_tag=np.str_(config_tag),
         )
     os.replace(tmp, shard_path)
 
 
 def _git_sha() -> str:
+    """mason_sim 所属 commit SHA；工作区不干净（git status --porcelain 非空）附 -dirty。"""
     try:
-        out = subprocess.run(
+        sha = subprocess.run(
             ["git", "rev-parse", "HEAD"],
             cwd=PROJECT_ROOT,
             capture_output=True,
             text=True,
             check=True,
-        )
-        return out.stdout.strip()
+        ).stdout.strip()
+        dirty = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        return sha + ("-dirty" if dirty else "")
     except Exception:
         return "unknown"
 
 
 def _meta_path(out_path: Path) -> Path:
-    return out_path.with_name(out_path.name[: -len(".npz")] + ".meta.json")
+    """corpus npz 路径 → 配套 meta.json 路径（仅接受 .npz 后缀）。"""
+    if out_path.suffix != ".npz":
+        raise ValueError(f"输出路径必须是 .npz 文件：{out_path}")
+    return out_path.with_suffix(".meta.json")
 
 
 def run_pipeline(
@@ -350,11 +421,13 @@ def run_pipeline(
     piezo = PIEZO_MATERIALS[material]
     geom = sample_geometry(n, seed=seed, material=material)
     n_shards = (n + shard_size - 1) // shard_size
+    config_tag = _config_tag(n, seed, material, shard_size)
 
     with ProcessPoolExecutor(max_workers=nprocs) as exe:
         for shard_idx in range(n_shards):
             shard_path = shard_dir / f"shard_{shard_idx:05d}.npz"
             if shard_path.exists():
+                _check_shard_tag(shard_path, config_tag)  # 指纹不符立即中止
                 print(f"[shard {shard_idx + 1}/{n_shards}] 已存在，跳过（断点续跑）")
                 continue
             lo = shard_idx * shard_size
@@ -363,26 +436,26 @@ def run_pipeline(
             chunksize = max(1, len(rows) // (nprocs * 4))
             solve = partial(solve_extract_one, piezo=piezo)
             results = list(exe.map(solve, rows, chunksize=chunksize))
-            _write_shard(shard_path, results, n_attempted=len(rows))
+            _write_shard(shard_path, results, n_attempted=len(rows), config_tag=config_tag)
             n_ok = sum(1 for r in results if r["valid"])
             print(f"[shard {shard_idx + 1}/{n_shards}] 求解 {len(rows)} 样本：有效 {n_ok}")
 
     # ---- 合并 shards ----
     xs, ys, zs = [], [], []
     n_attempted = 0
-    drop = {"no_resonance": 0, "label_nan": 0, "edge_margin": 0}
+    drop = {"no_resonance": 0, "label_nan": 0, "edge_margin": 0, "solver_error": 0}
     for shard_idx in range(n_shards):
         shard_path = shard_dir / f"shard_{shard_idx:05d}.npz"
         if not shard_path.exists():
             raise FileNotFoundError(f"缺少 shard：{shard_path}（求解不完整）")
+        _check_shard_tag(shard_path, config_tag)  # 合并时复核（防御预置异配置 shard）
         d = np.load(shard_path)
         xs.append(d["x_geom"])
         ys.append(d["y_params"])
         zs.append(d["z_dense"])
         n_attempted += int(d["n_attempted"])
-        drop["no_resonance"] += int(d["n_no_resonance"])
-        drop["label_nan"] += int(d["n_label_nan"])
-        drop["edge_margin"] += int(d["n_edge_margin"])
+        for reason, count in json.loads(str(d["drop_counts_json"])).items():
+            drop[reason] = drop.get(reason, 0) + int(count)
 
     x = np.concatenate(xs) if any(len(a) for a in xs) else np.empty((0, 5))
     y = np.concatenate(ys) if any(len(a) for a in ys) else np.empty((0, 7))
@@ -390,7 +463,11 @@ def run_pipeline(
     freq_ghz = (SOLVE_FREQ_HZ[Z_DENSE_IDX] / 1e9).astype(np.float64)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(out_path, x_geom=x, y_params=y, z_dense=z, freq_ghz=freq_ghz)
+    # 最终产物同样 tmp + os.replace 原子写，避免中断留下半截文件
+    out_tmp = out_path.with_suffix(".tmp")
+    with open(out_tmp, "wb") as fh:
+        np.savez_compressed(fh, x_geom=x, y_params=y, z_dense=z, freq_ghz=freq_ghz)
+    os.replace(out_tmp, out_path)
 
     wall = time.perf_counter() - t0
     meta = {
@@ -431,7 +508,10 @@ def run_pipeline(
         "fs_ghz_min": float(y[:, 0].min()) if len(y) else None,
         "fs_ghz_max": float(y[:, 0].max()) if len(y) else None,
     }
-    _meta_path(out_path).write_text(json.dumps(meta, ensure_ascii=False, indent=2))
+    meta_path = _meta_path(out_path)
+    meta_tmp = meta_path.with_name(meta_path.name + ".tmp")
+    meta_tmp.write_text(json.dumps(meta, ensure_ascii=False, indent=2))
+    os.replace(meta_tmp, meta_path)
     return meta
 
 
@@ -470,6 +550,16 @@ def main(argv: list[str] | None = None) -> int:
         help=f"压电材料（默认 {PIEZO_DEFAULT}，生产 AlScN 口径；ALN1 用于对照）",
     )
     args = ap.parse_args(argv)
+
+    # 数值参数校验（非正数给人类可读报错，argparse error → exit code 2）
+    if args.n <= 0:
+        ap.error(f"--n 必须为正整数（收到 {args.n}）")
+    if args.nprocs <= 0:
+        ap.error(f"--nprocs 必须为正整数（收到 {args.nprocs}）")
+    if args.shard_size <= 0:
+        ap.error(f"--shard-size 必须为正整数（收到 {args.shard_size}）")
+    if args.smoke is not None and args.smoke <= 0:
+        ap.error(f"--smoke 必须为正整数（收到 {args.smoke}）")
 
     if args.calibrate:
         run_calibration(material=args.material)
