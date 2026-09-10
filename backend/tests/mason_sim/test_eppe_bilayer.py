@@ -9,12 +9,13 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from app.mason_sim.labels import extract_eppe_labels
-from app.mason_sim.materials import ALN1, MO
-from app.mason_sim.solver import (
+from app.mason_sim import (
+    ALN1,
+    MO,
     EPPEParams,
     FBARParams,
     build_frequency_grid,
+    extract_eppe_labels,
     nm_to_m,
     run_eppe_sweep,
     run_fbar_sweep,
@@ -96,11 +97,12 @@ def test_reverse_polarity_te1_suppressed_te2_strong() -> None:
     assert lab.kt2_te2 > 0.03  # AlN 材料 kt2≈7.2% 量级
     assert lab.fs2_hz > TE2_F_MIN_HZ
     assert lab.fp2_hz > lab.fs2_hz
-    assert lab.qs2 > 0.0
-    assert lab.qp2 > 0.0
+    # Q 量级断言（2026-09-10 实测：Qs2≈223、Qp2≈283、Bode-Q(fs2)≈120、Bode-Q(fp2)≈41）
+    assert 100.0 < lab.qs2 < 5000.0
+    assert 100.0 < lab.qp2 < 5000.0
+    assert 10.0 < lab.qbode_fs2 < 5000.0
+    assert 10.0 < lab.qbode_fp2 < 5000.0
     assert lab.zp2_ohm > 0.0
-    assert np.isfinite(lab.qbode_fs2)
-    assert np.isfinite(lab.qbode_fp2)
 
 
 def test_reverse_polarity_static_capacitance_halved() -> None:

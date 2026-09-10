@@ -1,16 +1,17 @@
 """EPPE 无源性 / 能量一致性测试。
 
 - 有损耗（alpha>0）：无源网络输入阻抗实部不得显著为负（数值噪声容差 -1e-9 Ω）
-- 无损耗（alpha=0）：Z 应接近纯电抗，|Re(Z11)| 接近 0
-  （容差取相对形式：max|Re Z| / max|Z| < 1e-9，实际观测值见测试输出）
+- 无损耗（alpha=0）：Z 应接近纯电抗（本 MNA 下数值上精确为 0）
 """
 
 from __future__ import annotations
 
 import numpy as np
 
-from app.mason_sim.materials import ALN1, ALSCN, MO
-from app.mason_sim.solver import (
+from app.mason_sim import (
+    ALN1,
+    ALSCN,
+    MO,
     EPPEParams,
     build_frequency_grid,
     nm_to_m,

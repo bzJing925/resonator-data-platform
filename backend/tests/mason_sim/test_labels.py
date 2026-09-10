@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from app.mason_sim.labels import (
+from app.mason_sim import (
     compute_q_bode_phase,
     estimate_q_factor,
     find_te1_resonances,
@@ -95,3 +95,9 @@ def test_compute_q_bode_phase_synthetic() -> None:
     qbode = compute_q_bode_phase(freq, z11, f0, zref=zref)
     expected = 2.0 * zref * z0 * q / (zref**2 - z0**2)
     assert qbode == pytest.approx(expected, rel=1e-3)
+
+
+def test_compute_q_bode_phase_too_few_points_returns_nan() -> None:
+    """频点数 < 2 时无法数值微分，应返回 nan 而非抛异常。"""
+    assert np.isnan(compute_q_bode_phase(np.array([1e9]), np.array([1.0 + 1.0j]), 1e9))
+    assert np.isnan(compute_q_bode_phase(np.array([]), np.array([]), 1e9))

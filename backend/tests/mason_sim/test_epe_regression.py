@@ -24,10 +24,14 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pytest
 
-from app.mason_sim.materials import ALSCN, MO
-from app.mason_sim.solver import (
+from app.mason_sim import (
+    ALSCN,
+    MO,
     FBARParams,
+    MNACircuit,
+    add_piezo_layer_four_port,
     build_frequency_grid,
     nm_to_m,
     piezo_intermediates,
@@ -70,3 +74,31 @@ def test_reverse_default_keeps_legacy_turns_ratio() -> None:
 
     assert n_default == n_plus
     assert n_minus == -n_plus
+
+
+def test_reverse_validation_rejects_invalid_values() -> None:
+    """reverse 只允许 ±1（极性符号）；其他取值应抛 ValueError。"""
+    freq = 5e9
+    area = um2_to_m2(1000.0)
+    thk = nm_to_m(800.0)
+
+    for bad in (0.0, 0.5, +2.0, -1.5):
+        with pytest.raises(ValueError, match="reverse"):
+            piezo_intermediates(ALSCN, area, thk, freq, 0.02, reverse=bad)
+
+    circ = MNACircuit()
+    with pytest.raises(ValueError, match="reverse"):
+        add_piezo_layer_four_port(
+            circ,
+            prefix="BAD",
+            port1="IN",
+            port2="0",
+            port3="0",
+            port4="0",
+            mat=ALSCN,
+            area=area,
+            thk=thk,
+            alpha=0.02,
+            freq=freq,
+            reverse=0.0,
+        )

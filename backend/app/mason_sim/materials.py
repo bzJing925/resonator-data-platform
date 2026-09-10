@@ -67,7 +67,7 @@ class AcousticMaterial:
 
 
 # ============================================================
-# Canonical materials: AlScN / Mo / Air
+# Canonical materials: AlScN / AlN / Mo
 # ============================================================
 
 # AlScN 压电层材料参数（项目常用值）
@@ -95,14 +95,3 @@ MO = AcousticMaterial(
     v=6290.0,
     alpha=0.0,
 )
-
-# 空气背衬
-AIR = AcousticMaterial(
-    name="Air",
-    rho=1.225,
-    v=343.0,
-    alpha=0.0,
-)
-
-# 保留 ALN 别名以兼容旧代码；本项目 EPE 默认采用 AlScN 材料参数
-ALN = ALSCN

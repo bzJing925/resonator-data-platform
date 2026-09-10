@@ -21,7 +21,7 @@ from typing import Literal
 import numpy as np
 from scipy.signal import find_peaks
 
-from app.mason_sim.solver import s11_from_z11
+from app.mason_sim.solver import db20, s11_from_z11
 
 # ============================================================
 # Labels dataclass
@@ -96,7 +96,7 @@ def find_te1_resonances(
     if len(freq) < 3:
         return float("nan"), float("nan")
 
-    z_mag_db = 20.0 * np.log10(np.maximum(z_mag, 1e-300))
+    z_mag_db = db20(z_mag)
     prominence_db = _prominence_threshold_db(z_mag_db)
 
     # 忽略边界 2% 的点，避免把电容区边缘或插值伪峰当作谐振
@@ -159,7 +159,7 @@ def find_te2_resonances(
         return float("nan"), float("nan")
 
     sub_freq = freq[mask]
-    sub_db = 20.0 * np.log10(np.maximum(z_mag[mask], 1e-300))
+    sub_db = db20(z_mag[mask])
     prominence_db = _prominence_threshold_db(sub_db)
 
     # 忽略窗内边界点，避免把窗口边缘的斜坡端点当作谐振
@@ -250,8 +250,9 @@ def compute_q_bode_phase(
 
     其中 φ = unwrap(angle(S11))，S11 由 Z11 按参考阻抗 zref（默认 50 Ω）变换，
     相位斜率用中心差分（np.gradient）并在 f0 处线性插值取值。
+    频点数 < 2 无法数值微分时返回 nan。
     """
-    if not np.isfinite(f0) or f0 <= 0.0:
+    if not np.isfinite(f0) or f0 <= 0.0 or len(freq) < 2:
         return float("nan")
     s11 = s11_from_z11(z11, zref)
     phase = np.unwrap(np.angle(s11))

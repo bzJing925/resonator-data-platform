@@ -37,12 +37,14 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from app.mason_sim.labels import extract_eppe_labels  # noqa: E402
-from app.mason_sim.materials import ALN1, ALSCN, MO  # noqa: E402
-from app.mason_sim.solver import (  # noqa: E402
+from app.mason_sim import (  # noqa: E402
+    ALN1,
+    ALSCN,
+    MO,
     EPPEParams,
     FBARParams,
     build_frequency_grid,
+    extract_eppe_labels,
     nm_to_m,
     run_eppe_sweep,
     run_fbar_sweep,
@@ -92,7 +94,8 @@ def _plot_a():
     return lab_a
 
 
-def _plot_b():
+def _plot_b(fs2_ref_hz: float):
+    """同极性对照图。fs2_ref_hz 为 (a) EPPE 实测 fs2，用于对照标注。"""
     p = EPPEParams(
         t_piezo_bot=nm_to_m(100.0),
         t_piezo_top=nm_to_m(200.0),
@@ -119,7 +122,7 @@ def _plot_b():
     _mark(ax, lab_b.fs1_hz, "C3", f"fs1 = {lab_b.fs1_hz / 1e9:.3f} GHz")
     _mark(ax, lab_b.fp1_hz, "C2", f"fp1 = {lab_b.fp1_hz / 1e9:.3f} GHz")
     ax.annotate(
-        "TE2 dead: no resonance in 10-16 GHz\n(cf. EPPE TE2 at 14.1 GHz)",
+        f"TE2 dead: no resonance in 10-16 GHz\n(cf. EPPE TE2 at {fs2_ref_hz / 1e9:.1f} GHz)",
         xy=(13.0, float(np.median(r.abs_z11_db))),
         xytext=(10.5, float(np.max(r.abs_z11_db)) * 0.98),
         fontsize=9,
@@ -177,10 +180,9 @@ def _fmt_q(x: float) -> str:
 
 def main() -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    (OUT_DIR / ".gitignore").write_text("*.png\n", encoding="utf-8")
 
     lab_a = _plot_a()
-    lab_b = _plot_b()
+    lab_b = _plot_b(lab_a.fs2_hz)
     lab_c = _plot_c()
 
     rows = [

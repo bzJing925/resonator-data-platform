@@ -26,6 +26,10 @@ import numpy as np
 
 from app.mason_sim.materials import AcousticMaterial, PiezoMaterial
 
+# dB/m → Np/m 换算因子 20*log10(e)，用于把声学衰减 alpha (dB/m)
+# 写入传播常数 k = 2*pi*f/v * (1 - j*alpha/DB_PER_NEPER)（沿用 vendor/ADS 写法）
+DB_PER_NEPER = 8.686
+
 
 # ============================================================
 # Utilities
@@ -56,11 +60,6 @@ def build_frequency_grid(
 def s11_from_z11(z11: np.ndarray, zref: float = 50.0) -> np.ndarray:
     """由输入阻抗 Z11 计算 S11。"""
     return (z11 - zref) / (z11 + zref)
-
-
-def z11_from_s11(s11: np.ndarray, zref: float = 50.0) -> np.ndarray:
-    """由 S11 计算输入阻抗 Z11。"""
-    return zref * (1.0 + s11) / (1.0 - s11)
 
 
 # ============================================================
@@ -335,6 +334,12 @@ class MNACircuit:
 # ============================================================
 # Mason building blocks
 # ============================================================
+def _validate_reverse(reverse: float) -> None:
+    """reverse 只允许 ±1（极性符号）。"""
+    if abs(reverse) != 1.0:
+        raise ValueError(f"reverse 必须为 +1 或 -1（极性符号），收到 {reverse!r}")
+
+
 def piezo_intermediates(
     mat: PiezoMaterial,
     area: float,
@@ -345,16 +350,17 @@ def piezo_intermediates(
 ) -> dict[str, complex]:
     """计算单层压电层 Mason 中间变量。
 
-    reverse 为极性符号（+1 正极性 / -1 反极性），只作用在理想变压器
-    变比 N 的正负号上：N = sqrt(2*theta/(kt2*w*C0*Z)) * reverse。
-    默认 +1.0，保持 vendor 旧行为。
+    reverse 为极性符号（只允许 +1 正极性 / -1 反极性，其他取值抛 ValueError），
+    只作用在理想变压器变比 N 的正负号上：
+    N = sqrt(2*theta/(kt2*w*C0*Z)) * reverse。默认 +1.0，保持 vendor 旧行为。
     """
+    _validate_reverse(reverse)
     w = 2.0 * np.pi * freq
     v = (mat.c33 / mat.rho) ** 0.5
     z_ac = mat.rho * v  # 声阻抗 Z
     kt2 = mat.e33**2 / (mat.c33 * mat.eps)
     c0 = mat.eps * area / thk  # 静电容 C0
-    k = 2.0 * np.pi * freq / v * (1.0 - 1j * alpha / 8.686)
+    k = 2.0 * np.pi * freq / v * (1.0 - 1j * alpha / DB_PER_NEPER)
     theta = k * thk / 2.0
     za = 1j * z_ac * np.tan(theta)
     zc = -1j * z_ac / np.sin(2.0 * theta)
@@ -384,10 +390,10 @@ def acoustic_tline_impedances(
     对于厚度为 t 的声学传输线，T 型等效：
         Za = j * Z * tan(k * t / 2)
         Zb = -j * Z * csc(k * t)
-    其中 k = 2*pi*f/v * (1 - j*alpha/8.686)。
+    其中 k = 2*pi*f/v * (1 - j*alpha/DB_PER_NEPER)。
     """
     z_ac = mat.rho * mat.v
-    k = 2.0 * np.pi * freq / mat.v * (1.0 - 1j * mat.alpha / 8.686)
+    k = 2.0 * np.pi * freq / mat.v * (1.0 - 1j * mat.alpha / DB_PER_NEPER)
     theta = k * thk / 2.0
     za = 1j * z_ac * np.tan(theta)
     zb = -1j * z_ac / np.sin(2.0 * theta)
@@ -450,7 +456,11 @@ def add_piezo_layer_four_port(
         port1 --Zc0-- n_e
         sec_r --Zc0-- n_e
         n_e -- port2
+
+    reverse 为极性符号（只允许 +1 / -1，其他取值抛 ValueError），
+    经 piezo_intermediates 作用于变压器变比 N 的符号。
     """
+    _validate_reverse(reverse)
     iv = piezo_intermediates(mat, area, thk, freq, alpha, reverse=reverse)
 
     a_mid = f"{prefix}_a_mid"
@@ -502,8 +512,8 @@ def build_fbar_one_port(
         Piezo layer
         Bottom Mo electrode
 
-    声学边界：在本 MNA 实现中，将外表面接地以激励基模 TE1 谐振
-    （等效于参考 single_piezo_layer.py 的 clamped 验证配置）。
+    声学边界：最外声学表面（顶 Mo 顶面 / 底 Mo 底面）的声学端口接地，
+    在力-电压类比下对应应力自由边界（空气背衬近似），激励基模 TE1 谐振。
 
     电学输入：IN 接 Bottom Mo 电极，Top Mo 电极接地。
     """
@@ -779,35 +789,3 @@ def nm_to_m(value_nm: float) -> float:
 
 def um2_to_m2(value_um2: float) -> float:
     return value_um2 * 1e-12
-
-
-def m2_to_um2(value_m2: float) -> float:
-    return value_m2 * 1e12
-
-
-def quick_sweep(
-    t_aln_nm: float,
-    t_mo_nm: float,
-    area_um2: float,
-    f_start_ghz: float = 2.0,
-    f_stop_ghz: float = 20.0,
-    f_step_mhz: float = 10.0,
-    alpha: float = 0.02,
-    zref: float = 50.0,
-) -> FBARSweepResult:
-    """便捷函数：输入 nm/μm² 单位，直接返回扫频结果。"""
-    from app.mason_sim.materials import ALN, MO
-
-    params = FBARParams(
-        t_aln=nm_to_m(t_aln_nm),
-        t_mo=nm_to_m(t_mo_nm),
-        area=um2_to_m2(area_um2),
-        alpha=alpha,
-        zref=zref,
-    )
-    freq = build_frequency_grid(
-        f_start_hz=f_start_ghz * 1e9,
-        f_stop_hz=f_stop_ghz * 1e9,
-        f_step_hz=f_step_mhz * 1e6,
-    )
-    return run_fbar_sweep(freq, ALN, MO, params)
