@@ -19,6 +19,12 @@ prodlabels 全窗提 7 参数标签；无效样本丢弃并计数（原因分类
 会使靠窗沿的峰定位产生最高 ~100 MHz 偏差，对 (fp−fs) ~ 150 MHz 的器件意味着
 k²eff 偏差 30%+，必须剔除（2026-09-10 角点实验实测：200 样本中 1 例边沿偏移）。
 
+压电材料默认 **ALSCN**（--material 可选 ALN1 用于对照）：两个下游用途都要求
+AlScN 口径——(1) WP3 要把 Mason EPE 校准到生产代理基准，实测器件是 AlScN(30AT)
+晶圆（基准 k²eff≈9.83%，ALN1 材料 kt2=7.19% 物理上够不到）；(2) WP4 的
+EPE 预训练→EPPE(AlN+AlScN) 微调迁移要求 EPE 侧与 EPPE 的 AlScN 层材料一致。
+注意 t_piezo 标定范围随材料变化（T_PIEZO_RANGE_NM_BY_MATERIAL）。
+
 存盘（--out，默认 backend/surrogate_data_mason/epe_corpus.npz）：
     x_geom   (M,5) float64 = [t_piezo_nm, t_top_nm, t_bot_nm, t_pf_nm, area_um2]
     y_params (M,7) float64 = [fs_ghz, fp_ghz, k2eff_pct, qs, qp, qs_bodeq, qp_bodeq]
@@ -48,6 +54,7 @@ import tempfile
 import time
 import warnings
 from concurrent.futures import ProcessPoolExecutor
+from functools import partial
 from pathlib import Path
 
 import numpy as np
@@ -58,9 +65,11 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from app.mason_sim import (  # noqa: E402
     ALN1,
+    ALSCN,
     MO,
     SIN,
     EPEStackParams,
+    PiezoMaterial,
     build_frequency_grid,
     extract_epe_production_labels,
     nm_to_m,
@@ -74,15 +83,25 @@ from app.mason_sim import (  # noqa: E402
 SEED_DEFAULT = 20260910
 N_DEFAULT = 8000
 
+# 压电材料注册表：默认 ALSCN（生产 AlScN(30AT) 晶圆口径，见模块 docstring）；
+# ALN1 保留用于对照实验。
+PIEZO_MATERIALS: dict[str, PiezoMaterial] = {"ALSCN": ALSCN, "ALN1": ALN1}
+PIEZO_DEFAULT = "ALSCN"
+
 T_TOP_RANGE_NM = (50.0, 300.0)
 T_BOT_RANGE_NM = (50.0, 300.0)
 T_PF_RANGE_NM = (0.0, 100.0)
-# t_piezo 范围：标定使 nominal 堆叠（t_top=t_bot=150 nm, t_pf=0, ALN1, area=2000 µm²）
-# 的 fs1 恰好覆盖 [3.95, 7.05] GHz（对 4–7 GHz 目标带各留 50 MHz 边距）。
-# 标定于 2026-09-10，二分容差 0.25 nm（`--calibrate` 可复现并打印角点核查表）。
+# t_piezo 范围（随材料变化）：标定使 nominal 堆叠（t_top=t_bot=150 nm, t_pf=0,
+# area=2000 µm²）的 fs1 恰好覆盖 [3.95, 7.05] GHz（对 4–7 GHz 目标带各留 50 MHz
+# 边距）。均标定于 2026-09-10，二分容差 0.25 nm（`--calibrate --material X` 复现
+# 并打印角点核查表）。
 FS_CAL_LO_GHZ = 3.95
 FS_CAL_HI_GHZ = 7.05
-T_PIEZO_RANGE_NM = (171.85, 683.69)
+T_PIEZO_RANGE_NM_BY_MATERIAL: dict[str, tuple[float, float]] = {
+    "ALSCN": (134.70, 552.03),
+    "ALN1": (171.85, 683.69),
+}
+T_PIEZO_RANGE_NM = T_PIEZO_RANGE_NM_BY_MATERIAL[PIEZO_DEFAULT]
 
 AREA_LEVELS_UM2 = (700.0, 1200.0, 2000.0, 3500.0, 5500.0)
 
@@ -116,18 +135,20 @@ OUT_DEFAULT = PROJECT_ROOT / "surrogate_data_mason" / "epe_corpus.npz"
 # ============================================================
 # 采样
 # ============================================================
-def sample_geometry(n: int, seed: int = SEED_DEFAULT) -> np.ndarray:
+def sample_geometry(n: int, seed: int = SEED_DEFAULT, material: str = PIEZO_DEFAULT) -> np.ndarray:
     """4 维 LHS（t_top/t_bot/t_pf/t_piezo）+ 面积 5 档轮转 → (n,5) float64。
 
     输出列序 = GEOM_COLS：[t_piezo_nm, t_top_nm, t_bot_nm, t_pf_nm, area_um2]。
+    t_piezo 范围取该材料的标定值（T_PIEZO_RANGE_NM_BY_MATERIAL）。
     """
     from scipy.stats import qmc
 
+    t_piezo_range = T_PIEZO_RANGE_NM_BY_MATERIAL[material]
     u = qmc.LatinHypercube(d=4, seed=seed).random(n=n)
     t_top = T_TOP_RANGE_NM[0] + u[:, 0] * (T_TOP_RANGE_NM[1] - T_TOP_RANGE_NM[0])
     t_bot = T_BOT_RANGE_NM[0] + u[:, 1] * (T_BOT_RANGE_NM[1] - T_BOT_RANGE_NM[0])
     t_pf = T_PF_RANGE_NM[0] + u[:, 2] * (T_PF_RANGE_NM[1] - T_PF_RANGE_NM[0])
-    t_piezo = T_PIEZO_RANGE_NM[0] + u[:, 3] * (T_PIEZO_RANGE_NM[1] - T_PIEZO_RANGE_NM[0])
+    t_piezo = t_piezo_range[0] + u[:, 3] * (t_piezo_range[1] - t_piezo_range[0])
     area = np.array([AREA_LEVELS_UM2[i % len(AREA_LEVELS_UM2)] for i in range(n)])
     return np.column_stack([t_piezo, t_top, t_bot, t_pf, area]).astype(np.float64)
 
@@ -135,11 +156,15 @@ def sample_geometry(n: int, seed: int = SEED_DEFAULT) -> np.ndarray:
 # ============================================================
 # 单样本求解 + 生产口径标签
 # ============================================================
-def solve_extract_one(row: tuple[float, float, float, float, float]) -> dict:
+def solve_extract_one(
+    row: tuple[float, float, float, float, float],
+    piezo: PiezoMaterial = ALSCN,
+) -> dict:
     """求解一个几何样本并提取生产口径标签。
 
     Args:
         row: (t_piezo_nm, t_top_nm, t_bot_nm, t_pf_nm, area_um2)，列序 = GEOM_COLS。
+        piezo: 压电材料（默认 ALSCN，生产 AlScN 口径；对照实验可传 ALN1）。
 
     Returns:
         dict(valid, reason, x, y, z)：
@@ -158,7 +183,7 @@ def solve_extract_one(row: tuple[float, float, float, float, float]) -> dict:
     )
     with warnings.catch_warnings(), np.errstate(all="ignore"):
         warnings.simplefilter("ignore")
-        z11 = run_epe_stack_sweep(SOLVE_FREQ_HZ, ALN1, MO, SIN, params).z11
+        z11 = run_epe_stack_sweep(SOLVE_FREQ_HZ, piezo, MO, SIN, params).z11
         labels = extract_epe_production_labels(SOLVE_FREQ_HZ, z11)
 
     x = [float(v) for v in row]
@@ -182,15 +207,10 @@ def solve_extract_one(row: tuple[float, float, float, float, float]) -> dict:
     return {"valid": True, "reason": "ok", "x": x, "y": y, "z": z_dense}
 
 
-def _solve_one_star(row: tuple[float, ...]) -> dict:
-    """ProcessPoolExecutor map 入口（顶层函数，可 pickle）。"""
-    return solve_extract_one(row)
-
-
 # ============================================================
-# t_piezo 标定（--calibrate 复现 T_PIEZO_RANGE_NM）
+# t_piezo 标定（--calibrate 复现 T_PIEZO_RANGE_NM_BY_MATERIAL）
 # ============================================================
-def _fs_at_nominal(t_piezo_nm: float) -> float:
+def _fs_at_nominal(t_piezo_nm: float, piezo: PiezoMaterial) -> float:
     """nominal 堆叠（150/150/0, area=2000）下 fs1 (GHz)。"""
     params = EPEStackParams(
         t_piezo=nm_to_m(t_piezo_nm),
@@ -202,16 +222,22 @@ def _fs_at_nominal(t_piezo_nm: float) -> float:
     )
     from app.mason_sim.labels import find_te1_resonances
 
-    z11 = run_epe_stack_sweep(SOLVE_FREQ_HZ, ALN1, MO, SIN, params).z11
+    z11 = run_epe_stack_sweep(SOLVE_FREQ_HZ, piezo, MO, SIN, params).z11
     fs, _fp = find_te1_resonances(SOLVE_FREQ_HZ, np.abs(z11))
     return fs / 1e9
 
 
-def _bisect_t_for_fs(target_ghz: float, lo_nm: float, hi_nm: float, tol_nm: float = 0.25) -> float:
+def _bisect_t_for_fs(
+    target_ghz: float,
+    lo_nm: float,
+    hi_nm: float,
+    piezo: PiezoMaterial,
+    tol_nm: float = 0.25,
+) -> float:
     """fs 随 t_piezo 单调下降，二分求厚度。"""
     for _ in range(40):
         mid = 0.5 * (lo_nm + hi_nm)
-        if _fs_at_nominal(mid) > target_ghz:
+        if _fs_at_nominal(mid, piezo) > target_ghz:
             lo_nm = mid
         else:
             hi_nm = mid
@@ -220,14 +246,20 @@ def _bisect_t_for_fs(target_ghz: float, lo_nm: float, hi_nm: float, tol_nm: floa
     return 0.5 * (lo_nm + hi_nm)
 
 
-def run_calibration() -> None:
-    """复现 T_PIEZO_RANGE_NM 标定并打印角点核查表。"""
-    print(f"标定目标：nominal 堆叠（150/150/0）fs1 ∈ [{FS_CAL_LO_GHZ}, {FS_CAL_HI_GHZ}] GHz")
-    t_hi = _bisect_t_for_fs(FS_CAL_LO_GHZ, 400.0, 1200.0)
-    t_lo = _bisect_t_for_fs(FS_CAL_HI_GHZ, 100.0, 700.0)
+def run_calibration(material: str = PIEZO_DEFAULT) -> None:
+    """复现指定材料的 t_piezo 范围标定并打印角点核查表。"""
+    piezo = PIEZO_MATERIALS[material]
+    print(
+        f"标定目标：{material} nominal 堆叠（150/150/0）"
+        f"fs1 ∈ [{FS_CAL_LO_GHZ}, {FS_CAL_HI_GHZ}] GHz"
+    )
+    t_hi = _bisect_t_for_fs(FS_CAL_LO_GHZ, 300.0, 1200.0, piezo)
+    t_lo = _bisect_t_for_fs(FS_CAL_HI_GHZ, 50.0, 700.0, piezo)
     print(f"  t_hi (fs={FS_CAL_LO_GHZ} GHz) = {t_hi:.2f} nm")
     print(f"  t_lo (fs={FS_CAL_HI_GHZ} GHz) = {t_lo:.2f} nm")
-    print(f"  → T_PIEZO_RANGE_NM = ({t_lo:.2f}, {t_hi:.2f})  # 当前脚本值 {T_PIEZO_RANGE_NM}")
+    current = T_PIEZO_RANGE_NM_BY_MATERIAL[material]
+    print(f"  → T_PIEZO_RANGE_NM_BY_MATERIAL[{material!r}] = ({t_lo:.2f}, {t_hi:.2f})")
+    print(f"    （当前脚本烘焙值 {current}）")
     print("角点核查（电极/PF 极端组合下 fs 位置；越出 [3.15, 7.85] GHz 的样本会被丢弃）：")
     for t_p in (t_lo, t_hi):
         for tt, tb, pf in ((50, 50, 0), (300, 300, 100), (50, 300, 50), (300, 50, 50)):
@@ -241,7 +273,7 @@ def run_calibration() -> None:
             )
             from app.mason_sim.labels import find_te1_resonances
 
-            z11 = run_epe_stack_sweep(SOLVE_FREQ_HZ, ALN1, MO, SIN, params).z11
+            z11 = run_epe_stack_sweep(SOLVE_FREQ_HZ, piezo, MO, SIN, params).z11
             fs, fp = find_te1_resonances(SOLVE_FREQ_HZ, np.abs(z11))
             pair = f"fs={fs / 1e9:.3f} fp={fp / 1e9:.3f}" if fp > fs else "窗内无有效对（丢弃）"
             print(f"  t_piezo={t_p:7.2f} top={tt:3d} bot={tb:3d} pf={pf:3d} → {pair}")
@@ -307,6 +339,7 @@ def run_pipeline(
     shard_size: int,
     nprocs: int,
     seed: int,
+    material: str = PIEZO_DEFAULT,
 ) -> dict:
     """执行语料生成：逐 shard 求解（已存在跳过）→ 合并 → 写 npz + meta.json。
 
@@ -314,7 +347,8 @@ def run_pipeline(
         meta dict（同时写入 <out>.meta.json）。
     """
     t0 = time.perf_counter()
-    geom = sample_geometry(n, seed=seed)
+    piezo = PIEZO_MATERIALS[material]
+    geom = sample_geometry(n, seed=seed, material=material)
     n_shards = (n + shard_size - 1) // shard_size
 
     with ProcessPoolExecutor(max_workers=nprocs) as exe:
@@ -327,7 +361,8 @@ def run_pipeline(
             hi = min(n, lo + shard_size)
             rows = [tuple(float(v) for v in geom[i]) for i in range(lo, hi)]
             chunksize = max(1, len(rows) // (nprocs * 4))
-            results = list(exe.map(_solve_one_star, rows, chunksize=chunksize))
+            solve = partial(solve_extract_one, piezo=piezo)
+            results = list(exe.map(solve, rows, chunksize=chunksize))
             _write_shard(shard_path, results, n_attempted=len(rows))
             n_ok = sum(1 for r in results if r["valid"])
             print(f"[shard {shard_idx + 1}/{n_shards}] 求解 {len(rows)} 样本：有效 {n_ok}")
@@ -365,15 +400,16 @@ def run_pipeline(
         "n_produced": int(x.shape[0]),
         "n_dropped": int(n_attempted - x.shape[0]),
         "drop_reasons": drop,
+        "material": material,
         "ranges_nm": {
-            "t_piezo": list(T_PIEZO_RANGE_NM),
+            "t_piezo": list(T_PIEZO_RANGE_NM_BY_MATERIAL[material]),
             "t_top": list(T_TOP_RANGE_NM),
             "t_bot": list(T_BOT_RANGE_NM),
             "t_pf": list(T_PF_RANGE_NM),
         },
         "t_piezo_calibration": (
-            f"nominal 堆叠(150/150/0) fs1 覆盖 [{FS_CAL_LO_GHZ}, {FS_CAL_HI_GHZ}] GHz；"
-            "2026-09-10 二分标定（--calibrate 复现）"
+            f"{material} nominal 堆叠(150/150/0) fs1 覆盖 [{FS_CAL_LO_GHZ}, {FS_CAL_HI_GHZ}] GHz；"
+            "2026-09-10 二分标定（--calibrate --material 复现）"
         ),
         "area_levels_um2": list(AREA_LEVELS_UM2),
         "area_note": (
@@ -385,7 +421,7 @@ def run_pipeline(
         "edge_margin_mhz": EDGE_MARGIN_HZ / 1e6,
         "alpha": ALPHA,
         "zref_ohm": ZREF,
-        "materials": {"piezo": ALN1.name, "electrode": MO.name, "pf": SIN.name},
+        "materials": {"piezo": piezo.name, "electrode": MO.name, "pf": SIN.name},
         "geom_cols": GEOM_COLS,
         "param_cols": PARAM_COLS,
         "label_provenance": LABEL_PROVENANCE,
@@ -427,10 +463,16 @@ def main(argv: list[str] | None = None) -> int:
         help="冒烟模式：只跑 N 样本并打印吞吐/ETA",
     )
     ap.add_argument("--calibrate", action="store_true", help="复现 t_piezo 范围标定并退出")
+    ap.add_argument(
+        "--material",
+        choices=sorted(PIEZO_MATERIALS),
+        default=PIEZO_DEFAULT,
+        help=f"压电材料（默认 {PIEZO_DEFAULT}，生产 AlScN 口径；ALN1 用于对照）",
+    )
     args = ap.parse_args(argv)
 
     if args.calibrate:
-        run_calibration()
+        run_calibration(material=args.material)
         return 0
 
     if args.smoke is not None:
@@ -438,7 +480,7 @@ def main(argv: list[str] | None = None) -> int:
         tmp = Path(tempfile.mkdtemp(prefix="epe_corpus_smoke_"))
         out_path = tmp / "smoke.npz"
         shard_dir = tmp / "shards"
-        print(f"冒烟模式：n={n}，nprocs={args.nprocs}，临时目录 {tmp}")
+        print(f"冒烟模式：n={n}，nprocs={args.nprocs}，material={args.material}，临时目录 {tmp}")
     else:
         n = int(args.n)
         out_path = Path(args.out)
@@ -454,6 +496,7 @@ def main(argv: list[str] | None = None) -> int:
         shard_size=int(args.shard_size),
         nprocs=int(args.nprocs),
         seed=int(args.seed),
+        material=args.material,
     )
     wall = time.perf_counter() - t0
 

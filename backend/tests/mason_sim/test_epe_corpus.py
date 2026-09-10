@@ -23,10 +23,11 @@ if str(SCRIPTS_DIR) not in sys.path:
 import build_mason_epe_corpus as corpus  # noqa: E402
 
 # 端到端测试用脚本默认种子（= 生产配置，先于测试存在，非挑种子）：2026-09-10 实测
-# 该种子 12 样本全有效。注：靠窗沿（fs<3.1 或 fp>7.9 GHz，在 find_te1_resonances 的
-# edge_skip=100 点之外）或越窗角点样本被丢弃是【正确行为】（宽网格真值验证：
-# seed=12345 的 2 个丢弃样本真 TE1 为 (7.814,7.992) 与 (3.042,3.118) GHz，峰贴窗沿，
-# 强行保留会得到有偏标签）；语料级真实产量率以 --smoke 200 实测为准（约 93%）。
+# 该种子 12 样本全有效（ALN1 与 ALSCN 口径均 12/12）。注：靠窗沿（fs<3.1 或 fp>7.9 GHz，
+# 在 find_te1_resonances 的 edge_skip=100 点之外）或越窗角点样本被丢弃是【正确行为】
+# （ALN1 口径宽网格真值验证：seed=12345 的 2 个丢弃样本真 TE1 为 (7.814,7.992) 与
+# (3.042,3.118) GHz，峰贴窗沿，强行保留会得到有偏标签）；语料级真实产量率以
+# --smoke 200 实测为准（ALSCN 口径约 91.5%）。
 TEST_SEED = corpus.SEED_DEFAULT
 EXPECTED_PARAM_COLS = ["fs_ghz", "fp_ghz", "k2eff_pct", "qs", "qp", "qs_bodeq", "qp_bodeq"]
 
@@ -107,10 +108,15 @@ def test_end_to_end_12_samples(tmp_path: Path) -> None:
     assert float(y[:, 0].min()) > 3.0
     assert float(y[:, 1].max()) < 8.0
     assert (y[:, 1] > y[:, 0]).all()
-    assert ((y[:, 2] > 0.0) & (y[:, 2] < 15.0)).all()
+    # k²eff 上限 sanity（ALSCN 口径）：材料 kt2=19.44% 是物理天花板，电极质量
+    # 加载把有效 k²eff 压到 ~15-16% 量级（2026-09-10 ALSCN 冒烟 200 实测 max=15.69%）；
+    # 上限取 20%——超过材料 kt2 必为标签管线 bug
+    assert ((y[:, 2] > 0.0) & (y[:, 2] < 20.0)).all()
 
     meta = json.loads((tmp_path / "corpus.meta.json").read_text())
     assert meta["seed"] == TEST_SEED
+    assert meta["material"] == "ALSCN"  # 默认材料口径（生产 AlScN 晶圆）
+    assert meta["materials"]["piezo"] == "AlScN"
     assert meta["n_requested"] == 12
     assert meta["n_produced"] == m
     assert meta["n_dropped"] == 12 - m
@@ -163,6 +169,28 @@ def test_resume_skips_existing_shards(tmp_path: Path) -> None:
     second = np.load(out)
     np.testing.assert_array_equal(second["x_geom"], x1)
     np.testing.assert_array_equal(second["y_params"], y1)
+
+
+def test_material_selection_aln1_control() -> None:
+    """--material ALN1 对照：t_piezo 用 ALN1 标定范围；同几何两材料 fs 不同。"""
+    from app.mason_sim import ALN1, ALSCN
+
+    g_aln = corpus.sample_geometry(16, seed=123, material="ALN1")
+    lo_aln, hi_aln = corpus.T_PIEZO_RANGE_NM_BY_MATERIAL["ALN1"]
+    assert float(g_aln[:, 0].min()) >= lo_aln
+    assert float(g_aln[:, 0].max()) <= hi_aln
+    # 与默认 ALSCN 同一 u 序列 → t_top/t_bot/t_pf 相同，t_piezo 范围不同
+    g_scn = corpus.sample_geometry(16, seed=123, material="ALSCN")
+    np.testing.assert_array_equal(g_aln[:, 1:], g_scn[:, 1:])
+    assert float(g_aln[:, 0].min()) > float(g_scn[:, 0].min())  # ALN1 v 更高 → 更厚
+
+    row = (450.0, 150.0, 150.0, 0.0, 2000.0)
+    r_scn = corpus.solve_extract_one(row, piezo=ALSCN)
+    r_aln = corpus.solve_extract_one(row, piezo=ALN1)
+    assert r_scn["valid"] and r_aln["valid"]
+    assert r_scn["y"][0] != r_aln["y"][0]  # 材料影响 fs
+    # AlScN 的 k²eff 显著高于 AlN（材料 kt2 19.4% vs 7.2%）
+    assert r_scn["y"][2] > r_aln["y"][2]
 
 
 def test_pf_monotonicity_through_pipeline() -> None:
