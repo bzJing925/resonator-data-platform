@@ -155,28 +155,35 @@ def build_cond(params: NDArray) -> NDArray[np.float64]:
 # ---------------------------------------------------------------- 谱评估
 
 
-def aligned_rmse_db(
+def anchor_sensitivity_rmse_db(
     pred: NDArray,
     gt: NDArray,
     mask: NDArray[np.bool_],
     grid: NDArray[np.float64],
-    shifts: NDArray[np.float64],
-) -> float:
-    """把预测沿 w 平移 shifts（使 fs 与 GT 对齐）后计算 mask 内 RMSE(dB)。
+    s: NDArray[np.float64],
+) -> tuple[float, float]:
+    """乘性锚点扰动敏感度：pred 在查询 q = w·(1±s) 处取值后与 GT 算掩码内 RMSE(dB)。
 
-    aligned(w) = pred(w + shift)：预测 fs 位于 w=1+shift 时左移回原位。
-    平移后落出网格的采样点不参与统计。
+    s: (M,) 每样本注入幅度（Stage 1 fs 相对误差 clip 后）。两个方向都报：
+    返回 (rmse_plus, rmse_minus)。落网外或掩码外的点不计。
+
+    口径说明：统一网格 w=f/f_a 下，锚点 f_a 的相对误差 ε 使绝对轴缩放 (1+ε)，
+    等价于 w 轴乘性查询 q=w·(1+ε)——这是"锚点误差注入"探针而非对位修正
+    （WP4a 复审裁决：原 aligned 加性平移口径对本级联不诚实，误差幅度主导）。
     """
-    total, count = 0.0, 0
-    for i in range(len(pred)):
-        q = grid + shifts[i]
-        valid = mask[i] & (q >= grid[0]) & (q <= grid[-1])
-        if not valid.any():
-            continue
-        p = np.interp(q[valid], grid, pred[i])
-        total += float(((p - gt[i][valid]) ** 2).sum())
-        count += int(valid.sum())
-    return float(np.sqrt(total / count)) if count else float("nan")
+    outs = []
+    for sign in (1.0, -1.0):
+        total, count = 0.0, 0
+        for i in range(len(pred)):
+            q = grid * (1.0 + sign * s[i])
+            valid = mask[i] & (q >= grid[0]) & (q <= grid[-1])
+            if not valid.any():
+                continue
+            p = np.interp(q[valid], grid, pred[i])
+            total += float(((p - gt[i][valid]) ** 2).sum())
+            count += int(valid.sum())
+        outs.append(float(np.sqrt(total / count)) if count else float("nan"))
+    return outs[0], outs[1]
 
 
 def zp_peak_mae_db(

@@ -165,6 +165,18 @@ def test_build_unified_drops_zero_coverage(tmp_path):
     np.testing.assert_allclose(out["fp_ratio"], [5.25 / 5.0, 14.2 / 14.0])
 
 
+def test_build_and_save_persists_src_keys(tmp_path):
+    """src_structure/src_index 持久化进 npz（按行回溯语料），spec 键不受影响。"""
+    epe, eppe = _write_synthetic_corpora(tmp_path)
+    out_npz, out_meta = tmp_path / "u.npz", tmp_path / "u.meta.json"
+    bud.build_and_save(epe, eppe, out_npz, out_meta)
+    with np.load(out_npz) as d:
+        for key in ["x7", "y7", "z_w_db", "w_mask", "w_grid", "f_a", "fp_ratio", "split"]:
+            assert key in d.files
+        np.testing.assert_array_equal(d["src_structure"], [0, 1])
+        np.testing.assert_array_equal(d["src_index"], [0, 0])
+
+
 # ---------------------------------------------------------------- 全量构建（真实语料）
 
 

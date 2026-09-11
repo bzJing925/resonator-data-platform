@@ -134,31 +134,55 @@ def test_build_cond_selects_production_order():
     np.testing.assert_allclose(cond[0], [5.0, 5.2, 500.0, 600.0, 12.0])
 
 
-# ---------------------------------------------------------------- 对齐 RMSE
+# ---------------------------------------------------------------- 锚点敏感度（乘性）
 
 
-def test_aligned_rmse_corrects_known_shift():
+def test_anchor_sensitivity_zero_perturb_identity():
     grid = bud.w_grid()
-    gt = -((grid - 1.0) ** 2) * 100 + 40  # 顶点在 w=1.0
-    shift = 0.005
-    pred = -((grid - 1.0 - shift) ** 2) * 100 + 40  # 同一曲线右移 0.005
+    rng = np.random.default_rng(3)
+    gt = np.cumsum(rng.normal(0, 1, 1001)) + 30.0
     mask = np.ones_like(grid, dtype=bool)
-    unaligned = mc.aligned_rmse_db(pred[None], gt[None], mask[None], grid, np.array([0.0]))
-    aligned = mc.aligned_rmse_db(pred[None], gt[None], mask[None], grid, np.array([shift]))
-    assert unaligned > 0.1
-    # 平移回原位后只剩线性插值误差（抛物线曲率 × h²/8 ≈ 4e-6）
-    assert aligned < 0.01
-    assert aligned < unaligned / 50
+    plus, minus = mc.anchor_sensitivity_rmse_db(
+        gt[None], gt[None], mask[None], grid, np.array([0.0])
+    )
+    assert plus == pytest.approx(0.0)
+    assert minus == pytest.approx(0.0)
 
 
-def test_aligned_rmse_respects_mask():
+def test_anchor_sensitivity_multiplicative_linear_analytic():
+    """线性谱 gt=aw+b：乘性查询 q=w(1+s) 的解析误差 = |a·w·s|（落网外点不计）。"""
+    grid = bud.w_grid()
+    a_, b_ = 30.0, 5.0
+    gt = a_ * grid + b_
+    s = np.array([0.005])
+    mask = np.ones((1, 1001), dtype=bool)
+    plus, minus = mc.anchor_sensitivity_rmse_db(gt[None], gt[None], mask, grid, s)
+    q = grid * (1 + s[0])
+    valid = q <= grid[-1]
+    expect_plus = float(np.sqrt(np.mean((a_ * q[valid] - a_ * grid[valid]) ** 2)))
+    assert plus == pytest.approx(expect_plus, rel=1e-9)
+    q2 = grid * (1 - s[0])
+    valid2 = q2 >= grid[0]
+    expect_minus = float(np.sqrt(np.mean((a_ * q2[valid2] - a_ * grid[valid2]) ** 2)))
+    assert minus == pytest.approx(expect_minus, rel=1e-9)
+    assert plus > 0.05 and minus > 0.05  # 确实注入了误差
+
+
+def test_anchor_sensitivity_respects_mask():
     grid = bud.w_grid()
     gt = np.zeros_like(grid)
     pred = np.zeros_like(grid)
-    pred[grid > 1.1] = 100.0  # 只在被掩码区有大误差
-    mask = grid <= 1.1
-    rmse = mc.aligned_rmse_db(pred[None], gt[None], mask[None], grid, np.array([0.0]))
-    assert rmse == pytest.approx(0.0)
+    pred[grid > 1.1] = 100.0  # 只在被掩码区有差异
+    mask = (grid <= 1.1)[None, :]
+    plus, minus = mc.anchor_sensitivity_rmse_db(
+        pred[None], gt[None], mask, grid, np.array([0.005])
+    )
+    # 掩码区不计；乘性查询 q=w·(1+s) 会把 w>1.1 处的大值带入 w≤1.1 的查询点
+    # → 手工重算对照（np.interp 语义）
+    q = grid * 1.005
+    valid = mask[0] & (q <= grid[-1])
+    manual = np.sqrt(np.mean((np.interp(q[valid], grid, pred) - gt[valid]) ** 2))
+    assert plus == pytest.approx(manual, rel=1e-9)
 
 
 # ---------------------------------------------------------------- Zp 峰高

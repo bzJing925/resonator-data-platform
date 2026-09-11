@@ -191,6 +191,9 @@ def build_and_save(epe_path: Path, eppe_path: Path, out_npz: Path, out_meta: Pat
         f_a=out["f_a"],
         fp_ratio=out["fp_ratio"],
         split=out["split"],
+        # 行回溯索引（复审次要项 6）：按行定位来源语料
+        src_structure=out["src_structure"].astype(np.int8),
+        src_index=out["src_index"].astype(np.int64),
     )
     n = {
         EPE: int((out["src_structure"] == EPE).sum()),

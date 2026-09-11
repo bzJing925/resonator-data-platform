@@ -115,8 +115,11 @@ def test_stage1_train_smoke(tiny_data, tmp_path):
     cfg_json = out / "stage1_config.json"
     assert ckpt.exists() and cfg_json.exists()
     saved = json.loads(cfg_json.read_text())
-    for key in ["x7_mean", "x7_std", "y7_mean", "y7_std", "db_mean", "db_std", "seed", "k"]:
+    for key in ["x7_mean", "x7_std", "y7_mean", "y7_std", "db_mean", "db_std", "seed", "k",
+                "dataset_sha256", "epochs_run"]:
         assert key in saved
+    assert len(saved["dataset_sha256"]) == 64  # checkpoint↔数据集版本绑定
+    assert saved["epochs_run"] == 2
     # 评估结构
     ev = result["eval"]
     for struct in ["epe", "eppe", "all"]:
@@ -160,10 +163,16 @@ def test_stage2_train_smoke(tiny_data, stage1_ckpt, tmp_path):
     assert result["epochs_run"] == 2
     assert np.isfinite(result["history"][-1]["val"])
     assert (out / "stage2.pt").exists() and (out / "stage2_config.json").exists()
+    s2_saved = json.loads((out / "stage2_config.json").read_text())
+    for key in ["dataset_sha256", "epochs_effective", "compare_epochs", "epochs_run"]:
+        assert key in s2_saved, key
+    assert s2_saved["epochs_effective"] == 2  # 未触发预算截断时 == 实际配置
     ev = result["eval"]
     for struct in ["epe", "eppe", "all"]:
-        for key in ["full_rmse_db", "aligned_rmse_db", "zp_peak_mae_db", "n_test"]:
+        for key in ["full_rmse_db", "anchor_sensitivity_rmse_db", "zp_peak_mae_db", "n_test"]:
             assert key in ev[struct], (struct, key)
+        sens = ev[struct]["anchor_sensitivity_rmse_db"]
+        assert set(sens) == {"plus", "minus"}  # 乘性锚点扰动两个方向
 
 
 def test_stage2_max_freq_compare(tiny_data, stage1_ckpt, tmp_path):

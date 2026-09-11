@@ -1,8 +1,11 @@
 {
-  "generated_at": "2026-09-11T09:37:50.846483+00:00",
+  "generated_at": "2026-09-11T11:14:29.124532+00:00",
   "task": "WP4a unified forward surrogate on Mason corpora (EPE+EPPE co-train)",
   "seed": 20260911,
+  "warnings": [],
   "dataset": {
+    "path": "/Users/jingbozuo/Projects/aln-data-backend-ml/backend/surrogate_data_mason/unified_dataset.npz",
+    "dataset_sha256": "831276bcfda819e12e2a1f1318f1abfbea6828f60d49499be8cba4a488573dab",
     "n_total": 12005,
     "w_grid": {
       "w_lo": 0.8,
@@ -44,6 +47,7 @@
   "stage1": {
     "best_epoch": 141,
     "best_val": 0.00206711676178707,
+    "epochs_run": 171,
     "train_seconds": 88.0,
     "per_structure": {
       "epe": {
@@ -97,10 +101,14 @@
       "0.1": 3.290976977344447e-06,
       "1.0": 2.5873594717672353e-06
     },
+    "anchor_sensitivity_note": "anchor_sensitivity_rmse_db 为乘性锚点扰动探针：q=w·(1±s)，s=clip(fs_pred/f_a−1, ±anchor_perturb_max) 是 Stage 1 fs 相对误差注入；衡量锚点误差敏感度（误差注入必然 ≥ full RMSE），WP5 论文不引用此列。",
     "per_structure": {
       "epe": {
         "full_rmse_db": 1.0184867405300644,
-        "aligned_rmse_db": 3.9822230589985654,
+        "anchor_sensitivity_rmse_db": {
+          "plus": 4.290015596814212,
+          "minus": 13.925327897619752
+        },
         "zp_peak_mae_db": 6.0634196499538,
         "zp_n_used": 446,
         "gt_sparse_full_rmse_db": 0.015126880455642621,
@@ -109,7 +117,10 @@
       },
       "eppe": {
         "full_rmse_db": 0.9281843233033112,
-        "aligned_rmse_db": 2.143692876428793,
+        "anchor_sensitivity_rmse_db": {
+          "plus": 2.1537949766015467,
+          "minus": 2.1437919581314846
+        },
         "zp_peak_mae_db": 2.5663229597716772,
         "zp_n_used": 357,
         "gt_sparse_full_rmse_db": 0.056743546246595195,
@@ -118,7 +129,10 @@
       },
       "all": {
         "full_rmse_db": 0.9756325693447175,
-        "aligned_rmse_db": 3.2199590935476925,
+        "anchor_sensitivity_rmse_db": {
+          "plus": 3.4184375739569886,
+          "minus": 10.102120182004041
+        },
         "zp_peak_mae_db": 4.508670561043441,
         "zp_n_used": 803,
         "gt_sparse_full_rmse_db": 0.04102243967121139,

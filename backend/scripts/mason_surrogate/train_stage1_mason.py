@@ -30,6 +30,7 @@ for p in (PROJECT_ROOT, SCRIPTS_DIR):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 
+from mason_surrogate.build_unified_dataset import file_sha256  # noqa: E402
 from mason_surrogate.common import (  # noqa: E402
     UnifiedMLP,
     apply_norm,
@@ -195,7 +196,11 @@ def train(cfg: dict) -> dict:
                                   "seed")},
         "best_epoch": best_epoch,
         "best_val": best_val,
+        "epochs_run": len(history),  # 与 stage2 config schema 对齐
         "train_seconds": time.time() - t_start,
+        # checkpoint↔数据集版本绑定（复审重要项 2）
+        "dataset": str(cfg["data"]),
+        "dataset_sha256": file_sha256(Path(cfg["data"])),
         "x7_mean": x_stats.mean.tolist(), "x7_std": x_stats.std.tolist(),
         "y7_mean": y_stats.mean.tolist(), "y7_std": y_stats.std.tolist(),
         "db_mean": db_mean, "db_std": db_std,

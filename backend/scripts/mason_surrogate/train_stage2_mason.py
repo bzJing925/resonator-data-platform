@@ -33,10 +33,11 @@ for p in (PROJECT_ROOT, SCRIPTS_DIR):
         sys.path.insert(0, str(p))
 
 from app.ml.sparse.reconstructor import SparseReconstructor  # noqa: E402
+from mason_surrogate.build_unified_dataset import file_sha256  # noqa: E402
 from mason_surrogate.common import (  # noqa: E402
     NormStats,
     UnifiedMLP,
-    aligned_rmse_db,
+    anchor_sensitivity_rmse_db,
     apply_norm,
     batch_sparse_positions,
     build_cond,
@@ -58,7 +59,7 @@ DEFAULT_CFG = {
     "lr": 1e-3,
     "weight_decay": 1e-4,
     "patience": 20,
-    "k": 256,
+    # k（稀疏点数）不在这里配：一律从 Stage 1 ckpt 读（复审重要项 1）
     "d_model": 64,
     "n_layers": 4,
     "n_heads": 4,
@@ -75,17 +76,18 @@ DEFAULT_CFG = {
     "train_target_stride": 2,  # 训练/val loss 用隔点目标子网格（501 点）提速；eval 仍全网格
 }
 
-ALIGNED_SHIFT_MAX = 0.01  # 对齐 RMSE 允许的最大平移量（w 单位）
+ANCHOR_PERTURB_MAX = 0.01  # 锚点敏感度注入幅度上限（Stage1 fs 相对误差 clip，w 相对单位）
 
 
 # ---------------------------------------------------------------- 数据准备
 
 
 @torch.no_grad()
-def _stage1_predict(cfg: dict, data: dict[str, NDArray]) -> tuple[NDArray, NDArray]:
+def _stage1_predict(cfg: dict, data: dict[str, NDArray]) -> tuple[NDArray, NDArray, int]:
     """加载 Stage 1 checkpoint，预测全数据集 7 参数（去归一化）+ 稀疏值（归一化 dB）。
 
     稀疏头的 K 个输出对应"由 fp_ratio_pred 确定性算出的位置"（推理口径）。
+    返回 (params_pred, sparse_pred_norm, k)：k 以 ckpt 为准（复审重要项 1）。
     """
     s1_cfg = json.loads(Path(cfg["stage1_config"]).read_text(encoding="utf-8"))
     ckpt = torch.load(cfg["stage1_ckpt"], map_location="cpu", weights_only=True)
@@ -102,7 +104,7 @@ def _stage1_predict(cfg: dict, data: dict[str, NDArray]) -> tuple[NDArray, NDArr
         params.append(out["params"].numpy())
         sparse.append(out["sparse"].numpy())
     params_pred = np.concatenate(params, axis=0) * y_stats.std + y_stats.mean
-    return params_pred, np.concatenate(sparse, axis=0)  # sparse: (M,K) 归一化 dB
+    return params_pred, np.concatenate(sparse, axis=0), int(ckpt["k"])
 
 
 def _prepare(cfg: dict) -> dict:
@@ -117,18 +119,25 @@ def _prepare(cfg: dict) -> dict:
     s1_cfg = json.loads(Path(cfg["stage1_config"]).read_text(encoding="utf-8"))
     db_mean, db_std = float(s1_cfg["db_mean"]), float(s1_cfg["db_std"])
 
-    params_pred, sparse_pred_norm = _stage1_predict(cfg, data)
+    params_pred, sparse_pred_norm, k = _stage1_predict(cfg, data)
     fp_ratio_pred = predict_fp_ratio(params_pred)
 
     # cond = [fs, fp, Qs, Qp, kt2=k2eff_pct]（Stage 1 预测值，生产口径），train 统计归一化
     cond_raw = build_cond(params_pred)
     cond_stats = fit_norm(cond_raw[tr_np])
 
-    # 稀疏点：位置来自预测 fp_ratio（训练/推理一致）
-    pos = batch_sparse_positions(grid, fp_ratio_pred, k=cfg["k"])
+    # 稀疏点：位置来自预测 fp_ratio（训练/推理一致）；k 以 Stage 1 ckpt 为准
+    pos = batch_sparse_positions(grid, fp_ratio_pred, k=k)
     samples_raw, valid = build_sparse_samples(data["z_w_db"], data["w_mask"], pos, grid)
     samples = samples_raw.copy()
     samples[..., 1] = (samples[..., 1] - db_mean) / db_std  # dB 归一化（沿用 Stage 1 统计）
+
+    n_valid_sparse_min = int(valid.sum(1).min())
+    # 全掩码样本会让 attention 全 pad → NaN 静默污染；构建器已丢弃零覆盖，此处兜底断言
+    assert n_valid_sparse_min >= 1, (
+        f"存在 n_valid_sparse=0 的样本（min={n_valid_sparse_min}）："
+        "稀疏点全无效会污染 attention，检查数据集构建"
+    )
 
     # 端到端（e2e）评估输入：稀疏值用 Stage 1 稀疏头预测（同位置），重建基线另算
     samples_e2e = samples_raw.copy()
@@ -161,7 +170,8 @@ def _prepare(cfg: dict) -> dict:
         "params_pred": params_pred,
         "cond_stats": cond_stats,
         "db_mean": db_mean, "db_std": db_std,
-        "n_valid_sparse_min": int(valid.sum(1).min()),
+        "k": k,
+        "n_valid_sparse_min": n_valid_sparse_min,
     }
     print(f"stage2 prepare: {time.time() - t0:.1f}s", flush=True)
     return arrays
@@ -293,7 +303,7 @@ def evaluate(cfg: dict, a: dict, model: SparseReconstructor) -> dict:
     """test 集按结构分开评估（均 dB，掩码内）。
 
     两套输入：
-    - e2e（论文口径）：cond/稀疏值/位置全部来自 Stage 1 预测 → full/aligned/Zp。
+    - e2e（论文口径）：cond/稀疏值/位置全部来自 Stage 1 预测 → full / 锚点敏感度 / Zp。
     - GT 稀疏值（teacher-forcing 诊断）：只报 full RMSE，隔离 Stage 2 自身误差。
     """
     dev = torch.device(cfg["device"])
@@ -324,7 +334,8 @@ def evaluate(cfg: dict, a: dict, model: SparseReconstructor) -> dict:
     struct = data["x7"][te_np, 0].astype(np.int64)
     fs_pred = a["params_pred"][te_np, 0]
     f_a = data["f_a"][te_np]
-    shifts = np.clip(fs_pred / f_a - 1.0, -ALIGNED_SHIFT_MAX, ALIGNED_SHIFT_MAX)
+    # 锚点注入幅度 = Stage 1 fs 相对误差（clip 到 ±ANCHOR_PERTURB_MAX）
+    s_inj = np.clip(fs_pred / f_a - 1.0, -ANCHOR_PERTURB_MAX, ANCHOR_PERTURB_MAX)
     fp_ratio_gt = data["fp_ratio"][te_np]
 
     out = {}
@@ -333,15 +344,17 @@ def evaluate(cfg: dict, a: dict, model: SparseReconstructor) -> dict:
         m = mask[sel]
         d2_gt = (gt_input_db[sel] - gt_db[sel]) ** 2
         d2_e2e = (e2e_db[sel] - gt_db[sel]) ** 2
-        aligned = aligned_rmse_db(e2e_db[sel], gt_db[sel], m, grid, shifts[sel])
+        sens_p, sens_m = anchor_sensitivity_rmse_db(
+            e2e_db[sel], gt_db[sel], m, grid, s_inj[sel]
+        )
         zp, zp_n = zp_peak_mae_db(e2e_db[sel], gt_db[sel], m, grid, fp_ratio_gt[sel])
         out[name] = {
             "full_rmse_db": float(np.sqrt(d2_e2e[m].mean())) if m.any() else float("nan"),
-            "aligned_rmse_db": aligned,
+            "anchor_sensitivity_rmse_db": {"plus": sens_p, "minus": sens_m},
             "zp_peak_mae_db": zp,
             "zp_n_used": zp_n,
             "gt_sparse_full_rmse_db": float(np.sqrt(d2_gt[m].mean())) if m.any() else float("nan"),
-            "mean_abs_shift": float(np.abs(shifts[sel]).mean()),
+            "mean_abs_shift": float(np.abs(s_inj[sel]).mean()),
             "n_test": int(sel.sum()),
         }
     return out
@@ -349,12 +362,14 @@ def evaluate(cfg: dict, a: dict, model: SparseReconstructor) -> dict:
 
 def print_eval_stage2(ev: dict) -> None:
     print("\n== Stage 2 test 评估（按结构；e2e=Stage1 预测稀疏输入，gt=GT 稀疏诊断）==")
-    print("{:<7}{:>12}{:>14}{:>12}{:>12}{:>12}{:>8}".format(
-        "struct", "e2e_full", "e2e_aligned", "e2e_Zp_MAE", "gt_full", "mean_shift", "n_test"))
+    print("{:<7}{:>11}{:>10}{:>10}{:>12}{:>10}{:>11}{:>8}".format(
+        "struct", "e2e_full", "anchor+", "anchor-", "e2e_Zp_MAE", "gt_full",
+        "mean_pert", "n_test"))
     for name, m in ev.items():
-        print(f"{name:<7}{m['full_rmse_db']:>12.3f}{m['aligned_rmse_db']:>14.3f}"
-              f"{m['zp_peak_mae_db']:>12.3f}{m['gt_sparse_full_rmse_db']:>12.3f}"
-              f"{m['mean_abs_shift']:>12.5f}{m['n_test']:>8d}")
+        sens = m["anchor_sensitivity_rmse_db"]
+        print(f"{name:<7}{m['full_rmse_db']:>11.3f}{sens['plus']:>10.3f}{sens['minus']:>10.3f}"
+              f"{m['zp_peak_mae_db']:>12.3f}{m['gt_sparse_full_rmse_db']:>10.3f}"
+              f"{m['mean_abs_shift']:>11.5f}{m['n_test']:>8d}")
 
 
 # ---------------------------------------------------------------- 主流程
@@ -387,6 +402,7 @@ def train(cfg: dict) -> dict:
         epochs = min(epochs, cfg["cap_epochs_on_budget"])
         print(f"ETA 超预算 {cfg['time_budget_h']}h → 降为 {epochs} epochs "
               f"(ETA {ep_sec * epochs / 3600.0:.2f}h)", flush=True)
+    epochs_effective = epochs  # 截断后的实际上限（复审次要项 3：config 与执行一致）
 
     r = _train_reconstructor(cfg, a, max_freq, epochs, cfg["patience"], tag=f"mf={max_freq}")
     model = r["model"]
@@ -398,16 +414,20 @@ def train(cfg: dict) -> dict:
         {"model_state": model.state_dict(), "d_model": cfg["d_model"],
          "n_layers": cfg["n_layers"], "n_heads": cfg["n_heads"],
          "dim_feedforward": cfg["dim_feedforward"], "dropout": cfg["dropout"],
-         "max_freq": max_freq, "k": cfg["k"], "best_epoch": r["best_epoch"]},
+         "max_freq": max_freq, "k": a["k"], "best_epoch": r["best_epoch"]},
         out_dir / "stage2.pt",
     )
     config = {
         **{k_: cfg[k_] for k_ in ("epochs", "batch_size", "lr", "weight_decay", "patience",
-                                  "k", "d_model", "n_layers", "n_heads", "dim_feedforward",
-                                  "dropout", "seed", "num_threads", "train_target_stride")},
+                                  "d_model", "n_layers", "n_heads", "dim_feedforward",
+                                  "dropout", "seed", "num_threads", "train_target_stride",
+                                  "compare_epochs")},
+        "epochs_effective": epochs_effective,
         "epochs_run": len(r["history"]),
         "best_epoch": r["best_epoch"],
         "best_val": r["best_val"],
+        "k": a["k"],
+        "k_source": "stage1 ckpt（复审重要项 1）",
         "max_freq": max_freq,
         "max_freq_note": "w∈[0.8,1.2] 轴；由 compare_max_freq 按 val loss 选出"
         "（生产 GHz 轴用 0.1，w 轴尺度不同需实测）",
@@ -418,7 +438,10 @@ def train(cfg: dict) -> dict:
         "cond_source": "stage1 预测值",
         "db_mean": a["db_mean"], "db_std": a["db_std"],
         "sparse_positions_source": "stage1 预测 fp_ratio 的确定性采样（推理一致）",
-        "aligned_shift_max": ALIGNED_SHIFT_MAX,
+        # checkpoint↔数据集版本绑定（复审重要项 2）
+        "dataset": str(cfg["data"]),
+        "dataset_sha256": file_sha256(Path(cfg["data"])),
+        "anchor_perturb_max": ANCHOR_PERTURB_MAX,
         "train_seconds": train_seconds,
     }
     (out_dir / "stage2_config.json").write_text(
@@ -459,7 +482,7 @@ def main() -> None:
     ap.add_argument("--out", dest="out_dir", default=DEFAULT_CFG["out_dir"])
     ap.add_argument("--stage1-ckpt", default=DEFAULT_CFG["stage1_ckpt"])
     ap.add_argument("--stage1-config", default=DEFAULT_CFG["stage1_config"])
-    for key in ("epochs", "batch_size", "patience", "k", "d_model", "n_layers", "n_heads",
+    for key in ("epochs", "batch_size", "patience", "d_model", "n_layers", "n_heads",
                 "dim_feedforward", "compare_epochs", "seed", "cap_epochs_on_budget"):
         ap.add_argument(f"--{key.replace('_', '-')}", type=int, default=DEFAULT_CFG[key])
     for key in ("lr", "weight_decay", "dropout", "time_budget_h"):

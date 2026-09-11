@@ -47,6 +47,10 @@ backend/checkpoints_surrogate/
 backend/checkpoints_mason/
 backend/surrogate_data_mason/unified_dataset.npz
 backend/surrogate_data_mason/unified_dataset.meta.json
+# Mason 语料本体（57+99MB）与分片：可由 mason_sim 再生，不入库（复审次要项 8）
+backend/surrogate_data_mason/*_corpus.npz
+backend/surrogate_data_mason/*_corpus.meta.json
+backend/surrogate_data_mason/*_shards/
 backend/ckpt_s1_run*/
 backend/ckpt_s1_hybrid/
 backend/ckpt_ablation/
