@@ -23,20 +23,22 @@ TE2 对 (10,20] GHz 窗 + k2eff512 + calc_q_phase + calc_bodeq），与 WP2a EPE
     1. 反极性（+1/−1）3–22 GHz @2 MHz（9501 点）→ TE2 生产口径标签
        （labels 无效则不跑后两次扫频）；
     2. 同极性（+1/+1）同网格对照 → f1_twin（该声学堆叠基模），支路核验：
-       要求 |fs2 − 2×f1_twin| / f1_twin < 15%（偶模支路锚定，见下文"支路核验"），
-       通过后才跑第 3 次；
+       要求 BRANCH_RATIO_LO <= fs2/f1_twin <= BRANCH_RATIO_HI（f2 偶模支路
+       比值窗口锚定，见下文"支路核验"），通过后才跑第 3 次；
     3. 密集输出扫频 8–22 GHz @5 MHz（2801 点，精确求解——非 2 MHz 网格子集：
        5 MHz 不是 2 MHz 的整数倍，"子集"在算术上不成立，故单独精确求解，
        无插值误差；见 meta.json dense_grid 注记）。
 
 支路核验（关键设计）：探测发现窗 (10,20] GHz 内可能有多支模态对（如同几何
 t_alscn 300→400nm 最强对从 ~13 跳到 ~18 GHz），find_te2_resonances 按 prominence
-选最强对会跳支路。同极性对照扫频的基模 f1_twin 提供偶模锚点（TE2 ≈ 2×TE1 物理），
-不满足 15% 容差的样本丢弃并计数 branch_ambiguous。注意：Mo 电极质量加载使
-f2/f1 实测为 2.05–2.6（厚电极偏离谐波比 2），本守卫只在近谐波几何（薄电极、
-厚压电占比高）放行——语料因此聚焦"TE2≈2×TE1 成立"的物理区间，f1_twin 存入
-diag 供论文直接使用这层物理。有效样本中 TE2_fs 越 (10,20] GHz、标签 nan、
-求解异常分别计数 te2_out_of_window / label_nan / solver_error / no_resonance。
+选最强对会跳支路。同极性对照扫频的基模 f1_twin 提供偶模锚点：要求窗内最强对的
+fs2/f1_twin 落在 [1.9, 2.8]（f2 支路比值窗口）。物理依据（2026-09-11 全盒探测）：
+该叠层族实测 f2/f1=2.05–2.6——Mo 电极质量对基模 f1 的频率拉低显著强于 f2
+（厚电极偏离裸压电谐波比 2；WP1 黄金案例 AlN/AlN 对称反极性为 2.41）；f3 支路
+≥3.2×f1 被拦在窗外。不满足者丢弃并计数 branch_ambiguous；f2 整体跌出 (10,20]
+窗的样本由窗覆盖机制丢弃（no_resonance/te2_out_of_window）。f1_twin 存入 diag，
+供论文直接使用"TE2≈2×TE1"这层物理。标签 nan、求解异常分别计数 label_nan /
+solver_error。
 
 存盘（--out，默认 backend/surrogate_data_mason/eppe_corpus.npz）：
     x_geom   (M,6) float64 = [t_aln_nm, t_alscn_nm, t_top_nm, t_bot_nm, t_pf_nm, area_um2]
@@ -143,9 +145,12 @@ assert len(DENSE_FREQ_HZ) == 2801
 TE2_WINDOW_HZ = (10.0e9, 20.0e9)  # (10, 20] GHz
 TE1_DIAG_WINDOW_HZ = (3.0e9, 8.0e9)  # [3, 8) GHz
 
-# 支路核验：|fs2 − harmonic×f1_twin| / f1_twin < rtol（偶模支路锚定）
-BRANCH_RTOL = 0.15
-BRANCH_HARMONIC = 2.0
+# 支路核验：f2 偶模支路比值窗口 BRANCH_RATIO_LO <= fs2/f1_twin <= BRANCH_RATIO_HI。
+# 物理依据（2026-09-11 全盒探测）：该叠层族实测 f2/f1=2.05–2.6（Mo 电极质量对 f1
+# 的频率拉低强于 f2；WP1 黄金案例 AlN/AlN 对称反极性为 2.41）；f3 支路 ≥3.2×f1，
+# 窗口上界 2.8 拦跳支、下界 1.9 拦 TE1 残余/伪对。
+BRANCH_RATIO_LO = 1.9
+BRANCH_RATIO_HI = 2.8
 
 LABEL_PROVENANCE = "production extract.py k2eff512+q_phase+calc_bodeq anchored at TE2 (10,20] GHz"
 GEOM_COLS = ["t_aln_nm", "t_alscn_nm", "t_top_nm", "t_bot_nm", "t_pf_nm", "area_um2"]
@@ -233,17 +238,20 @@ def sample_geometry(n: int, seed: int = SEED_DEFAULT) -> np.ndarray:
 def branch_anchor_ok(
     fs2_hz: float,
     f1_twin_hz: float,
-    rtol: float = BRANCH_RTOL,
-    harmonic: float = BRANCH_HARMONIC,
+    ratio_lo: float = BRANCH_RATIO_LO,
+    ratio_hi: float = BRANCH_RATIO_HI,
 ) -> bool:
-    """偶模支路锚定：|fs2 − harmonic×f1_twin| / f1_twin < rtol。
+    """f2 偶模支路比值窗口锚定：ratio_lo <= fs2/f1_twin <= ratio_hi（含端点）。
 
-    f1_twin 为同几何同极性对照扫频的基模（TE1）。nan 或非正 f1_twin 一律拒绝
+    f1_twin 为同几何同极性对照扫频的基模（TE1）。该叠层族实测 f2/f1=2.05–2.6
+    （Mo 电极质量对 f1 的拉低强于 f2），f3 支路 ≥3.2×f1；窗口 [1.9, 2.8]
+    接受全部偶模 f2 支路并拦截跳支。nan 或非正 f1_twin 一律拒绝
     （无法锚定即不可信，丢弃为 branch_ambiguous）。
     """
     if not (np.isfinite(fs2_hz) and np.isfinite(f1_twin_hz)) or f1_twin_hz <= 0.0:
         return False
-    return abs(fs2_hz - harmonic * f1_twin_hz) / f1_twin_hz < rtol
+    ratio = fs2_hz / f1_twin_hz
+    return ratio_lo <= ratio <= ratio_hi
 
 
 # ============================================================
@@ -449,7 +457,7 @@ def run_calibration(piezo_bot: PiezoMaterial, piezo_top: PiezoMaterial, alpha: f
             break
     t_max = 0.5 * (lo_nm + hi_nm)
     print(f"  → T_ALSCN_MAX_NM = {t_max:.2f} nm（当前烘焙值 {T_ALSCN_MAX_NM}）")
-    print("角点核查（锚定 fs2 / f1_twin / 支路核验 err；越窗或核验失败的样本会被丢弃）：")
+    print("角点核查（锚定 fs2 / f1_twin / 支路核验比值；越窗或核验失败的样本会被丢弃）：")
     for t_aln in (T_ALN_LEVELS_NM[0], T_ALN_LEVELS_NM[-1]):
         for t_scn in (T_ALSCN_MIN_NM + 1.0, t_max):
             for mo in (50.0, 300.0):
@@ -472,14 +480,15 @@ def run_calibration(piezo_bot: PiezoMaterial, piezo_top: PiezoMaterial, alpha: f
                 ).z11
                 f1_hz, _ = find_te1_resonances(SOLVE_FREQ_HZ, np.abs(z_twin))
                 fs2_g = _anchored_te2_fs_ghz(z_anti, f1_hz)
-                err = (
-                    abs(fs2_g * 1e9 - 2.0 * f1_hz) / f1_hz
+                ratio = (
+                    fs2_g * 1e9 / f1_hz
                     if np.isfinite(fs2_g) and np.isfinite(f1_hz)
                     else float("nan")
                 )
                 print(
                     f"  t_aln={t_aln:5.0f} t_alscn={t_scn:7.2f} mo={mo:5.0f} → "
-                    f"fs2_anch={fs2_g:7.3f} GHz f1_twin={f1_hz / 1e9:6.3f} GHz err={err:.3f}"
+                    f"fs2_anch={fs2_g:7.3f} GHz f1_twin={f1_hz / 1e9:6.3f} GHz "
+                    f"ratio={ratio:.3f}"
                 )
 
 
@@ -505,7 +514,7 @@ def _config_tag(n: int, seed: int, shard_size: int, material_info: dict, alpha: 
         "dense_grid": {"f_start_ghz": 8.0, "f_stop_ghz": 22.0, "f_step_mhz": 5.0},
         "te2_window_ghz": [TE2_WINDOW_HZ[0] / 1e9, TE2_WINDOW_HZ[1] / 1e9],
         "te1_diag_window_ghz": [TE1_DIAG_WINDOW_HZ[0] / 1e9, TE1_DIAG_WINDOW_HZ[1] / 1e9],
-        "branch_guard": {"rtol": BRANCH_RTOL, "harmonic": BRANCH_HARMONIC},
+        "branch_guard": {"ratio_lo": BRANCH_RATIO_LO, "ratio_hi": BRANCH_RATIO_HI},
         "alpha": alpha,
         "zref_ohm": ZREF,
         "piezo_bot": ALN1.name,
@@ -602,12 +611,12 @@ def run_pipeline(
         "te2_window_ghz": [TE2_WINDOW_HZ[0] / 1e9, TE2_WINDOW_HZ[1] / 1e9],
         "te1_diag_window_ghz": [TE1_DIAG_WINDOW_HZ[0] / 1e9, TE1_DIAG_WINDOW_HZ[1] / 1e9],
         "branch_guard": {
-            "rtol": BRANCH_RTOL,
-            "harmonic": BRANCH_HARMONIC,
-            "definition": "|fs2 - harmonic*f1_twin|/f1_twin < rtol，"
+            "ratio_lo": BRANCH_RATIO_LO,
+            "ratio_hi": BRANCH_RATIO_HI,
+            "definition": "ratio_lo <= fs2/f1_twin <= ratio_hi（含端点），"
             "f1_twin=同几何同极性(+1,+1)对照扫频的 TE1 基模",
-            "note": "Mo 质量加载使 f2/f1=2.05–2.6（厚电极偏离谐波比 2），"
-            "本守卫只在近谐波几何放行——语料聚焦 TE2≈2×TE1 成立的物理区间",
+            "note": "f2 偶模支路比值窗口：该叠层族实测 f2/f1=2.05–2.6（Mo 电极质量"
+            "对 f1 的拉低强于 f2；AlN/AlN 对称黄金案例 2.41）；f3 支路 ≥3.2×f1 被拦",
         },
         "alpha": alpha,
         "zref_ohm": ZREF,

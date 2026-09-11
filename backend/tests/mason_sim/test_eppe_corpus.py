@@ -31,10 +31,10 @@ from app.mason_sim.prodlabels import PARAM_KEYS  # noqa: E402
 TEST_SEED = corpus.SEED_DEFAULT
 
 # 支路核验通过几何（校准 AlScN，2026-09-11 探测）：
-# f1_twin=6.432 GHz，窗内最强对 fs2=13.198 GHz，|fs2−2f1|/f1=0.052 < 0.15
+# f1_twin=6.432 GHz，窗内最强对 fs2=13.198 GHz，f2/f1=2.052 ∈ [1.9, 2.8]
 ROW_PASS = (100.0, 400.0, 50.0, 50.0, 0.0, 2000.0)
 # 人为跳支几何（brief 探测案例口径）：t_alscn=400 厚电极，
-# 窗内最强对 16.098 GHz ≠ 2×f1_twin(4.108 GHz)（err=1.92）→ branch_ambiguous
+# 窗内最强对 16.098 GHz 为 f4 支路（f4/f1_twin=3.92 > 2.8）→ branch_ambiguous
 ROW_BRANCH_JUMP = (100.0, 400.0, 150.0, 150.0, 0.0, 2000.0)
 
 
@@ -118,23 +118,55 @@ def test_solve_and_dense_grids() -> None:
 # 支路核验
 # ============================================================
 def test_branch_anchor_ok_unit() -> None:
-    """支路核验谓词：2f1 锚定 15% 容差；nan/非正 f1 一律拒绝。"""
+    """支路核验谓词：f2/f1 比值窗口 [1.9, 2.8]（含端点）；nan/非正 f1 一律拒绝。"""
     ok = corpus.branch_anchor_ok
-    assert ok(13.198e9, 6.432e9)  # err=0.052
-    assert not ok(16.098e9, 4.108e9)  # err=1.92（跳支案例）
+    # 窗口内：实测通过几何（比值 2.052）与 WP1 黄金对称案例（比值 2.41）
+    assert ok(13.198e9, 6.432e9)  # ratio=2.052
+    assert ok(11.15e9, 4.632e9)  # ratio=2.408（AlN/AlN 250/250/Mo150 黄金案例）
+    # 边界含端点
+    assert ok(1.9e9, 1.0e9)  # ratio=1.9 → 通过
+    assert ok(2.8e9, 1.0e9)  # ratio=2.8 → 通过
+    # 边界外（含 f3 支路量级 3.2+ 与跳支案例 3.92）
+    assert not ok(1.899e9, 1.0e9)
+    assert not ok(2.801e9, 1.0e9)
+    assert not ok(3.2e9, 1.0e9)  # f3 支路下界
+    assert not ok(16.098e9, 4.108e9)  # ratio=3.92（跳支案例）
+    # nan / 非正 f1 拒绝
     assert not ok(13.0e9, float("nan"))
     assert not ok(float("nan"), 6.5e9)
     assert not ok(13.0e9, 0.0)
 
 
+def test_branch_guard_accepts_golden_symmetric_case() -> None:
+    """WP1 黄金案例（AlN/AlN 250/250/Mo150 对称反极性，比值 2.41）必须放行。
+
+    该几何在旧 15%-of-2f1 守卫下被误杀（err=0.41）；比值窗口（控制者拍板）
+    接受全部偶模 f2 支路。同材料双层不经校准材料，直接传 ALN1/ALN1。
+    """
+    r = corpus.solve_extract_one(
+        (250.0, 250.0, 150.0, 150.0, 0.0, 2000.0),
+        piezo_bot=ALN1,
+        piezo_top=ALN1,
+        alpha=0.022,
+    )
+    assert r["valid"], r["reason"]
+    fs2_ghz, f1_twin_ghz = r["y"][0], r["diag"][3]
+    ratio = fs2_ghz / f1_twin_ghz
+    assert ratio == pytest.approx(2.41, abs=0.05)
+    assert corpus.BRANCH_RATIO_LO <= ratio <= corpus.BRANCH_RATIO_HI
+    # 对称反极性：TE1 诊断抑制为 nan
+    assert np.isnan(r["diag"][0])
+
+
 def test_branch_guard_pass_geometry(cal_materials) -> None:
-    """近谐波薄电极几何：支路核验通过，valid=True，f1_twin 入诊断列。"""
+    """近谐波薄电极几何（比值 2.05）：支路核验通过，valid=True，f1_twin 入诊断列。"""
     r = _solve_row(ROW_PASS, cal_materials)
     assert r["valid"], r["reason"]
     fs2_ghz, f1_twin_ghz = r["y"][0], r["diag"][3]
     assert fs2_ghz == pytest.approx(13.198, abs=0.05)
     assert f1_twin_ghz == pytest.approx(6.432, abs=0.05)
-    assert abs(fs2_ghz - 2 * f1_twin_ghz) / f1_twin_ghz < corpus.BRANCH_RTOL
+    ratio = fs2_ghz / f1_twin_ghz
+    assert corpus.BRANCH_RATIO_LO <= ratio <= corpus.BRANCH_RATIO_HI
     assert 10.0 < fs2_ghz <= 20.0
     # TE1 诊断：残余 ~6.6 GHz 在 [3,8) 窗内 → 有限值
     assert np.isfinite(r["diag"][0]) and np.isfinite(r["diag"][2])
@@ -143,7 +175,7 @@ def test_branch_guard_pass_geometry(cal_materials) -> None:
 
 
 def test_branch_guard_blocks_branch_jump_case(cal_materials) -> None:
-    """跳支案例（厚电极 t_alscn=400）：窗内最强对 ≠ 2f1 支路 → branch_ambiguous。"""
+    """跳支案例（厚电极 t_alscn=400）：窗内最强对为 f4 支路（比值 3.92）→ branch_ambiguous。"""
     r = _solve_row(ROW_BRANCH_JUMP, cal_materials)
     assert not r["valid"]
     assert r["reason"] == "branch_ambiguous"
@@ -246,8 +278,9 @@ def test_end_to_end_12_samples(tmp_path: Path) -> None:
         assert ((y[:, 0] > 10.0) & (y[:, 0] <= 20.0)).all()
         assert (y[:, 1] > y[:, 0]).all()
         assert ((y[:, 2] > 0.0) & (y[:, 2] < 20.0)).all()  # AlScN kt2≈19% 物理天花板
-        # 支路核验在产物上成立：|fs2 − 2×f1_twin|/f1_twin < 15%
-        assert (np.abs(y[:, 0] - 2 * diag[:, 3]) / diag[:, 3] < corpus.BRANCH_RTOL).all()
+        # 支路核验在产物上成立：f2/f1_twin ∈ [1.9, 2.8]
+        ratio = y[:, 0] / diag[:, 3]
+        assert ((ratio >= corpus.BRANCH_RATIO_LO) & (ratio <= corpus.BRANCH_RATIO_HI)).all()
 
     meta = json.loads((tmp_path / "corpus.meta.json").read_text())
     assert meta["seed"] == TEST_SEED
@@ -269,8 +302,8 @@ def test_end_to_end_12_samples(tmp_path: Path) -> None:
     assert meta["materials"]["piezo_top"]["name"] == "AlScN_cal"
     assert meta["materials"]["piezo_top"]["source_sha256"]
     assert meta["alpha"] == pytest.approx(0.022, abs=1e-9)
-    assert meta["branch_guard"]["rtol"] == corpus.BRANCH_RTOL
-    assert meta["branch_guard"]["harmonic"] == 2.0
+    assert meta["branch_guard"]["ratio_lo"] == corpus.BRANCH_RATIO_LO
+    assert meta["branch_guard"]["ratio_hi"] == corpus.BRANCH_RATIO_HI
     assert meta["te2_window_ghz"] == [10.0, 20.0]
     assert meta["geom_cols"] == [
         "t_aln_nm",
