@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-11T12:07:26.565268+00:00",
+  "generated_at": "2026-09-11T12:29:17.097104+00:00",
   "task": "WP4b data-efficiency: EPPE subset size × {scratch, EPE-pretrain→finetune}",
   "seed_base": 20260913,
   "source_data": "surrogate_data_mason/unified_dataset.npz",
@@ -19,7 +19,8 @@
     "epochs_stage2": 40,
     "patience_stage2": 20,
     "lr_stage2": 0.001,
-    "max_freq": 1.0
+    "max_freq": 1.0,
+    "finetune_protocols": "lowlr,full-lr"
   },
   "protocol": {
     "WP4b 数据效率曲线（IUS 2026 修订）": "WP4b 数据效率曲线（IUS 2026 修订）",
@@ -27,14 +28,19 @@
     "测试集": "测试集: 恒为 EPPE test split (n=357), 与训练子集无重叠",
     "子集抽样": "子集抽样: EPPE train split 内按 t_aln 类分层 (比例+最大余数, 每类≥1), 种子确定性",
     "种子": "种子: n≤100 → {20260913,+1,+2}; n≥300 → {20260913}",
-    "mode=scratch": "mode=scratch: EPPE 子集从零训练, 归一化统计由子集 train 拟合",
-    "mode=finetune": "mode=finetune: 全部 EPE train 预训练 → EPPE 子集微调, lr=1/10, epoch 预算相同;",
-    "  只迁移权重, 归一化统计与 scratch 同样在 EPPE 子集 train 拟合,": "  只迁移权重, 归一化统计与 scratch 同样在 EPPE 子集 train 拟合,",
-    "  两模式唯一差异 = 权重初始化 (随机 vs EPE 预训练)": "  两模式唯一差异 = 权重初始化 (随机 vs EPE 预训练)",
+    "mode=scratch": "mode=scratch: EPPE 子集从零训练, 归一化统计由子集 train 拟合 (protocol 列=n/a)",
+    "mode=finetune": "mode=finetune: 全部 EPE train 预训练 → EPPE 子集微调; 只迁移权重,",
+    "  归一化统计与 scratch 同样在 EPPE 子集 train 拟合;": "  归一化统计与 scratch 同样在 EPPE 子集 train 拟合;",
+    "  protocol=lowlr": "  protocol=lowlr: lr=1/10 (原协议, epoch 预算相同);",
+    "  protocol=full-lr": "  protocol=full-lr: lr/epoch/早停与 scratch 完全相同, 唯一差异=权重初始化",
+    "方法学说明": "方法学说明: lowlr 在 n≥300 出现反转 (微调反输 scratch) 是低 lr 下 epoch 预算内",
+    "  欠训练所致 (lr 1e-4 × ≤300 epoch 的有效步数不足以走完剩余适应空间);": "  欠训练所致 (lr 1e-4 × ≤300 epoch 的有效步数不足以走完剩余适应空间);",
+    "  full-lr 为干净对照协议, 主结论以 full-lr 为准, lowlr 保留作透明对照": "  full-lr 为干净对照协议, 主结论以 full-lr 为准, lowlr 保留作透明对照",
     "mode=zeroshot": "mode=zeroshot: 仅 EPE 预训练, 直接在 EPPE test 评估 (n_eppe_train=0)",
     "Stage1": "Stage1: 统一 MLP (x7→7参数+256稀疏), epochs≤300, patience=30, lr=1e-3, AdamW",
     "Stage2 (锚点组)": "Stage2 (锚点组): SparseReconstructor, epochs≤40, patience=20, max_freq=1.0",
-    "  (沿用 WP4a compare 结论), finetune lr=1e-4": "  (沿用 WP4a compare 结论), finetune lr=1e-4",
+    "  (沿用 WP4a compare 结论); finetune Stage2 lr 协议同 Stage1 (lowlr=1e-4,": "  (沿用 WP4a compare 结论); finetune Stage2 lr 协议同 Stage1 (lowlr=1e-4,",
+    "  full-lr=1e-3)": "  full-lr=1e-3)",
     "指标": "指标: fs2/fp2 MAE (MHz), k2eff2 MAE (pct-pt), sparse RMSE (dB, GT 位置),",
     "  stage2_full_rmse_db = e2e (Stage1 预测 cond+稀疏) 全网格 RMSE (dB)": "  stage2_full_rmse_db = e2e (Stage1 预测 cond+稀疏) 全网格 RMSE (dB)",
     "生成日期": "生成日期: 2026-09-11"
@@ -43,6 +49,7 @@
     {
       "n_eppe_train": 0,
       "mode": "zeroshot",
+      "protocol": "n/a",
       "seed": 20260913,
       "out_dir": "checkpoints_mason/dataeff/s1_pretrain",
       "fs2_mae_mhz": 5995.498182278097,
@@ -56,6 +63,7 @@
     {
       "n_eppe_train": 10,
       "mode": "scratch",
+      "protocol": "n/a",
       "seed": 20260913,
       "out_dir": "checkpoints_mason/dataeff/s1_scratch_n10_s20260913",
       "fs2_mae_mhz": 1884.3171596626482,
@@ -69,6 +77,7 @@
     {
       "n_eppe_train": 10,
       "mode": "finetune",
+      "protocol": "lowlr",
       "seed": 20260913,
       "out_dir": "checkpoints_mason/dataeff/s1_finetune_n10_s20260913",
       "fs2_mae_mhz": 1190.703667437545,
@@ -81,7 +90,22 @@
     },
     {
       "n_eppe_train": 10,
+      "mode": "finetune",
+      "protocol": "full-lr",
+      "seed": 20260913,
+      "out_dir": "checkpoints_mason/dataeff/s1_finetune_full_lr_n10_s20260913",
+      "fs2_mae_mhz": 1461.633047445611,
+      "fp2_mae_mhz": 1463.1707441617914,
+      "k2eff2_mae_pp": 0.7789820373794879,
+      "sparse_rmse_db": 4.472586154937744,
+      "best_epoch": 31,
+      "train_seconds": 0.6313910484313965,
+      "n_test": 357
+    },
+    {
+      "n_eppe_train": 10,
       "mode": "scratch",
+      "protocol": "n/a",
       "seed": 20260914,
       "out_dir": "checkpoints_mason/dataeff/s1_scratch_n10_s20260914",
       "fs2_mae_mhz": 1493.0466699680276,
@@ -95,6 +119,7 @@
     {
       "n_eppe_train": 10,
       "mode": "finetune",
+      "protocol": "lowlr",
       "seed": 20260914,
       "out_dir": "checkpoints_mason/dataeff/s1_finetune_n10_s20260914",
       "fs2_mae_mhz": 1222.0043461732068,
@@ -107,7 +132,22 @@
     },
     {
       "n_eppe_train": 10,
+      "mode": "finetune",
+      "protocol": "full-lr",
+      "seed": 20260914,
+      "out_dir": "checkpoints_mason/dataeff/s1_finetune_full_lr_n10_s20260914",
+      "fs2_mae_mhz": 1207.4346381300388,
+      "fp2_mae_mhz": 1212.7420119326716,
+      "k2eff2_mae_pp": 1.2969077598722452,
+      "sparse_rmse_db": 6.521646976470947,
+      "best_epoch": 6,
+      "train_seconds": 0.5225777626037598,
+      "n_test": 357
+    },
+    {
+      "n_eppe_train": 10,
       "mode": "scratch",
+      "protocol": "n/a",
       "seed": 20260915,
       "out_dir": "checkpoints_mason/dataeff/s1_scratch_n10_s20260915",
       "fs2_mae_mhz": 1149.2002403105673,
@@ -121,6 +161,7 @@
     {
       "n_eppe_train": 10,
       "mode": "finetune",
+      "protocol": "lowlr",
       "seed": 20260915,
       "out_dir": "checkpoints_mason/dataeff/s1_finetune_n10_s20260915",
       "fs2_mae_mhz": 958.5421624423709,
@@ -132,8 +173,23 @@
       "n_test": 357
     },
     {
+      "n_eppe_train": 10,
+      "mode": "finetune",
+      "protocol": "full-lr",
+      "seed": 20260915,
+      "out_dir": "checkpoints_mason/dataeff/s1_finetune_full_lr_n10_s20260915",
+      "fs2_mae_mhz": 1170.6184372050275,
+      "fp2_mae_mhz": 1175.6832220125384,
+      "k2eff2_mae_pp": 0.8413772059351825,
+      "sparse_rmse_db": 4.787632465362549,
+      "best_epoch": 152,
+      "train_seconds": 1.004033088684082,
+      "n_test": 357
+    },
+    {
       "n_eppe_train": 30,
       "mode": "scratch",
+      "protocol": "n/a",
       "seed": 20260913,
       "out_dir": "checkpoints_mason/dataeff/s1_scratch_n30_s20260913",
       "fs2_mae_mhz": 698.1761289020078,
@@ -147,6 +203,7 @@
     {
       "n_eppe_train": 30,
       "mode": "finetune",
+      "protocol": "lowlr",
       "seed": 20260913,
       "out_dir": "checkpoints_mason/dataeff/s1_finetune_n30_s20260913",
       "fs2_mae_mhz": 495.36412153841053,
@@ -159,7 +216,22 @@
     },
     {
       "n_eppe_train": 30,
+      "mode": "finetune",
+      "protocol": "full-lr",
+      "seed": 20260913,
+      "out_dir": "checkpoints_mason/dataeff/s1_finetune_full_lr_n30_s20260913",
+      "fs2_mae_mhz": 552.3489505255201,
+      "fp2_mae_mhz": 605.0866334679822,
+      "k2eff2_mae_pp": 0.4119669297549564,
+      "sparse_rmse_db": 3.169132709503174,
+      "best_epoch": 49,
+      "train_seconds": 0.7522847652435303,
+      "n_test": 357
+    },
+    {
+      "n_eppe_train": 30,
       "mode": "scratch",
+      "protocol": "n/a",
       "seed": 20260914,
       "out_dir": "checkpoints_mason/dataeff/s1_scratch_n30_s20260914",
       "fs2_mae_mhz": 651.3959936206701,
@@ -173,6 +245,7 @@
     {
       "n_eppe_train": 30,
       "mode": "finetune",
+      "protocol": "lowlr",
       "seed": 20260914,
       "out_dir": "checkpoints_mason/dataeff/s1_finetune_n30_s20260914",
       "fs2_mae_mhz": 299.078858475878,
@@ -185,7 +258,22 @@
     },
     {
       "n_eppe_train": 30,
+      "mode": "finetune",
+      "protocol": "full-lr",
+      "seed": 20260914,
+      "out_dir": "checkpoints_mason/dataeff/s1_finetune_full_lr_n30_s20260914",
+      "fs2_mae_mhz": 415.61393073663464,
+      "fp2_mae_mhz": 399.1205699109536,
+      "k2eff2_mae_pp": 0.5832913899831185,
+      "sparse_rmse_db": 3.368882656097412,
+      "best_epoch": 30,
+      "train_seconds": 0.6670048236846924,
+      "n_test": 357
+    },
+    {
+      "n_eppe_train": 30,
       "mode": "scratch",
+      "protocol": "n/a",
       "seed": 20260915,
       "out_dir": "checkpoints_mason/dataeff/s1_scratch_n30_s20260915",
       "fs2_mae_mhz": 460.16353545748416,
@@ -199,6 +287,7 @@
     {
       "n_eppe_train": 30,
       "mode": "finetune",
+      "protocol": "lowlr",
       "seed": 20260915,
       "out_dir": "checkpoints_mason/dataeff/s1_finetune_n30_s20260915",
       "fs2_mae_mhz": 403.1528345063163,
@@ -210,8 +299,23 @@
       "n_test": 357
     },
     {
+      "n_eppe_train": 30,
+      "mode": "finetune",
+      "protocol": "full-lr",
+      "seed": 20260915,
+      "out_dir": "checkpoints_mason/dataeff/s1_finetune_full_lr_n30_s20260915",
+      "fs2_mae_mhz": 324.7659173865523,
+      "fp2_mae_mhz": 373.2887116417623,
+      "k2eff2_mae_pp": 0.6325508212525249,
+      "sparse_rmse_db": 3.2063121795654297,
+      "best_epoch": 61,
+      "train_seconds": 0.8018631935119629,
+      "n_test": 357
+    },
+    {
       "n_eppe_train": 100,
       "mode": "scratch",
+      "protocol": "n/a",
       "seed": 20260913,
       "out_dir": "checkpoints_mason/dataeff/s1_scratch_n100_s20260913",
       "fs2_mae_mhz": 295.6712270980431,
@@ -225,6 +329,7 @@
     {
       "n_eppe_train": 100,
       "mode": "finetune",
+      "protocol": "lowlr",
       "seed": 20260913,
       "out_dir": "checkpoints_mason/dataeff/s1_finetune_n100_s20260913",
       "fs2_mae_mhz": 228.09473909959985,
@@ -237,7 +342,22 @@
     },
     {
       "n_eppe_train": 100,
+      "mode": "finetune",
+      "protocol": "full-lr",
+      "seed": 20260913,
+      "out_dir": "checkpoints_mason/dataeff/s1_finetune_full_lr_n100_s20260913",
+      "fs2_mae_mhz": 237.11907857104686,
+      "fp2_mae_mhz": 268.9032783976878,
+      "k2eff2_mae_pp": 0.3007018858630403,
+      "sparse_rmse_db": 2.896973133087158,
+      "best_epoch": 53,
+      "train_seconds": 1.057305097579956,
+      "n_test": 357
+    },
+    {
+      "n_eppe_train": 100,
       "mode": "scratch",
+      "protocol": "n/a",
       "seed": 20260914,
       "out_dir": "checkpoints_mason/dataeff/s1_scratch_n100_s20260914",
       "fs2_mae_mhz": 267.2621228796121,
@@ -251,6 +371,7 @@
     {
       "n_eppe_train": 100,
       "mode": "finetune",
+      "protocol": "lowlr",
       "seed": 20260914,
       "out_dir": "checkpoints_mason/dataeff/s1_finetune_n100_s20260914",
       "fs2_mae_mhz": 237.81680084758827,
@@ -263,7 +384,22 @@
     },
     {
       "n_eppe_train": 100,
+      "mode": "finetune",
+      "protocol": "full-lr",
+      "seed": 20260914,
+      "out_dir": "checkpoints_mason/dataeff/s1_finetune_full_lr_n100_s20260914",
+      "fs2_mae_mhz": 190.4977091780051,
+      "fp2_mae_mhz": 210.6118967938578,
+      "k2eff2_mae_pp": 0.3164213695026875,
+      "sparse_rmse_db": 2.575864791870117,
+      "best_epoch": 55,
+      "train_seconds": 1.1003460884094238,
+      "n_test": 357
+    },
+    {
+      "n_eppe_train": 100,
       "mode": "scratch",
+      "protocol": "n/a",
       "seed": 20260915,
       "out_dir": "checkpoints_mason/dataeff/s1_scratch_n100_s20260915",
       "fs2_mae_mhz": 242.84553928491817,
@@ -277,6 +413,7 @@
     {
       "n_eppe_train": 100,
       "mode": "finetune",
+      "protocol": "lowlr",
       "seed": 20260915,
       "out_dir": "checkpoints_mason/dataeff/s1_finetune_n100_s20260915",
       "fs2_mae_mhz": 217.9649562526858,
@@ -288,8 +425,23 @@
       "n_test": 357
     },
     {
+      "n_eppe_train": 100,
+      "mode": "finetune",
+      "protocol": "full-lr",
+      "seed": 20260915,
+      "out_dir": "checkpoints_mason/dataeff/s1_finetune_full_lr_n100_s20260915",
+      "fs2_mae_mhz": 244.35136519435304,
+      "fp2_mae_mhz": 242.04844193392148,
+      "k2eff2_mae_pp": 0.225667396365781,
+      "sparse_rmse_db": 2.0803182125091553,
+      "best_epoch": 103,
+      "train_seconds": 1.5337378978729248,
+      "n_test": 357
+    },
+    {
       "n_eppe_train": 300,
       "mode": "scratch",
+      "protocol": "n/a",
       "seed": 20260913,
       "out_dir": "checkpoints_mason/dataeff/s1_scratch_n300_s20260913",
       "fs2_mae_mhz": 89.90346923117593,
@@ -303,6 +455,7 @@
     {
       "n_eppe_train": 300,
       "mode": "finetune",
+      "protocol": "lowlr",
       "seed": 20260913,
       "out_dir": "checkpoints_mason/dataeff/s1_finetune_n300_s20260913",
       "fs2_mae_mhz": 148.13475749522402,
@@ -314,8 +467,23 @@
       "n_test": 357
     },
     {
+      "n_eppe_train": 300,
+      "mode": "finetune",
+      "protocol": "full-lr",
+      "seed": 20260913,
+      "out_dir": "checkpoints_mason/dataeff/s1_finetune_full_lr_n300_s20260913",
+      "fs2_mae_mhz": 92.20045458030732,
+      "fp2_mae_mhz": 97.34721276506991,
+      "k2eff2_mae_pp": 0.08730286678592895,
+      "sparse_rmse_db": 1.3189114332199097,
+      "best_epoch": 163,
+      "train_seconds": 4.65391206741333,
+      "n_test": 357
+    },
+    {
       "n_eppe_train": 4052,
       "mode": "scratch",
+      "protocol": "n/a",
       "seed": 20260913,
       "out_dir": "checkpoints_mason/dataeff/s1_scratch_n4052_s20260913",
       "fs2_mae_mhz": 21.07972744372813,
@@ -329,6 +497,7 @@
     {
       "n_eppe_train": 4052,
       "mode": "finetune",
+      "protocol": "lowlr",
       "seed": 20260913,
       "out_dir": "checkpoints_mason/dataeff/s1_finetune_n4052_s20260913",
       "fs2_mae_mhz": 33.439539054841795,
@@ -338,12 +507,27 @@
       "best_epoch": 269,
       "train_seconds": 85.26810002326965,
       "n_test": 357
+    },
+    {
+      "n_eppe_train": 4052,
+      "mode": "finetune",
+      "protocol": "full-lr",
+      "seed": 20260913,
+      "out_dir": "checkpoints_mason/dataeff/s1_finetune_full_lr_n4052_s20260913",
+      "fs2_mae_mhz": 16.067494376624133,
+      "fp2_mae_mhz": 19.03535134281633,
+      "k2eff2_mae_pp": 0.017717907419222054,
+      "sparse_rmse_db": 0.5205671787261963,
+      "best_epoch": 195,
+      "train_seconds": 62.45218205451965,
+      "n_test": 357
     }
   ],
   "pipeline_anchor": [
     {
       "n_eppe_train": 0,
       "mode": "zeroshot",
+      "protocol": "n/a",
       "seed": 20260913,
       "out_dir": "checkpoints_mason/dataeff/s2_pretrain",
       "fs2_mae_mhz": 5995.498182278097,
@@ -362,6 +546,7 @@
     {
       "n_eppe_train": 100,
       "mode": "scratch",
+      "protocol": "n/a",
       "seed": 20260913,
       "out_dir": "checkpoints_mason/dataeff/s2_scratch_n100_s20260913",
       "fs2_mae_mhz": 295.6712270980431,
@@ -380,6 +565,7 @@
     {
       "n_eppe_train": 100,
       "mode": "finetune",
+      "protocol": "lowlr",
       "seed": 20260913,
       "out_dir": "checkpoints_mason/dataeff/s2_finetune_n100_s20260913",
       "fs2_mae_mhz": 228.09473909959985,
@@ -393,6 +579,25 @@
       "stage2_gt_sparse_full_rmse_db": 0.039844322541277954,
       "stage2_best_epoch": 13,
       "stage2_train_seconds": 50.60583186149597,
+      "stage2_n_test": 357
+    },
+    {
+      "n_eppe_train": 100,
+      "mode": "finetune",
+      "protocol": "full-lr",
+      "seed": 20260913,
+      "out_dir": "checkpoints_mason/dataeff/s2_finetune_full_lr_n100_s20260913",
+      "fs2_mae_mhz": 237.11907857104686,
+      "fp2_mae_mhz": 268.9032783976878,
+      "k2eff2_mae_pp": 0.3007018858630403,
+      "sparse_rmse_db": 2.896973133087158,
+      "best_epoch": 53,
+      "train_seconds": 1.057305097579956,
+      "n_test": 357,
+      "stage2_full_rmse_db": 2.2181153904013557,
+      "stage2_gt_sparse_full_rmse_db": 0.029234514924634095,
+      "stage2_best_epoch": 25,
+      "stage2_train_seconds": 61.54647517204285,
       "stage2_n_test": 357
     }
   ],

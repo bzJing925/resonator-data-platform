@@ -139,6 +139,19 @@ def test_pretrain_rows_composition():
     assert set(rows[2].tolist()) == set(np.flatnonzero(src_split == 2).tolist())
 
 
+def test_finetune_protocols_default_and_dir_names(tmp_path):
+    protos = rde.finetune_protocols(dict(rde.DEFAULT_CFG))
+    assert protos == [("finetune", "lowlr", 0.1), ("finetune_full_lr", "full-lr", 1.0)]
+    # 目录命名：lowlr 向后兼容既有 s1_finetune_*，full-lr 独立目录
+    assert rde.s1_run_dir(tmp_path, "finetune", 10, 1).name == "s1_finetune_n10_s1"
+    assert rde.s1_run_dir(tmp_path, "finetune_full_lr", 10, 1).name == (
+        "s1_finetune_full_lr_n10_s1")
+    only_full = rde.finetune_protocols({**rde.DEFAULT_CFG, "finetune_protocols": "full-lr"})
+    assert only_full == [("finetune_full_lr", "full-lr", 1.0)]
+    with pytest.raises(ValueError):
+        rde.finetune_protocols({**rde.DEFAULT_CFG, "finetune_protocols": "bogus"})
+
+
 def test_collect_stage1_metrics(tmp_path):
     p = tmp_path / "stage1_eval.json"
     p.write_text(json.dumps({
@@ -169,18 +182,25 @@ def test_collect_stage2_metrics(tmp_path):
 
 def test_write_xlsx_structure(tmp_path):
     curve = [
-        {"n_eppe_train": 10, "mode": "scratch", "seed": 20260913, "fs2_mae_mhz": 9.9,
-         "fp2_mae_mhz": 8.8, "k2eff2_mae_pp": 0.5, "sparse_rmse_db": 2.2,
+        {"n_eppe_train": 10, "mode": "scratch", "protocol": "n/a", "seed": 20260913,
+         "fs2_mae_mhz": 9.9, "fp2_mae_mhz": 8.8, "k2eff2_mae_pp": 0.5, "sparse_rmse_db": 2.2,
          "best_epoch": 10, "train_seconds": 3.0},
-        {"n_eppe_train": 10, "mode": "finetune", "seed": 20260913, "fs2_mae_mhz": 5.5,
-         "fp2_mae_mhz": 5.0, "k2eff2_mae_pp": 0.3, "sparse_rmse_db": 1.5,
+        {"n_eppe_train": 10, "mode": "finetune", "protocol": "lowlr", "seed": 20260913,
+         "fs2_mae_mhz": 5.5, "fp2_mae_mhz": 5.0, "k2eff2_mae_pp": 0.3, "sparse_rmse_db": 1.5,
          "best_epoch": 20, "train_seconds": 4.0},
+        {"n_eppe_train": 10, "mode": "finetune", "protocol": "full-lr", "seed": 20260913,
+         "fs2_mae_mhz": 4.4, "fp2_mae_mhz": 4.2, "k2eff2_mae_pp": 0.2, "sparse_rmse_db": 1.2,
+         "best_epoch": 30, "train_seconds": 5.0},
     ]
     anchor = [
-        {"n_eppe_train": 100, "mode": "scratch", "seed": 20260913,
+        {"n_eppe_train": 100, "mode": "scratch", "protocol": "n/a", "seed": 20260913,
          "fs2_mae_mhz": 4.0, "fp2_mae_mhz": 4.1, "k2eff2_mae_pp": 0.2,
          "sparse_rmse_db": 1.1, "stage2_full_rmse_db": 1.3,
          "stage2_best_epoch": 12, "stage2_train_seconds": 100.0},
+        {"n_eppe_train": 100, "mode": "finetune", "protocol": "full-lr", "seed": 20260913,
+         "fs2_mae_mhz": 3.0, "fp2_mae_mhz": 3.1, "k2eff2_mae_pp": 0.1,
+         "sparse_rmse_db": 1.0, "stage2_full_rmse_db": 1.1,
+         "stage2_best_epoch": 9, "stage2_train_seconds": 90.0},
     ]
     out = tmp_path / "de.xlsx"
     rde.write_xlsx(curve, anchor, out, readme=rde.readme_lines(seed_base=20260913))
@@ -188,12 +208,18 @@ def test_write_xlsx_structure(tmp_path):
     assert wb.sheetnames == ["stage1_curve", "pipeline_anchor", "readme"]
     ws = wb["stage1_curve"]
     header = [c.value for c in ws[1]]
-    assert header == ["n_eppe_train", "mode", "seed", "fs2_mae_mhz", "fp2_mae_mhz",
+    assert header == ["n_eppe_train", "mode", "protocol", "seed", "fs2_mae_mhz", "fp2_mae_mhz",
                       "k2eff2_mae_pp", "sparse_rmse_db", "best_epoch", "train_seconds"]
     assert ws.max_row == 1 + len(curve)
+    # protocol 列值正确落位
+    proto_col = [ws.cell(row=r, column=3).value for r in range(2, ws.max_row + 1)]
+    assert set(proto_col) == {"n/a", "lowlr", "full-lr"}
     ws2 = wb["pipeline_anchor"]
-    assert "stage2_full_rmse_db" in [c.value for c in ws2[1]]
+    header2 = [c.value for c in ws2[1]]
+    assert "protocol" in header2 and "stage2_full_rmse_db" in header2
     assert ws2.max_row == 1 + len(anchor)
     readme_text = "\n".join(str(r[0].value) for r in wb["readme"].iter_rows())
     assert "357" in readme_text  # EPPE test 口径
     assert "20260913" in readme_text
+    assert "full-lr" in readme_text and "lowlr" in readme_text  # 双协议口径
+    assert "欠训练" in readme_text  # n≥300 反转的方法学说明

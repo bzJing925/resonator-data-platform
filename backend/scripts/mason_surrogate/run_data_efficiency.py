@@ -2,8 +2,10 @@
 
 命题：物理规律跨架构迁移 ⇒ EPPE 新架构只需极少数据。
 - Stage 1 主曲线：n ∈ {10,30,100,300,4052(全量)}；scratch（EPPE-only）vs finetune
-  （先在全部 EPE train 上训 Stage 1，再在 EPPE 子集上微调，lr=1/10，epoch 预算相同）。
-  种子：n≤100 → {seed_base,+1,+2}；n≥300 → {seed_base}。
+  （先在全部 EPE train 上训 Stage 1，再在 EPPE 子集上微调，epoch 预算相同）。
+  finetune 两个协议并列（protocol 列）：lowlr=lr 降 1/10（原协议）；full-lr=lr/epoch/
+  早停与 scratch 完全相同，唯一差异=权重初始化（干净对照，复核 n≥300 反转是否
+  低 lr 欠训练所致）。种子：n≤100 → {seed_base,+1,+2}；n≥300 → {seed_base}。
 - 全流水线锚点（1 组）：n=100、seed_base，含 Stage 2（EPE-only Stage 2 预训练一次
   作微调初始化；Stage 2 从零/微调均 epoch≤40），评估 test EPPE e2e full RMSE(dB)。
 - 测试恒用 EPPE test split（357 样本）保证可比；子集从 EPPE train split 分层抽样
@@ -67,6 +69,7 @@ DEFAULT_CFG = {
     "max_freq": 1.0,
     "seed_base": SEED_BASE,
     "ns": list(NS),
+    "finetune_protocols": "lowlr,full-lr",
 }
 
 
@@ -142,6 +145,27 @@ def write_subset_npz(data: dict[str, NDArray], rows: dict[int, NDArray], out_pat
 
 def seeds_for(n: int, seed_base: int) -> list[int]:
     return [seed_base, seed_base + 1, seed_base + 2] if n <= SMALL_N_MAX else [seed_base]
+
+
+def finetune_protocols(cfg: dict) -> list[tuple[str, str, float]]:
+    """finetune 协议列表：(run 目录 mode 键, protocol 标签, lr 相对 scratch 的倍率)。
+
+    - lowlr：原协议，lr=1/10（epoch 预算相同）；n≥300 曾出现欠训练反转（见 readme）。
+    - full-lr：lr/epoch/早停与 scratch 完全相同，唯一差异=权重初始化（干净对照）。
+    目录命名：lowlr 沿用 s1_finetune_*（向后兼容既有结果），full-lr 用 s1_finetune_full_lr_*。
+    """
+    out: list[tuple[str, str, float]] = []
+    for p in str(cfg.get("finetune_protocols", "lowlr,full-lr")).split(","):
+        p = p.strip()
+        if not p:
+            continue
+        if p == "lowlr":
+            out.append(("finetune", "lowlr", 0.1))
+        elif p == "full-lr":
+            out.append(("finetune_full_lr", "full-lr", 1.0))
+        else:
+            raise ValueError(f"未知 finetune 协议: {p}")
+    return out
 
 
 # ---------------------------------------------------------------- 子进程驱动
@@ -285,26 +309,30 @@ def phase_curve(cfg: dict) -> list[dict]:
     pre_dir = s1_run_dir(out_root, "pretrain", None, base)
     pre_eval = run_stage1(cfg, paths[("pretrain", None, None)], pre_dir, base, cfg["lr"])
     pre_m = collect_stage1_metrics(pre_eval)
-    rows.append({"n_eppe_train": 0, "mode": "zeroshot", "seed": base, "out_dir": str(pre_dir),
-                 **pre_m})
+    rows.append({"n_eppe_train": 0, "mode": "zeroshot", "protocol": "n/a", "seed": base,
+                 "out_dir": str(pre_dir), **pre_m})
 
     for n in cfg["ns"]:
         for seed in seeds_for(n, base):
             npz = paths[("curve", n, seed)]
-            for mode in ("scratch", "finetune"):
-                out_dir = s1_run_dir(out_root, mode, n, seed)
-                if mode == "scratch":
-                    ev = run_stage1(cfg, npz, out_dir, seed, cfg["lr"])
-                else:
-                    # 微调只迁移权重：归一化统计在 EPPE 子集上重拟合（与 scratch 同预处理，
-                    # 只隔离权重初始化差异）。EPE 统计会让 EPPE 目标落在预训练输出
-                    # 分布 ~7σ 之外（fs 3-8GHz vs 10-20GHz），低 lr 下无法收敛。
-                    ev = run_stage1(cfg, npz, out_dir, seed, cfg["lr"] / 10.0,
-                                    init_from=pre_dir / "stage1.pt")
+            out_dir = s1_run_dir(out_root, "scratch", n, seed)
+            ev = run_stage1(cfg, npz, out_dir, seed, cfg["lr"])
+            m = collect_stage1_metrics(ev)
+            rows.append({"n_eppe_train": n, "mode": "scratch", "protocol": "n/a",
+                         "seed": seed, "out_dir": str(out_dir), **m})
+            print(f"  n={n} scratch s={seed}: fs2={m['fs2_mae_mhz']:.2f}MHz "
+                  f"sparse={m['sparse_rmse_db']:.3f}dB", flush=True)
+            for dir_mode, proto, lr_fac in finetune_protocols(cfg):
+                out_dir = s1_run_dir(out_root, dir_mode, n, seed)
+                # 微调只迁移权重：归一化统计在 EPPE 子集上重拟合（与 scratch 同预处理，
+                # 只隔离权重初始化差异）。EPE 统计会让 EPPE 目标落在预训练输出
+                # 分布 ~7σ 之外（fs 3-8GHz vs 10-20GHz），低 lr 下无法收敛。
+                ev = run_stage1(cfg, npz, out_dir, seed, cfg["lr"] * lr_fac,
+                                init_from=pre_dir / "stage1.pt")
                 m = collect_stage1_metrics(ev)
-                rows.append({"n_eppe_train": n, "mode": mode, "seed": seed,
-                             "out_dir": str(out_dir), **m})
-                print(f"  n={n} {mode} s={seed}: fs2={m['fs2_mae_mhz']:.2f}MHz "
+                rows.append({"n_eppe_train": n, "mode": "finetune", "protocol": proto,
+                             "seed": seed, "out_dir": str(out_dir), **m})
+                print(f"  n={n} finetune/{proto} s={seed}: fs2={m['fs2_mae_mhz']:.2f}MHz "
                       f"sparse={m['sparse_rmse_db']:.3f}dB", flush=True)
     return rows
 
@@ -316,9 +344,9 @@ def phase_anchor(cfg: dict) -> list[dict]:
     npz = out_root / "subsets" / f"sub_n{n}_s{base}.npz"
     pre_npz = out_root / "subsets" / "pretrain.npz"
     s1_scratch = s1_run_dir(out_root, "scratch", n, base)
-    s1_finetune = s1_run_dir(out_root, "finetune", n, base)
     s1_pre = s1_run_dir(out_root, "pretrain", None, base)
-    for d in (s1_scratch, s1_finetune, s1_pre):
+    protos = finetune_protocols(cfg)
+    for d in [s1_scratch, s1_pre, *[s1_run_dir(out_root, dm, n, base) for dm, _, _ in protos]]:
         if not (d / "stage1.pt").exists():
             raise RuntimeError(f"锚点组依赖缺失（先跑 --phase curve）: {d}")
 
@@ -327,22 +355,32 @@ def phase_anchor(cfg: dict) -> list[dict]:
     s2_pre = out_root / "s2_pretrain"
     ev_pre = run_stage2(cfg, pre_npz, s2_pre, s1_pre, base, cfg["lr_stage2"])
     pre2 = collect_stage2_metrics(ev_pre)
-    rows.append({"n_eppe_train": 0, "mode": "zeroshot", "seed": base, "out_dir": str(s2_pre),
+    rows.append({"n_eppe_train": 0, "mode": "zeroshot", "protocol": "n/a", "seed": base,
+                 "out_dir": str(s2_pre),
                  **collect_stage1_metrics(s1_pre / "stage1_eval.json"), **pre2})
 
-    for mode, s1_dir in (("scratch", s1_scratch), ("finetune", s1_finetune)):
-        out_dir = out_root / f"s2_{mode}_n{n}_s{base}"
-        if mode == "scratch":
-            ev = run_stage2(cfg, npz, out_dir, s1_dir, base, cfg["lr_stage2"])
-        else:
-            # 同 Stage 1 口径：只迁移权重（--init-from），cond 统计在子集上重拟合
-            ev = run_stage2(cfg, npz, out_dir, s1_dir, base, cfg["lr_stage2"] / 10.0,
-                            init_from=s2_pre / "stage2.pt")
-        row = {"n_eppe_train": n, "mode": mode, "seed": base, "out_dir": str(out_dir),
+    out_dir = out_root / f"s2_scratch_n{n}_s{base}"
+    ev = run_stage2(cfg, npz, out_dir, s1_scratch, base, cfg["lr_stage2"])
+    row = {"n_eppe_train": n, "mode": "scratch", "protocol": "n/a", "seed": base,
+           "out_dir": str(out_dir),
+           **collect_stage1_metrics(s1_scratch / "stage1_eval.json"),
+           **collect_stage2_metrics(ev)}
+    rows.append(row)
+    print(f"  anchor scratch: stage2_full={row['stage2_full_rmse_db']:.3f}dB", flush=True)
+
+    for dir_mode, proto, lr_fac in protos:
+        s1_dir = s1_run_dir(out_root, dir_mode, n, base)
+        out_dir = out_root / f"s2_{dir_mode}_n{n}_s{base}"
+        # 同 Stage 1 口径：只迁移权重（--init-from），cond 统计在子集上重拟合
+        ev = run_stage2(cfg, npz, out_dir, s1_dir, base, cfg["lr_stage2"] * lr_fac,
+                        init_from=s2_pre / "stage2.pt")
+        row = {"n_eppe_train": n, "mode": "finetune", "protocol": proto, "seed": base,
+               "out_dir": str(out_dir),
                **collect_stage1_metrics(s1_dir / "stage1_eval.json"),
                **collect_stage2_metrics(ev)}
         rows.append(row)
-        print(f"  anchor {mode}: stage2_full={row['stage2_full_rmse_db']:.3f}dB", flush=True)
+        print(f"  anchor finetune/{proto}: stage2_full={row['stage2_full_rmse_db']:.3f}dB",
+              flush=True)
     return rows
 
 
@@ -356,14 +394,19 @@ def readme_lines(seed_base: int) -> list[str]:
         "测试集: 恒为 EPPE test split (n=357), 与训练子集无重叠",
         "子集抽样: EPPE train split 内按 t_aln 类分层 (比例+最大余数, 每类≥1), 种子确定性",
         f"种子: n≤100 → {{{seed_base},+1,+2}}; n≥300 → {{{seed_base}}}",
-        "mode=scratch: EPPE 子集从零训练, 归一化统计由子集 train 拟合",
-        "mode=finetune: 全部 EPE train 预训练 → EPPE 子集微调, lr=1/10, epoch 预算相同;",
-        "  只迁移权重, 归一化统计与 scratch 同样在 EPPE 子集 train 拟合,",
-        "  两模式唯一差异 = 权重初始化 (随机 vs EPE 预训练)",
+        "mode=scratch: EPPE 子集从零训练, 归一化统计由子集 train 拟合 (protocol 列=n/a)",
+        "mode=finetune: 全部 EPE train 预训练 → EPPE 子集微调; 只迁移权重,",
+        "  归一化统计与 scratch 同样在 EPPE 子集 train 拟合;",
+        "  protocol=lowlr: lr=1/10 (原协议, epoch 预算相同);",
+        "  protocol=full-lr: lr/epoch/早停与 scratch 完全相同, 唯一差异=权重初始化",
+        "方法学说明: lowlr 在 n≥300 出现反转 (微调反输 scratch) 是低 lr 下 epoch 预算内",
+        "  欠训练所致 (lr 1e-4 × ≤300 epoch 的有效步数不足以走完剩余适应空间);",
+        "  full-lr 为干净对照协议, 主结论以 full-lr 为准, lowlr 保留作透明对照",
         "mode=zeroshot: 仅 EPE 预训练, 直接在 EPPE test 评估 (n_eppe_train=0)",
         "Stage1: 统一 MLP (x7→7参数+256稀疏), epochs≤300, patience=30, lr=1e-3, AdamW",
         "Stage2 (锚点组): SparseReconstructor, epochs≤40, patience=20, max_freq=1.0",
-        "  (沿用 WP4a compare 结论), finetune lr=1e-4",
+        "  (沿用 WP4a compare 结论); finetune Stage2 lr 协议同 Stage1 (lowlr=1e-4,",
+        "  full-lr=1e-3)",
         "指标: fs2/fp2 MAE (MHz), k2eff2 MAE (pct-pt), sparse RMSE (dB, GT 位置),",
         "  stage2_full_rmse_db = e2e (Stage1 预测 cond+稀疏) 全网格 RMSE (dB)",
         f"生成日期: {datetime.now(UTC).date().isoformat()}",
@@ -377,13 +420,14 @@ def write_xlsx(curve_rows: list[dict], anchor_rows: list[dict], out_path: str | 
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "stage1_curve"
-    cols = ["n_eppe_train", "mode", "seed", "fs2_mae_mhz", "fp2_mae_mhz",
+    cols = ["n_eppe_train", "mode", "protocol", "seed", "fs2_mae_mhz", "fp2_mae_mhz",
             "k2eff2_mae_pp", "sparse_rmse_db", "best_epoch", "train_seconds"]
     ws.append(cols)
-    for r in sorted(curve_rows, key=lambda r: (r["n_eppe_train"], r["mode"], r["seed"])):
+    for r in sorted(curve_rows, key=lambda r: (r["n_eppe_train"], r["mode"],
+                                               r.get("protocol", ""), r["seed"])):
         ws.append([r.get(c) for c in cols])
     ws2 = wb.create_sheet("pipeline_anchor")
-    cols2 = ["n_eppe_train", "mode", "seed", "fs2_mae_mhz", "fp2_mae_mhz",
+    cols2 = ["n_eppe_train", "mode", "protocol", "seed", "fs2_mae_mhz", "fp2_mae_mhz",
              "k2eff2_mae_pp", "sparse_rmse_db", "stage2_full_rmse_db",
              "stage2_best_epoch", "stage2_train_seconds"]
     ws2.append(cols2)
@@ -401,36 +445,42 @@ def write_xlsx(curve_rows: list[dict], anchor_rows: list[dict], out_path: str | 
 def phase_aggregate(cfg: dict) -> dict:
     out_root = Path(cfg["out_root"])
     base = cfg["seed_base"]
+    protos = finetune_protocols(cfg)
     curve_rows: list[dict] = []
     pre_dir = s1_run_dir(out_root, "pretrain", None, base)
     if (pre_dir / "stage1_eval.json").exists():
-        curve_rows.append({"n_eppe_train": 0, "mode": "zeroshot", "seed": base,
-                           "out_dir": str(pre_dir),
+        curve_rows.append({"n_eppe_train": 0, "mode": "zeroshot", "protocol": "n/a",
+                           "seed": base, "out_dir": str(pre_dir),
                            **collect_stage1_metrics(pre_dir / "stage1_eval.json")})
     missing = []
     for n in cfg["ns"]:
         for seed in seeds_for(n, base):
-            for mode in ("scratch", "finetune"):
-                d = s1_run_dir(out_root, mode, n, seed)
+            variants = [("scratch", "n/a"), *[(dm, p) for dm, p, _ in protos]]
+            for dir_mode, proto in variants:
+                d = s1_run_dir(out_root, dir_mode, n, seed)
                 ev = d / "stage1_eval.json"
                 if ev.exists():
-                    curve_rows.append({"n_eppe_train": n, "mode": mode, "seed": seed,
-                                       "out_dir": str(d), **collect_stage1_metrics(ev)})
+                    mode = "scratch" if dir_mode == "scratch" else "finetune"
+                    curve_rows.append({"n_eppe_train": n, "mode": mode, "protocol": proto,
+                                       "seed": seed, "out_dir": str(d),
+                                       **collect_stage1_metrics(ev)})
                 else:
                     missing.append(d.name)
     anchor_rows: list[dict] = []
     s2_pre = out_root / "s2_pretrain"
     if (s2_pre / "stage2_eval.json").exists():
-        anchor_rows.append({"n_eppe_train": 0, "mode": "zeroshot", "seed": base,
-                            "out_dir": str(s2_pre),
+        anchor_rows.append({"n_eppe_train": 0, "mode": "zeroshot", "protocol": "n/a",
+                            "seed": base, "out_dir": str(s2_pre),
                             **collect_stage1_metrics(pre_dir / "stage1_eval.json"),
                             **collect_stage2_metrics(s2_pre / "stage2_eval.json")})
-    for mode in ("scratch", "finetune"):
-        d = out_root / f"s2_{mode}_n{ANCHOR_N}_s{base}"
-        s1d = s1_run_dir(out_root, mode, ANCHOR_N, base)
+    variants = [("scratch", "n/a"), *[(dm, p) for dm, p, _ in protos]]
+    for dir_mode, proto in variants:
+        d = out_root / f"s2_{dir_mode}_n{ANCHOR_N}_s{base}"
+        s1d = s1_run_dir(out_root, dir_mode, ANCHOR_N, base)
         if (d / "stage2_eval.json").exists():
-            anchor_rows.append({"n_eppe_train": ANCHOR_N, "mode": mode, "seed": base,
-                                "out_dir": str(d),
+            mode = "scratch" if dir_mode == "scratch" else "finetune"
+            anchor_rows.append({"n_eppe_train": ANCHOR_N, "mode": mode, "protocol": proto,
+                                "seed": base, "out_dir": str(d),
                                 **collect_stage1_metrics(s1d / "stage1_eval.json"),
                                 **collect_stage2_metrics(d / "stage2_eval.json")})
         else:
@@ -445,7 +495,7 @@ def phase_aggregate(cfg: dict) -> dict:
         "source_data_sha256": sha256_file(cfg["data"]) if Path(cfg["data"]).exists() else None,
         "config": {k: cfg[k] for k in ("ns", "epochs", "patience", "lr", "batch_size",
                                        "epochs_stage2", "patience_stage2", "lr_stage2",
-                                       "max_freq")},
+                                       "max_freq", "finetune_protocols")},
         "protocol": {line.split(":")[0]: line for line in readme},
         "stage1_curve": curve_rows,
         "pipeline_anchor": anchor_rows,
@@ -464,17 +514,21 @@ def phase_aggregate(cfg: dict) -> dict:
 
 def print_summary(curve_rows: list[dict], anchor_rows: list[dict]) -> None:
     print("\n== Stage 1 数据效率曲线（test EPPE, n=357）==")
-    print(f"{'n':>5} {'mode':<9} {'seed':>10} {'fs2_MHz':>9} {'fp2_MHz':>9} "
+    print(f"{'n':>5} {'mode':<9} {'protocol':<8} {'seed':>10} {'fs2_MHz':>9} {'fp2_MHz':>9} "
           f"{'k2_pp':>7} {'sparse_dB':>9} {'ep':>4} {'sec':>6}")
-    for r in sorted(curve_rows, key=lambda r: (r["n_eppe_train"], r["mode"], r["seed"])):
-        print(f"{r['n_eppe_train']:>5} {r['mode']:<9} {r['seed']:>10} "
+    for r in sorted(curve_rows, key=lambda r: (r["n_eppe_train"], r["mode"],
+                                               r.get("protocol", ""), r["seed"])):
+        print(f"{r['n_eppe_train']:>5} {r['mode']:<9} {r.get('protocol', ''):<8} "
+              f"{r['seed']:>10} "
               f"{r['fs2_mae_mhz']:>9.2f} {r['fp2_mae_mhz']:>9.2f} {r['k2eff2_mae_pp']:>7.3f} "
               f"{r['sparse_rmse_db']:>9.3f} {r['best_epoch']:>4} {r['train_seconds']:>6.0f}")
     if anchor_rows:
         print("\n== 全流水线锚点（n=100, 含 Stage 2）==")
-        print(f"{'mode':<9} {'fs2_MHz':>9} {'sparse_dB':>9} {'s2_full_dB':>10} {'s2_ep':>5}")
+        print(f"{'mode':<9} {'protocol':<8} {'fs2_MHz':>9} {'sparse_dB':>9} "
+              f"{'s2_full_dB':>10} {'s2_ep':>5}")
         for r in anchor_rows:
-            print(f"{r['mode']:<9} {r['fs2_mae_mhz']:>9.2f} {r['sparse_rmse_db']:>9.3f} "
+            print(f"{r['mode']:<9} {r.get('protocol', ''):<8} {r['fs2_mae_mhz']:>9.2f} "
+                  f"{r['sparse_rmse_db']:>9.3f} "
                   f"{r['stage2_full_rmse_db']:>10.3f} {r['stage2_best_epoch']:>5}")
 
 
@@ -496,6 +550,8 @@ def main() -> None:
     ap.add_argument("--seed-base", type=int, default=DEFAULT_CFG["seed_base"])
     ap.add_argument("--ns", default=",".join(str(n) for n in NS),
                     help="逗号分隔的 EPPE 子集规模")
+    ap.add_argument("--finetune-protocols", default=DEFAULT_CFG["finetune_protocols"],
+                    help="逗号分隔: lowlr (lr/10) 与/或 full-lr (与 scratch 同 lr)")
     args = ap.parse_args()
     cfg = {**DEFAULT_CFG, **{k: v for k, v in vars(args).items()}}
     cfg["ns"] = [int(x) for x in str(args.ns).split(",") if x]
