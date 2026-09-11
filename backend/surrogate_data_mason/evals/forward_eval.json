@@ -1,0 +1,130 @@
+{
+  "generated_at": "2026-09-11T09:37:50.846483+00:00",
+  "task": "WP4a unified forward surrogate on Mason corpora (EPE+EPPE co-train)",
+  "seed": 20260911,
+  "dataset": {
+    "n_total": 12005,
+    "w_grid": {
+      "w_lo": 0.8,
+      "w_hi": 1.2,
+      "n": 1001,
+      "step": 0.0003999999999999999
+    },
+    "sources": {
+      "epe": {
+        "sha256": "1fa02b37ba857b217f95ee49d2f8479cdaacd934050004f0f1c0bb09cb1f6ad2",
+        "mason_sim_commit_sha": "fbcac9867f662059d4b41bab7b87fdefc9ddd733-dirty"
+      },
+      "eppe": {
+        "sha256": "82f2df21efe07ef90ea8f8d1129d5fb49c8058cd89be3b5de527814acae57a6b",
+        "mason_sim_commit_sha": "d7d671ec26f0f86de5e7cd74391862cb9c7f22e3-dirty"
+      }
+    },
+    "per_structure": {
+      "epe": {
+        "n_in": 7492,
+        "n_kept": 7239,
+        "n_dropped_zero_coverage": 253,
+        "mask_rate": 0.31380623796703366,
+        "train": 6153,
+        "val": 543,
+        "test": 543
+      },
+      "eppe": {
+        "n_in": 4766,
+        "n_kept": 4766,
+        "n_dropped_zero_coverage": 0,
+        "mask_rate": 0.005375237435665481,
+        "train": 4052,
+        "val": 357,
+        "test": 357
+      }
+    }
+  },
+  "stage1": {
+    "best_epoch": 141,
+    "best_val": 0.00206711676178707,
+    "train_seconds": 88.0,
+    "per_structure": {
+      "epe": {
+        "fs_mae_mhz": 23.060327792641004,
+        "fp_mae_mhz": 22.73862782833074,
+        "k2eff_mae_pp": 0.056206754974887814,
+        "qs_mae_rel_pct": 0.5547084782093126,
+        "qp_mae_rel_pct": 0.482933622567853,
+        "qs_bodeq_mae_rel_pct": 0.26809288842292295,
+        "qp_bodeq_mae_rel_pct": 0.5401663540494763,
+        "sparse_rmse_db": 1.238378882408142,
+        "n_train": 6153,
+        "n_val": 543,
+        "n_test": 543
+      },
+      "eppe": {
+        "fs_mae_mhz": 41.013053933131125,
+        "fp_mae_mhz": 42.08445986225969,
+        "k2eff_mae_pp": 0.041874482742950254,
+        "qs_mae_rel_pct": 1.4248806422709366,
+        "qp_mae_rel_pct": 1.4664808710663888,
+        "qs_bodeq_mae_rel_pct": 1.0916208677335764,
+        "qp_bodeq_mae_rel_pct": 1.5701538170693141,
+        "sparse_rmse_db": 0.944843053817749,
+        "n_train": 4052,
+        "n_val": 357,
+        "n_test": 357
+      },
+      "all": {
+        "fs_mae_mhz": 30.181575828368754,
+        "fp_mae_mhz": 30.412474535122556,
+        "k2eff_mae_pp": 0.050521620322885916,
+        "qs_mae_rel_pct": 0.8998767699537568,
+        "qp_mae_rel_pct": 0.8730740311389387,
+        "qs_bodeq_mae_rel_pct": 0.5947589868828154,
+        "qp_bodeq_mae_rel_pct": 0.948728047714012,
+        "sparse_rmse_db": 1.1101266145706177,
+        "n_train": 10205,
+        "n_val": 900,
+        "n_test": 900
+      }
+    }
+  },
+  "stage2": {
+    "best_epoch": 15,
+    "best_val": 2.519473930280785e-06,
+    "epochs_run": 35,
+    "train_seconds": 8625.556458950043,
+    "max_freq": 1.0,
+    "max_freq_compare": {
+      "0.1": 3.290976977344447e-06,
+      "1.0": 2.5873594717672353e-06
+    },
+    "per_structure": {
+      "epe": {
+        "full_rmse_db": 1.0184867405300644,
+        "aligned_rmse_db": 3.9822230589985654,
+        "zp_peak_mae_db": 6.0634196499538,
+        "zp_n_used": 446,
+        "gt_sparse_full_rmse_db": 0.015126880455642621,
+        "mean_abs_shift": 0.004079399160145624,
+        "n_test": 543
+      },
+      "eppe": {
+        "full_rmse_db": 0.9281843233033112,
+        "aligned_rmse_db": 2.143692876428793,
+        "zp_peak_mae_db": 2.5663229597716772,
+        "zp_n_used": 357,
+        "gt_sparse_full_rmse_db": 0.056743546246595195,
+        "mean_abs_shift": 0.0030140066400779534,
+        "n_test": 357
+      },
+      "all": {
+        "full_rmse_db": 0.9756325693447175,
+        "aligned_rmse_db": 3.2199590935476925,
+        "zp_peak_mae_db": 4.508670561043441,
+        "zp_n_used": 803,
+        "gt_sparse_full_rmse_db": 0.04102243967121139,
+        "mean_abs_shift": 0.003656793460518781,
+        "n_test": 900
+      }
+    }
+  }
+}
