@@ -1,0 +1,159 @@
+{
+  "generated_at": "2026-09-11T11:08:03.843899+00:00",
+  "task": "WP4b inverse model: y7+flag → thickness (EPE t_piezo / EPPE t_aln+t_alscn)",
+  "seed": 20260912,
+  "data_sha256": "869c5bc2dec3362bda08dc47900b409d4cf9b6fcbd805cd4dbe2114a08b98c58",
+  "dataset": {
+    "n_total": 12005,
+    "per_structure": {
+      "epe": {
+        "n_train": 6153,
+        "n_val": 543,
+        "n_test": 543
+      },
+      "eppe": {
+        "n_train": 4052,
+        "n_val": 357,
+        "n_test": 357
+      }
+    }
+  },
+  "training": {
+    "best_epoch": 50,
+    "best_val": 0.39016281396150587,
+    "epochs_run": 80,
+    "train_seconds": 9.095250129699707
+  },
+  "test": {
+    "clean": {
+      "epe": {
+        "n_test": 543,
+        "t_piezo_mae_nm": 2.523721680053139,
+        "sensitivity": {
+          "delta_mhz": 10.0,
+          "pearson": 0.9986598532028395,
+          "sign_rate": 1.0,
+          "median_mag_ratio": 0.40559042321025385,
+          "n_points": 1086
+        }
+      },
+      "eppe": {
+        "n_test": 357,
+        "t_aln_acc": 0.6442577030812325,
+        "t_aln_confusion": [
+          [
+            74,
+            5,
+            7,
+            0,
+            1
+          ],
+          [
+            7,
+            38,
+            22,
+            3,
+            0
+          ],
+          [
+            3,
+            10,
+            40,
+            14,
+            0
+          ],
+          [
+            2,
+            2,
+            22,
+            34,
+            14
+          ],
+          [
+            0,
+            0,
+            2,
+            13,
+            44
+          ]
+        ],
+        "t_aln_classes": [
+          50.0,
+          80.0,
+          100.0,
+          120.0,
+          150.0
+        ],
+        "t_alscn_mae_nm": 11.563267884144805
+      }
+    },
+    "fs_jitter": {
+      "delta_mhz": 10.0,
+      "seed": 20260913,
+      "epe": {
+        "n_test": 543,
+        "t_piezo_mae_nm": 2.5304113144761673
+      },
+      "eppe": {
+        "n_test": 357,
+        "t_aln_acc": 0.6498599439775911,
+        "t_aln_confusion": [
+          [
+            74,
+            5,
+            7,
+            0,
+            1
+          ],
+          [
+            7,
+            39,
+            21,
+            3,
+            0
+          ],
+          [
+            3,
+            10,
+            40,
+            14,
+            0
+          ],
+          [
+            2,
+            2,
+            21,
+            35,
+            14
+          ],
+          [
+            0,
+            0,
+            2,
+            13,
+            44
+          ]
+        ],
+        "t_aln_classes": [
+          50.0,
+          80.0,
+          100.0,
+          120.0,
+          150.0
+        ],
+        "t_alscn_mae_nm": 11.563463428257231
+      }
+    },
+    "degradation": {
+      "epe": {
+        "n_test_delta": 0,
+        "t_piezo_mae_nm_delta": 0.006689634423028501
+      },
+      "eppe": {
+        "n_test_delta": 0,
+        "t_aln_acc_delta": 0.0056022408963585235,
+        "t_alscn_mae_nm_delta": 0.00019554411242594938
+      }
+    }
+  }
+}
