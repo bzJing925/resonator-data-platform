@@ -1,9 +1,9 @@
 {
-  "generated_at": "2026-09-11T13:28:22.190610+00:00",
+  "generated_at": "2026-09-11T15:44:14.753666+00:00",
   "task": "WP4b data-efficiency: EPPE subset size × {scratch, EPE-pretrain→finetune}",
   "seed_base": 20260913,
   "source_data": "surrogate_data_mason/unified_dataset.npz",
-  "source_data_sha256": "831276bcfda819e12e2a1f1318f1abfbea6828f60d49499be8cba4a488573dab",
+  "dataset_sha256": "831276bcfda819e12e2a1f1318f1abfbea6828f60d49499be8cba4a488573dab",
   "config": {
     "ns": [
       10,
@@ -43,7 +43,11 @@
     "  full-lr=1e-3)": "  full-lr=1e-3)",
     "指标": "指标: fs2/fp2 MAE (MHz), k2eff2 MAE (pct-pt), sparse RMSE (dB, GT 位置),",
     "  stage2_full_rmse_db = e2e (Stage1 预测 cond+稀疏) 全网格 RMSE (dB)": "  stage2_full_rmse_db = e2e (Stage1 预测 cond+稀疏) 全网格 RMSE (dB)",
-    "生成日期": "生成日期: 2026-09-11"
+    "生成日期": "生成日期: 2026-09-11",
+    "结论（由本表计算, 等效 n* 为 scratch 均值曲线的对数-对数插值）": "结论（由本表计算, 等效 n* 为 scratch 均值曲线的对数-对数插值）:",
+    "  finetune(lowlr)@30": "  finetune(lowlr)@30: fs2 MAE 399.2 MHz ≈ scratch n*≈55（数据效率 ≈1.85×, fs MAE 口径）",
+    "  finetune(full-lr)@30": "  finetune(full-lr)@30: fs2 MAE 430.9 MHz ≈ scratch n*≈49（数据效率 ≈1.65×, fs MAE 口径）",
+    "  全量 n=4052": "  全量 n=4052: full-lr 16.1 vs scratch 21.1 MHz（+24%）"
   },
   "stage1_curve": [
     {

@@ -80,8 +80,12 @@ from pathlib import Path
 import numpy as np
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+SCRIPTS_DIR = PROJECT_ROOT / "scripts"
+for _p in (PROJECT_ROOT, SCRIPTS_DIR):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
+
+from mason_surrogate.common import T_ALN_CLASSES_NM  # noqa: E402
 
 from app.mason_sim import (  # noqa: E402
     ALN1,
@@ -109,7 +113,8 @@ from app.mason_sim.prodlabels import (  # noqa: E402
 SEED_DEFAULT = 20260911
 N_DEFAULT = 8000
 
-T_ALN_LEVELS_NM = (50.0, 80.0, 100.0, 120.0, 150.0)  # AlN 下层厚度 5 档轮换（brief 定死）
+T_ALN_LEVELS_NM = T_ALN_CLASSES_NM  # AlN 下层厚度 5 档轮换（brief 定死；单一来源在
+# mason_surrogate/common.py，此处仅别名以保持本脚本既有命名）
 T_ALSCN_MIN_NM = 100.0
 # T_ALSCN_MAX_NM 标定（2026-09-11 烘焙，`--calibrate` 复现）：nominal 堆叠
 # （t_aln=100、t_top=t_bot=150、t_pf=0、area=2000）下偶模支路锚定 fs2 恰好压到

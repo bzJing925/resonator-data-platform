@@ -202,6 +202,8 @@ def test_inverse_train_smoke(tmp_path):
         assert key in cfg, key
     assert len(cfg["dataset_sha256"]) == 64
     ev = json.loads(eval_out.read_text())
+    assert ev["dataset_sha256"] == cfg["dataset_sha256"]  # eval↔config 同源绑定
+    assert ev["warnings"] == []  # 训练侧自绑定必然匹配
     clean = ev["test"]["clean"]
     assert clean["epe"]["n_test"] > 0 and clean["eppe"]["n_test"] > 0
     assert np.isfinite(clean["epe"]["t_piezo_mae_nm"])
@@ -235,3 +237,24 @@ def test_inverse_jitter_deterministic(tmp_path):
     m2 = tim.evaluate_from_checkpoint(out, d, cfg, jitter_mhz=10.0, jitter_seed=123)
     assert m1["eppe"]["t_aln_acc"] == m2["eppe"]["t_aln_acc"]
     assert m1["epe"]["t_piezo_mae_nm"] == m2["epe"]["t_piezo_mae_nm"]
+
+
+def test_check_dataset_binding(tmp_path):
+    data = _make_tiny_unified(tmp_path / "u.npz")
+    cfg_ok = {"dataset_sha256": tim.file_sha256(data)}
+    assert tim.check_dataset_binding(cfg_ok, data) == []
+    cfg_bad = {"dataset_sha256": "0" * 64}
+    w = tim.check_dataset_binding(cfg_bad, data)
+    assert len(w) == 1 and "不匹配" in w[0]
+    w = tim.check_dataset_binding({}, data)
+    assert len(w) == 1 and "缺 dataset_sha256" in w[0]
+
+
+def test_t_aln_classes_single_source():
+    from mason_surrogate.common import T_ALN_CLASSES_NM
+
+    assert T_ALN_CLASSES_NM == (50.0, 80.0, 100.0, 120.0, 150.0)
+    assert tim.T_ALN_CLASSES == T_ALN_CLASSES_NM
+    import build_mason_eppe_corpus as bec  # scripts/ 下语料构建器
+
+    assert bec.T_ALN_LEVELS_NM == T_ALN_CLASSES_NM

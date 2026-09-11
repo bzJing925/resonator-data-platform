@@ -34,6 +34,9 @@ X7_COLS = ("structure_flag", "t1_nm", "t2_nm", "t_top_nm", "t_bot_nm", "t_pf_nm"
 PARAM_COLS = ("fs_ghz", "fp_ghz", "k2eff_pct", "qs", "qp", "qs_bodeq", "qp_bodeq")
 COND_PARAM_IDX = (0, 1, 3, 4, 2)  # params(7) → cond(5) = [fs, fp, qs, qp, k2eff_pct]
 Q_COLS = (3, 4, 5, 6)  # qs, qp, qs_bodeq, qp_bodeq
+# EPPE AlN 下层厚度 5 档（brief 定死）。单一来源：build_mason_eppe_corpus /
+# train_inverse_mason / run_data_efficiency 均引用此常量，禁止各写一份。
+T_ALN_CLASSES_NM = (50.0, 80.0, 100.0, 120.0, 150.0)
 
 
 # ---------------------------------------------------------------- 归一化

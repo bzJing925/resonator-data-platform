@@ -240,6 +240,41 @@ def test_json_safe_nan_inf_to_none():
     json.dumps(out, allow_nan=False)
 
 
+def test_run_fingerprint_backfill_match_mismatch(tmp_path):
+    cfg = dict(rde.DEFAULT_CFG)
+    npz = tmp_path / "d.npz"
+    np.savez(npz, a=np.zeros(3))
+    fp = rde.run_fingerprint(cfg, "stage1", npz, seed=1, lr=1e-3,
+                             extra={"n_eppe_train": 10, "mode": "scratch"})
+    out = tmp_path / "run1"
+    rde.check_fingerprint(out, fp)  # 旧目录无指纹 → 回填
+    assert (out / "fingerprint.json").exists()
+    rde.check_fingerprint(out, fp)  # 匹配 → 静默通过
+    fp_bad = rde.run_fingerprint(cfg, "stage1", npz, seed=1, lr=1e-4,
+                                 extra={"n_eppe_train": 10, "mode": "scratch"})
+    with pytest.raises(RuntimeError, match="指纹不匹配"):
+        rde.check_fingerprint(out, fp_bad)
+
+
+def test_data_efficiency_conclusions_math():
+    rows = []
+    for n, v in ((30, 400.0), (100, 100.0), (4052, 20.0)):
+        rows.append({"n_eppe_train": n, "mode": "scratch", "protocol": "n/a",
+                     "fs2_mae_mhz": v})
+    rows.append({"n_eppe_train": 30, "mode": "finetune", "protocol": "lowlr",
+                 "fs2_mae_mhz": 200.0})
+    rows.append({"n_eppe_train": 4052, "mode": "finetune", "protocol": "full-lr",
+                 "fs2_mae_mhz": 16.0})
+    lines = rde.data_efficiency_conclusions(rows)
+    # lowlr@30=200 → t=ln(400/200)/ln(400/100)=0.5 → n*=30×(100/30)^0.5≈54.8 → ≈55, ≈1.83×
+    assert any("n*≈55" in line and "1.83×" in line for line in lines), lines
+    # 全量相对改善 (20−16)/20 = +20%
+    assert any("+20%" in line for line in lines), lines
+    # readme 传入曲线行后追加结论段
+    readme = rde.readme_lines(seed_base=20260913, curve_rows=rows)
+    assert any("等效 n*" in line for line in readme)
+
+
 def test_subset_trainers_smoke_k_from_stage1_ckpt(tmp_path):
     """subset stage1(k=32) → subset stage2：k 以 stage1 ckpt 为准，cfg 不再含 k。"""
     import torch

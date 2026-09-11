@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import subprocess
 import sys
 import time
@@ -54,7 +55,6 @@ SEED_BASE = 20260913
 NS = (10, 30, 100, 300, 4052)
 SMALL_N_MAX = 100  # n≤100 → 3 种子
 ANCHOR_N = 100
-T_ALN_CLASSES = (50.0, 80.0, 100.0, 120.0, 150.0)
 
 DEFAULT_CFG = {
     "data": "surrogate_data_mason/unified_dataset.npz",
@@ -175,6 +175,39 @@ def finetune_protocols(cfg: dict) -> list[tuple[str, str, float]]:
 SUBPROCESS_TIMEOUT_S = 4 * 3600  # 4h 裕量：hang 变响亮失败而非无限等待
 
 
+def run_fingerprint(cfg: dict, kind: str, npz: Path, seed: int, lr: float,
+                    extra: dict) -> dict:
+    """run 目录配置指纹（与语料 config_tag 同理念）：防改超参后静默复用旧结果。"""
+    return {
+        "kind": kind,
+        "seed": seed,
+        "lr": lr,
+        "epochs": cfg["epochs"] if kind == "stage1" else cfg["epochs_stage2"],
+        "patience": cfg["patience"] if kind == "stage1" else cfg["patience_stage2"],
+        "batch_size": cfg["batch_size"],
+        "max_freq": cfg["max_freq"] if kind == "stage2" else None,
+        "data_sha256": file_sha256(npz),
+        **extra,
+    }
+
+
+def check_fingerprint(out_dir: Path, fp: dict) -> None:
+    """复用（skip）前校验指纹：不匹配 → 响亮失败；缺文件（旧目录）→ 回填并提示。"""
+    fp_path = out_dir / "fingerprint.json"
+    text = json.dumps(json_safe(fp), indent=2, ensure_ascii=False, allow_nan=False)
+    if not fp_path.exists():
+        out_dir.mkdir(parents=True, exist_ok=True)
+        fp_path.write_text(text, encoding="utf-8")
+        print(f"  note: {out_dir.name} 为旧目录，已回填 fingerprint.json", flush=True)
+        return
+    old = fp_path.read_text(encoding="utf-8")
+    if old != text:
+        raise RuntimeError(
+            f"run 目录配置指纹不匹配（改超参后须删除旧目录再跑）: {out_dir}\n"
+            f"旧: {old}\n新: {text}"
+        )
+
+
 def run_script(script: Path, args: list[str], log_path: Path) -> None:
     """以当前 venv 解释器子进程跑训练脚本，日志落盘；失败/超时带日志尾部报错。"""
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -205,9 +238,14 @@ def s1_run_dir(out_root: Path, mode: str, n: int | None, seed: int) -> Path:
 
 
 def run_stage1(cfg: dict, npz: Path, out_dir: Path, seed: int, lr: float,
-               init_from: Path | None = None, init_config: Path | None = None) -> Path:
+               init_from: Path | None = None, init_config: Path | None = None,
+               fp_extra: dict | None = None) -> Path:
+    fp = run_fingerprint(cfg, "stage1", npz, seed, lr,
+                         {"init_from": str(init_from) if init_from else None,
+                          **(fp_extra or {})})
     eval_path = out_dir / "stage1_eval.json"
     if eval_path.exists():
+        check_fingerprint(out_dir, fp)
         print(f"  skip (exists): {out_dir.name}", flush=True)
         return eval_path
     args = [
@@ -220,14 +258,24 @@ def run_stage1(cfg: dict, npz: Path, out_dir: Path, seed: int, lr: float,
         if init_config is not None:
             args += ["--init-config", str(init_config)]
     print(f"  run {out_dir.name} (lr={lr}, init={'yes' if init_from else 'no'})", flush=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "fingerprint.json").write_text(
+        json.dumps(json_safe(fp), indent=2, ensure_ascii=False, allow_nan=False),
+        encoding="utf-8",
+    )
     run_script(SCRIPT_S1, args, out_dir / "train.log")
     return eval_path
 
 
 def run_stage2(cfg: dict, npz: Path, out_dir: Path, s1_dir: Path, seed: int, lr: float,
-               init_from: Path | None = None, init_config: Path | None = None) -> Path:
+               init_from: Path | None = None, init_config: Path | None = None,
+               fp_extra: dict | None = None) -> Path:
+    fp = run_fingerprint(cfg, "stage2", npz, seed, lr,
+                         {"init_from": str(init_from) if init_from else None,
+                          "stage1_ckpt": str(s1_dir / "stage1.pt"), **(fp_extra or {})})
     eval_path = out_dir / "stage2_eval.json"
     if eval_path.exists():
+        check_fingerprint(out_dir, fp)
         print(f"  skip (exists): {out_dir.name}", flush=True)
         return eval_path
     args = [
@@ -243,6 +291,11 @@ def run_stage2(cfg: dict, npz: Path, out_dir: Path, s1_dir: Path, seed: int, lr:
         if init_config is not None:
             args += ["--init-config", str(init_config)]
     print(f"  run {out_dir.name} (lr={lr}, init={'yes' if init_from else 'no'})", flush=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "fingerprint.json").write_text(
+        json.dumps(json_safe(fp), indent=2, ensure_ascii=False, allow_nan=False),
+        encoding="utf-8",
+    )
     run_script(SCRIPT_S2, args, out_dir / "train.log")
     return eval_path
 
@@ -310,7 +363,8 @@ def phase_curve(cfg: dict) -> list[dict]:
 
     print("== [curve] EPE 预训练（一次，供全部 finetune 复用）==", flush=True)
     pre_dir = s1_run_dir(out_root, "pretrain", None, base)
-    pre_eval = run_stage1(cfg, paths[("pretrain", None, None)], pre_dir, base, cfg["lr"])
+    pre_eval = run_stage1(cfg, paths[("pretrain", None, None)], pre_dir, base, cfg["lr"],
+                          fp_extra={"n_eppe_train": 0, "mode": "pretrain"})
     pre_m = collect_stage1_metrics(pre_eval)
     rows.append({"n_eppe_train": 0, "mode": "zeroshot", "protocol": "n/a", "seed": base,
                  "out_dir": str(pre_dir), **pre_m})
@@ -319,7 +373,8 @@ def phase_curve(cfg: dict) -> list[dict]:
         for seed in seeds_for(n, base):
             npz = paths[("curve", n, seed)]
             out_dir = s1_run_dir(out_root, "scratch", n, seed)
-            ev = run_stage1(cfg, npz, out_dir, seed, cfg["lr"])
+            ev = run_stage1(cfg, npz, out_dir, seed, cfg["lr"],
+                            fp_extra={"n_eppe_train": n, "mode": "scratch"})
             m = collect_stage1_metrics(ev)
             rows.append({"n_eppe_train": n, "mode": "scratch", "protocol": "n/a",
                          "seed": seed, "out_dir": str(out_dir), **m})
@@ -331,7 +386,9 @@ def phase_curve(cfg: dict) -> list[dict]:
                 # 只隔离权重初始化差异）。EPE 统计会让 EPPE 目标落在预训练输出
                 # 分布 ~7σ 之外（fs 3-8GHz vs 10-20GHz），低 lr 下无法收敛。
                 ev = run_stage1(cfg, npz, out_dir, seed, cfg["lr"] * lr_fac,
-                                init_from=pre_dir / "stage1.pt")
+                                init_from=pre_dir / "stage1.pt",
+                                fp_extra={"n_eppe_train": n, "mode": "finetune",
+                                          "protocol": proto})
                 m = collect_stage1_metrics(ev)
                 rows.append({"n_eppe_train": n, "mode": "finetune", "protocol": proto,
                              "seed": seed, "out_dir": str(out_dir), **m})
@@ -356,14 +413,16 @@ def phase_anchor(cfg: dict) -> list[dict]:
     rows: list[dict] = []
     print("== [anchor] EPE-only Stage 2 预训练（一次）==", flush=True)
     s2_pre = out_root / "s2_pretrain"
-    ev_pre = run_stage2(cfg, pre_npz, s2_pre, s1_pre, base, cfg["lr_stage2"])
+    ev_pre = run_stage2(cfg, pre_npz, s2_pre, s1_pre, base, cfg["lr_stage2"],
+                        fp_extra={"n_eppe_train": 0, "mode": "pretrain"})
     pre2 = collect_stage2_metrics(ev_pre)
     rows.append({"n_eppe_train": 0, "mode": "zeroshot", "protocol": "n/a", "seed": base,
                  "out_dir": str(s2_pre),
                  **collect_stage1_metrics(s1_pre / "stage1_eval.json"), **pre2})
 
     out_dir = out_root / f"s2_scratch_n{n}_s{base}"
-    ev = run_stage2(cfg, npz, out_dir, s1_scratch, base, cfg["lr_stage2"])
+    ev = run_stage2(cfg, npz, out_dir, s1_scratch, base, cfg["lr_stage2"],
+                    fp_extra={"n_eppe_train": n, "mode": "scratch"})
     row = {"n_eppe_train": n, "mode": "scratch", "protocol": "n/a", "seed": base,
            "out_dir": str(out_dir),
            **collect_stage1_metrics(s1_scratch / "stage1_eval.json"),
@@ -376,7 +435,8 @@ def phase_anchor(cfg: dict) -> list[dict]:
         out_dir = out_root / f"s2_{dir_mode}_n{n}_s{base}"
         # 同 Stage 1 口径：只迁移权重（--init-from），cond 统计在子集上重拟合
         ev = run_stage2(cfg, npz, out_dir, s1_dir, base, cfg["lr_stage2"] * lr_fac,
-                        init_from=s2_pre / "stage2.pt")
+                        init_from=s2_pre / "stage2.pt",
+                        fp_extra={"n_eppe_train": n, "mode": "finetune", "protocol": proto})
         row = {"n_eppe_train": n, "mode": "finetune", "protocol": proto, "seed": base,
                "out_dir": str(out_dir),
                **collect_stage1_metrics(s1_dir / "stage1_eval.json"),
@@ -390,8 +450,51 @@ def phase_anchor(cfg: dict) -> list[dict]:
 # ---------------------------------------------------------------- 汇总产物
 
 
-def readme_lines(seed_base: int) -> list[str]:
-    return [
+def _mean_by_n(rows: list[dict], key: str) -> dict[int, float]:
+    out: dict[int, list[float]] = {}
+    for r in rows:
+        out.setdefault(r["n_eppe_train"], []).append(r[key])
+    return {n: sum(v) / len(v) for n, v in out.items()}
+
+
+def data_efficiency_conclusions(curve_rows: list[dict]) -> list[str]:
+    """由曲线行计算数据效率结论（scratch 均值曲线上对数-对数插值等效 n*）。
+
+    口径：fs2 MAE（MHz），finetune@30 vs scratch 插值；全量 n=4052 相对改善。
+    与论文修订口径（≈2× / 30 样本微调 ≈ 60 样本从零）一致。
+    """
+    scratch = _mean_by_n([r for r in curve_rows if r["mode"] == "scratch"], "fs2_mae_mhz")
+    s_ns = sorted(scratch)
+    lines: list[str] = []
+    for proto in ("lowlr", "full-lr"):
+        ft = _mean_by_n([r for r in curve_rows
+                         if r["mode"] == "finetune" and r.get("protocol") == proto],
+                        "fs2_mae_mhz")
+        if 30 not in ft:
+            continue
+        tgt = ft[30]
+        n_star = None
+        for a, b in zip(s_ns, s_ns[1:], strict=False):
+            if scratch[a] >= tgt >= scratch[b]:  # scratch 均值随 n 递减
+                t = ((math.log(scratch[a]) - math.log(tgt))
+                     / (math.log(scratch[a]) - math.log(scratch[b])))
+                n_star = a * (b / a) ** t
+                break
+        if n_star is not None:
+            lines.append(f"  finetune({proto})@30: fs2 MAE {tgt:.1f} MHz ≈ scratch "
+                         f"n*≈{n_star:.0f}（数据效率 ≈{n_star / 30:.2f}×, fs MAE 口径）")
+    full = _mean_by_n([r for r in curve_rows
+                       if r["mode"] == "finetune" and r.get("protocol") == "full-lr"],
+                      "fs2_mae_mhz")
+    if 4052 in scratch and 4052 in full:
+        imp = (scratch[4052] - full[4052]) / scratch[4052] * 100.0
+        lines.append(f"  全量 n=4052: full-lr {full[4052]:.1f} vs scratch "
+                     f"{scratch[4052]:.1f} MHz（{imp:+.0f}%）")
+    return lines
+
+
+def readme_lines(seed_base: int, curve_rows: list[dict] | None = None) -> list[str]:
+    lines = [
         "WP4b 数据效率曲线（IUS 2026 修订）",
         "命题: 物理规律跨架构迁移 ⇒ EPPE 新架构只需极少数据",
         "测试集: 恒为 EPPE test split (n=357), 与训练子集无重叠",
@@ -414,6 +517,10 @@ def readme_lines(seed_base: int) -> list[str]:
         "  stage2_full_rmse_db = e2e (Stage1 预测 cond+稀疏) 全网格 RMSE (dB)",
         f"生成日期: {datetime.now(UTC).date().isoformat()}",
     ]
+    if curve_rows:
+        lines.append("结论（由本表计算, 等效 n* 为 scratch 均值曲线的对数-对数插值）:")
+        lines.extend(data_efficiency_conclusions(curve_rows))
+    return lines
 
 
 def write_xlsx(curve_rows: list[dict], anchor_rows: list[dict], out_path: str | Path,
@@ -492,13 +599,13 @@ def phase_aggregate(cfg: dict) -> dict:
         else:
             missing.append(d.name)
 
-    readme = readme_lines(base)
+    readme = readme_lines(base, curve_rows)
     doc = {
         "generated_at": datetime.now(UTC).isoformat(),
         "task": "WP4b data-efficiency: EPPE subset size × {scratch, EPE-pretrain→finetune}",
         "seed_base": base,
         "source_data": cfg["data"],
-        "source_data_sha256": file_sha256(Path(cfg["data"]))
+        "dataset_sha256": file_sha256(Path(cfg["data"]))
         if Path(cfg["data"]).exists() else None,
         "config": {k: cfg[k] for k in ("ns", "epochs", "patience", "lr", "batch_size",
                                        "epochs_stage2", "patience_stage2", "lr_stage2",

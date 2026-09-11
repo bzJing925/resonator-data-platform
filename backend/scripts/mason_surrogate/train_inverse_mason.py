@@ -44,6 +44,7 @@ for p in (PROJECT_ROOT, SCRIPTS_DIR):
 # 归一化/IO 复用包内既有件（common.py / build_unified_dataset / train_stage1_mason）
 from mason_surrogate.build_unified_dataset import file_sha256  # noqa: E402
 from mason_surrogate.common import (  # noqa: E402
+    T_ALN_CLASSES_NM,
     NormStats,
     apply_norm,
     fit_norm,
@@ -54,7 +55,7 @@ from mason_surrogate.train_stage1_mason import load_unified  # noqa: E402
 
 Y_FS_COL = 0  # y7 第 0 列 = fs_ghz（输入前 7 列即 y7 归一化）
 FLAG_COL = 7  # 输入第 8 列 = structure_flag
-T_ALN_CLASSES = (50.0, 80.0, 100.0, 120.0, 150.0)
+T_ALN_CLASSES = T_ALN_CLASSES_NM  # 5 档分类标签（单一来源在 common.py，此处别名）
 X7_T1_COL = 1  # x7 第 1 列 = t1_nm（EPE: t_piezo；EPPE: t_aln）
 X7_T2_COL = 2  # x7 第 2 列 = t2_nm（EPPE: t_alscn）
 
@@ -248,14 +249,39 @@ def per_structure_metrics(
     return out
 
 
+def check_dataset_binding(config: dict, data_path: str | Path) -> list[str]:
+    """inverse_config ↔ 数据集 sha256 校验（口径对齐 eval_forward.check_dataset_binding）。
+
+    缺字段（旧版产物）或不匹配 → 返回 warning 文本列表；匹配 → 空列表。
+    """
+    warnings: list[str] = []
+    bound = config.get("dataset_sha256")
+    if not bound:
+        warnings.append("inverse_config 缺 dataset_sha256 字段（旧版产物），未校验")
+        return warnings
+    actual = file_sha256(Path(data_path))
+    if bound != actual:
+        warnings.append(
+            f"数据集 sha256 不匹配: inverse_config={bound[:12]}… actual={actual[:12]}…"
+        )
+    return warnings
+
+
 def evaluate_from_checkpoint(
     ckpt_dir: str | Path,
     data: dict[str, NDArray],
     cfg: dict,
     jitter_mhz: float = 0.0,
     jitter_seed: int = 0,
+    data_path: str | Path | None = None,
 ) -> dict[str, dict]:
-    """从 checkpoint + config 重建模型并评估 test split；jitter_mhz>0 时 fs 列加均匀抖动。"""
+    """从 checkpoint + config 重建模型并评估 test split；jitter_mhz>0 时 fs 列加均匀抖动。
+
+    data_path 提供时做 checkpoint↔数据集 sha256 绑定校验，不匹配打印 stderr 警告。
+    """
+    if data_path is not None:
+        for w in check_dataset_binding(cfg, data_path):
+            print(f"WARNING: {w}", file=sys.stderr, flush=True)
     dev = torch.device("cpu")
     ckpt = torch.load(Path(ckpt_dir) / "inverse.pt", map_location="cpu", weights_only=True)
     model = InverseMLP(
@@ -399,8 +425,9 @@ def train(cfg: dict) -> dict:
         json.dumps(json_safe(history), indent=2, allow_nan=False), encoding="utf-8"
     )
 
-    # ---- 评估：clean + fs 抖动鲁棒性 + 灵敏度一致性 ----
-    clean = evaluate_from_checkpoint(out_dir, data, config)
+    # ---- 评估：clean + fs 抖动鲁棒性 + 灵敏度一致性（含数据集绑定校验）----
+    bind_warnings = check_dataset_binding(config, cfg["data"])
+    clean = evaluate_from_checkpoint(out_dir, data, config, data_path=cfg["data"])
     jitter_seed = cfg["seed"] + 1
     jit = evaluate_from_checkpoint(
         out_dir, data, config, jitter_mhz=cfg["jitter_mhz"], jitter_seed=jitter_seed
@@ -440,7 +467,8 @@ def train(cfg: dict) -> dict:
         "generated_at": datetime.now(UTC).isoformat(),
         "task": "WP4b inverse model: y7+flag → thickness (EPE t_piezo / EPPE t_aln+t_alscn)",
         "seed": cfg["seed"],
-        "data_sha256": config["dataset_sha256"],
+        "dataset_sha256": config["dataset_sha256"],
+        "warnings": bind_warnings,
         "dataset": {
             "n_total": int(len(split)),
             "per_structure": {
