@@ -39,6 +39,7 @@ EPE 预训练→EPPE(AlN+AlScN) 微调迁移要求 EPE 侧与 EPPE 的 AlScN 层
 每个 shard 内含 config_tag 配置指纹（seed/n/material/shard_size/厚度范围/求解窗等）：
 续跑跳过时校验，不匹配即报错退出（防止不同配置的 shard 静默混料；
 此时请更换 --shard-dir 或清空目录重跑）。shard 与最终产物均为 tmp+replace 原子写。
+以上机械设施由 app.mason_sim.corpus 承载（WP2b 抽取，EPPE 语料脚本同用）。
 
 用法：
     uv run python scripts/build_mason_epe_corpus.py --calibrate     # 复现 t_piezo 标定
@@ -49,14 +50,11 @@ EPE 预训练→EPPE(AlN+AlScN) 微调迁移要求 EPE 侧与 EPPE 的 AlScN 层
 from __future__ import annotations
 
 import argparse
-import json
 import os
-import subprocess
 import sys
 import tempfile
 import time
 import warnings
-from concurrent.futures import ProcessPoolExecutor
 from functools import partial
 from pathlib import Path
 
@@ -79,6 +77,7 @@ from app.mason_sim import (  # noqa: E402
     run_epe_stack_sweep,
     um2_to_m2,
 )
+from app.mason_sim import corpus as corpus_infra  # noqa: E402
 
 # ============================================================
 # 采样常量
@@ -133,6 +132,15 @@ PARAM_COLS = ["fs_ghz", "fp_ghz", "k2eff_pct", "qs", "qp", "qs_bodeq", "qp_bodeq
 
 SHARD_SIZE_DEFAULT = 500
 OUT_DEFAULT = PROJECT_ROOT / "surrogate_data_mason" / "epe_corpus.npz"
+
+# shard 字段规格（result_key → npz 键 / dtype / 宽度），corpus_infra 通用设施消费
+SHARD_FIELDS = (
+    corpus_infra.ShardField("x", "x_geom", np.float64, 5),
+    corpus_infra.ShardField("y", "y_params", np.float64, 7),
+    corpus_infra.ShardField("z", "z_dense", np.complex64, 1001),
+)
+
+DROP_REASONS = ("no_resonance", "label_nan", "edge_margin", "solver_error")
 
 
 # ============================================================
@@ -297,13 +305,10 @@ def run_calibration(material: str = PIEZO_DEFAULT) -> None:
 
 
 # ============================================================
-# shard 落盘 / 合并
+# 语料配置指纹 / meta 路径（机械设施在 app.mason_sim.corpus；此处为兼容薄封装）
 # ============================================================
 def _config_tag(n: int, seed: int, material: str, shard_size: int) -> str:
-    """语料配置指纹（canonical JSON）：凡影响 shard 内容的量都计入。
-
-    断点续跑只许"同配置续跑"；指纹不匹配必须报错（防止静默混料）。
-    """
+    """语料配置指纹 payload（canonical JSON）：凡影响 shard 内容的量都计入。"""
     payload = {
         "seed": seed,
         "n": n,
@@ -321,88 +326,17 @@ def _config_tag(n: int, seed: int, material: str, shard_size: int) -> str:
         "alpha": ALPHA,
         "zref_ohm": ZREF,
     }
-    return json.dumps(payload, sort_keys=True)
-
-
-def _check_shard_tag(shard_path: Path, expected_tag: str) -> None:
-    """校验已存在 shard 的配置指纹；不匹配即中止（不静默重算/混料）。"""
-    with np.load(shard_path) as d:
-        stored = str(d["config_tag"]) if "config_tag" in d else None
-    if stored != expected_tag:
-        raise SystemExit(
-            f"shard 配置指纹不匹配：{shard_path}\n"
-            "该 shard 由不同配置（seed/n/material/shard_size/范围/求解窗等）生成，"
-            "为避免静默混料已中止。请更换 --shard-dir 或清空该目录后重跑。"
-        )
-
-
-def _write_shard(
-    shard_path: Path,
-    results: list[dict],
-    n_attempted: int,
-    config_tag: str,
-) -> None:
-    """把一个 shard 的有效样本写入 npz（tmp + os.replace 原子替换）。
-
-    shard 内含 config_tag（配置指纹）与 drop_counts_json（丢弃原因计数）。
-    """
-    valid = [r for r in results if r["valid"]]
-    drop_counts: dict[str, int] = {}
-    for r in results:
-        if not r["valid"]:
-            drop_counts[r["reason"]] = drop_counts.get(r["reason"], 0) + 1
-    if valid:
-        x = np.array([r["x"] for r in valid], dtype=np.float64)
-        y = np.array([r["y"] for r in valid], dtype=np.float64)
-        z = np.stack([r["z"] for r in valid]).astype(np.complex64)
-    else:
-        x = np.empty((0, 5), dtype=np.float64)
-        y = np.empty((0, 7), dtype=np.float64)
-        z = np.empty((0, 1001), dtype=np.complex64)
-    shard_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = shard_path.with_suffix(".tmp")
-    with open(tmp, "wb") as fh:  # 文件句柄写入，避免 savez 自动追加 .npz 后缀
-        np.savez(
-            fh,
-            x_geom=x,
-            y_params=y,
-            z_dense=z,
-            n_attempted=np.int64(n_attempted),
-            drop_counts_json=np.str_(json.dumps(drop_counts, sort_keys=True)),
-            config_tag=np.str_(config_tag),
-        )
-    os.replace(tmp, shard_path)
-
-
-def _git_sha() -> str:
-    """mason_sim 所属 commit SHA；工作区不干净（git status --porcelain 非空）附 -dirty。"""
-    try:
-        sha = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
-        dirty = subprocess.run(
-            ["git", "status", "--porcelain"],
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
-        return sha + ("-dirty" if dirty else "")
-    except Exception:
-        return "unknown"
+    return corpus_infra.make_config_tag(payload)
 
 
 def _meta_path(out_path: Path) -> Path:
-    """corpus npz 路径 → 配套 meta.json 路径（仅接受 .npz 后缀）。"""
-    if out_path.suffix != ".npz":
-        raise ValueError(f"输出路径必须是 .npz 文件：{out_path}")
-    return out_path.with_suffix(".meta.json")
+    """兼容封装：corpus npz 路径 → 配套 meta.json 路径。"""
+    return corpus_infra.meta_path_for(out_path)
 
 
+# ============================================================
+# 语料流水线
+# ============================================================
 def run_pipeline(
     n: int,
     out_path: Path,
@@ -420,54 +354,34 @@ def run_pipeline(
     t0 = time.perf_counter()
     piezo = PIEZO_MATERIALS[material]
     geom = sample_geometry(n, seed=seed, material=material)
-    n_shards = (n + shard_size - 1) // shard_size
+    rows = [tuple(float(v) for v in geom[i]) for i in range(n)]
     config_tag = _config_tag(n, seed, material, shard_size)
 
-    with ProcessPoolExecutor(max_workers=nprocs) as exe:
-        for shard_idx in range(n_shards):
-            shard_path = shard_dir / f"shard_{shard_idx:05d}.npz"
-            if shard_path.exists():
-                _check_shard_tag(shard_path, config_tag)  # 指纹不符立即中止
-                print(f"[shard {shard_idx + 1}/{n_shards}] 已存在，跳过（断点续跑）")
-                continue
-            lo = shard_idx * shard_size
-            hi = min(n, lo + shard_size)
-            rows = [tuple(float(v) for v in geom[i]) for i in range(lo, hi)]
-            chunksize = max(1, len(rows) // (nprocs * 4))
-            solve = partial(solve_extract_one, piezo=piezo)
-            results = list(exe.map(solve, rows, chunksize=chunksize))
-            _write_shard(shard_path, results, n_attempted=len(rows), config_tag=config_tag)
-            n_ok = sum(1 for r in results if r["valid"])
-            print(f"[shard {shard_idx + 1}/{n_shards}] 求解 {len(rows)} 样本：有效 {n_ok}")
+    n_shards = corpus_infra.solve_shards(
+        rows=rows,
+        solve_one=partial(solve_extract_one, piezo=piezo),
+        shard_dir=shard_dir,
+        shard_size=shard_size,
+        nprocs=nprocs,
+        config_tag=config_tag,
+        fields=SHARD_FIELDS,
+    )
+    merged = corpus_infra.merge_shards(
+        shard_dir=shard_dir, n_shards=n_shards, config_tag=config_tag, fields=SHARD_FIELDS
+    )
+    x = merged["arrays"]["x_geom"]
+    y = merged["arrays"]["y_params"]
+    z = merged["arrays"]["z_dense"]
+    n_attempted = merged["n_attempted"]
+    drop = {reason: 0 for reason in DROP_REASONS}
+    drop.update(merged["drop_counts"])
 
-    # ---- 合并 shards ----
-    xs, ys, zs = [], [], []
-    n_attempted = 0
-    drop = {"no_resonance": 0, "label_nan": 0, "edge_margin": 0, "solver_error": 0}
-    for shard_idx in range(n_shards):
-        shard_path = shard_dir / f"shard_{shard_idx:05d}.npz"
-        if not shard_path.exists():
-            raise FileNotFoundError(f"缺少 shard：{shard_path}（求解不完整）")
-        _check_shard_tag(shard_path, config_tag)  # 合并时复核（防御预置异配置 shard）
-        d = np.load(shard_path)
-        xs.append(d["x_geom"])
-        ys.append(d["y_params"])
-        zs.append(d["z_dense"])
-        n_attempted += int(d["n_attempted"])
-        for reason, count in json.loads(str(d["drop_counts_json"])).items():
-            drop[reason] = drop.get(reason, 0) + int(count)
-
-    x = np.concatenate(xs) if any(len(a) for a in xs) else np.empty((0, 5))
-    y = np.concatenate(ys) if any(len(a) for a in ys) else np.empty((0, 7))
-    z = np.concatenate(zs) if any(len(a) for a in zs) else np.empty((0, 1001))
     freq_ghz = (SOLVE_FREQ_HZ[Z_DENSE_IDX] / 1e9).astype(np.float64)
-
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    # 最终产物同样 tmp + os.replace 原子写，避免中断留下半截文件
-    out_tmp = out_path.with_suffix(".tmp")
-    with open(out_tmp, "wb") as fh:
-        np.savez_compressed(fh, x_geom=x, y_params=y, z_dense=z, freq_ghz=freq_ghz)
-    os.replace(out_tmp, out_path)
+    corpus_infra.atomic_savez(
+        out_path,
+        {"x_geom": x, "y_params": y, "z_dense": z, "freq_ghz": freq_ghz},
+        compressed=True,
+    )
 
     wall = time.perf_counter() - t0
     meta = {
@@ -502,16 +416,13 @@ def run_pipeline(
         "geom_cols": GEOM_COLS,
         "param_cols": PARAM_COLS,
         "label_provenance": LABEL_PROVENANCE,
-        "mason_sim_commit_sha": _git_sha(),
+        "mason_sim_commit_sha": corpus_infra.git_sha(PROJECT_ROOT),
         "wall_time_sec": round(wall, 3),
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "fs_ghz_min": float(y[:, 0].min()) if len(y) else None,
         "fs_ghz_max": float(y[:, 0].max()) if len(y) else None,
     }
-    meta_path = _meta_path(out_path)
-    meta_tmp = meta_path.with_name(meta_path.name + ".tmp")
-    meta_tmp.write_text(json.dumps(meta, ensure_ascii=False, indent=2))
-    os.replace(meta_tmp, meta_path)
+    corpus_infra.atomic_write_json(_meta_path(out_path), meta)
     return meta
 
 
@@ -552,14 +463,14 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     # 数值参数校验（非正数给人类可读报错，argparse error → exit code 2）
-    if args.n <= 0:
-        ap.error(f"--n 必须为正整数（收到 {args.n}）")
-    if args.nprocs <= 0:
-        ap.error(f"--nprocs 必须为正整数（收到 {args.nprocs}）")
-    if args.shard_size <= 0:
-        ap.error(f"--shard-size 必须为正整数（收到 {args.shard_size}）")
-    if args.smoke is not None and args.smoke <= 0:
-        ap.error(f"--smoke 必须为正整数（收到 {args.smoke}）")
+    positive_values: dict[str, int] = {
+        "--n": args.n,
+        "--nprocs": args.nprocs,
+        "--shard-size": args.shard_size,
+    }
+    if args.smoke is not None:
+        positive_values["--smoke"] = args.smoke
+    corpus_infra.validate_positive_ints(ap, positive_values)
 
     if args.calibrate:
         run_calibration(material=args.material)

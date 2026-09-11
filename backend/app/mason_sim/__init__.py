@@ -14,7 +14,11 @@ from app.mason_sim.labels import (
     kt2_identity,
 )
 from app.mason_sim.materials import ALN1, ALSCN, MO, SIN, AcousticMaterial, PiezoMaterial
-from app.mason_sim.prodlabels import extract_epe_production_labels, k2eff_pct_production
+from app.mason_sim.prodlabels import (
+    extract_epe_production_labels,
+    extract_eppe_production_labels,
+    k2eff_pct_production,
+)
 from app.mason_sim.solver import (
     EPEStackParams,
     EPPEParams,
@@ -68,6 +72,7 @@ __all__ = [
     "estimate_q_factor",
     "extract_epe_production_labels",
     "extract_eppe_labels",
+    "extract_eppe_production_labels",
     "find_te1_resonances",
     "find_te2_resonances",
     "k2eff_pct_production",

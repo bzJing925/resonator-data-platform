@@ -131,6 +131,9 @@ class EPPEParams:
         reverse_bot: 下层压电极性符号（+1 正极性 / -1 反极性），默认 +1
         reverse_top: 上层压电极性符号，默认 -1（EPPE 反极性）
         zref: 参考阻抗 (Ω)，默认 50
+        t_pf: PF 钝化层厚度 (m)，声学传输线叠在顶 Mo 之上；0 表示无 PF 层
+            （默认 0.0，与无 PF 的旧行为逐位一致）。字段追加在尾部以保持
+            既有位置传参的 __init__ 签名不变。
     """
 
     t_piezo_bot: float
@@ -142,6 +145,7 @@ class EPPEParams:
     reverse_bot: float = +1.0
     reverse_top: float = -1.0
     zref: float = 50.0
+    t_pf: float = 0.0
 
 
 # ============================================================
@@ -798,6 +802,7 @@ def build_eppe_one_port(
     piezo_top: PiezoMaterial,
     electrode: AcousticMaterial,
     params: EPPEParams,
+    pf_material: AcousticMaterial | None = None,
 ) -> dict[str, object]:
     """构建 EPPE（极性反转双层压电，无中间电极）一端口电路。
 
@@ -806,6 +811,7 @@ def build_eppe_one_port(
         piezo_bot(reverse_bot)，如 AlN(Al 极性, reverse=+1)
         piezo_top(reverse_top)，如 AlScN(N 极性, reverse=-1)
         Top Mo(t_mo_top)
+        PF 质量加载层(t_pf, t_pf=0 时跳过；要求 pf_material 非 None)
 
     接线约定：
     - 每层压电 port3=层顶面、port4=层底面；两层声学端口在界面节点直连级联
@@ -813,9 +819,15 @@ def build_eppe_one_port(
     - 电学子网经悬浮内节点串联：下层 port1=悬浮节点 X、port2=IN；
       上层 port1=GND（顶电极）、port2=X。顶电极接地、底电极接 IN，
       与 build_fbar_one_port 的边界条件完全一致。
-    - 空气背衬边界与 EPE 一致：最外声学表面（顶 Mo 顶面 / 底 Mo 底面）接地。
+    - 空气背衬边界与 EPE 一致：最外声学表面（PF 顶面，或无 PF 时顶 Mo 顶面 /
+      底 Mo 底面）接地。
     - 1V 源激励 IN 对地，z11 = 1 / i_in。
+    - t_pf=0（默认）时完全不 stamp PF 子网，MNA 矩阵与旧行为逐位一致
+      （回归黄金判据）。
     """
+    if params.t_pf > 0.0 and pf_material is None:
+        raise ValueError("t_pf > 0 时必须提供 pf_material（如 SIN）")
+
     area = params.area
     alpha = params.alpha
 
@@ -871,11 +883,28 @@ def build_eppe_one_port(
         reverse=params.reverse_top,
     )
 
-    # 顶部 Mo 电极（声学传输线），上表面接地
+    # PF 质量加载层（声学传输线，无压电耦合），上表面接地；t_pf=0 时跳过
+    if params.t_pf > 0.0:
+        assert pf_material is not None  # 上方已校验（mypy 窄化）
+        pf_bot = "eppe_pf_bot"  # PF 底面 = 顶 Mo 顶面
+        add_acoustic_tline(
+            circ=circ,
+            prefix="EPPE_PF",
+            port_top="0",
+            port_bot=pf_bot,
+            mat=pf_material,
+            thk=params.t_pf,
+            freq=freq,
+        )
+        top_mo_top: str | None = pf_bot
+    else:
+        top_mo_top = "0"
+
+    # 顶部 Mo 电极（声学传输线），上表面接地（有 PF 时接 PF 底面）
     add_acoustic_tline(
         circ=circ,
         prefix="EPPE_TOP_MO",
-        port_top="0",
+        port_top=top_mo_top,
         port_bot=pz_top_top,
         mat=electrode,
         thk=params.t_mo_top,
@@ -894,10 +923,13 @@ def solve_eppe_one_port(
     piezo_top: PiezoMaterial,
     electrode: AcousticMaterial,
     params: EPPEParams,
+    pf_material: AcousticMaterial | None = None,
 ) -> tuple[complex, dict[str, object]]:
     """求解单个频点的 EPPE 输入阻抗 Z11。"""
     circ = MNACircuit()
-    build_info = build_eppe_one_port(circ, freq, piezo_bot, piezo_top, electrode, params)
+    build_info = build_eppe_one_port(
+        circ, freq, piezo_bot, piezo_top, electrode, params, pf_material=pf_material
+    )
     src_label = build_info["src_label"]
 
     x, _node_idx, extra_idx = circ.solve()
@@ -924,12 +956,15 @@ def run_eppe_sweep(
     piezo_top: PiezoMaterial,
     electrode: AcousticMaterial,
     params: EPPEParams,
+    pf_material: AcousticMaterial | None = None,
 ) -> EPPESweepResult:
     """执行 EPPE 一端口扫频。"""
     z11 = np.zeros_like(freq, dtype=complex)
 
     for idx, f in enumerate(freq):
-        z11[idx], _ = solve_eppe_one_port(f, piezo_bot, piezo_top, electrode, params)
+        z11[idx], _ = solve_eppe_one_port(
+            f, piezo_bot, piezo_top, electrode, params, pf_material=pf_material
+        )
 
     s11 = s11_from_z11(z11, params.zref)
 
