@@ -14,14 +14,19 @@ TE2 对 (10,20] GHz 窗 + k2eff512 + calc_q_phase + calc_bodeq），与 WP2a EPE
 
 采样（t_aln 5 档轮换 + 4 维 LHS + 面积 5 档，固定种子 20260911）：
     t_aln ∈ {50, 80, 100, 120, 150} nm 均匀轮换（AlN 下层厚度，brief 定死的离散档）
-    t_alscn ∈ (100, T_ALSCN_MAX_NM] nm（LHS；上限标定见 --calibrate）
+    t_alscn ∈ [100, T_ALSCN_MAX_NM) nm（LHS u∈[0,1)：下界可达、上界不可及；上限标定见 --calibrate）
     t_top / t_bot ∈ [50, 300] nm（LHS）；t_pf ∈ [0, 100] nm（LHS）
     area ∈ {700, 1200, 2000, 3500, 5500} µm² 轮转
     t_aln 与 area 采用正交轮转（i%5 与 (i//5)%5），前 25 样本恰好覆盖 25 种组合。
 
 求解（每样本最多三次扫频，早退省算力）：
     1. 反极性（+1/−1）3–22 GHz @2 MHz（9501 点）→ TE2 生产口径标签
-       （labels 无效则不跑后两次扫频）；
+       （labels 无效则不跑后两次扫频）。
+       口径注记：find_te2_resonances 在 (10,20] 窗内的 edge_skip（窗内 2% 点
+       =200 MHz）使有效检出域隐式内缩为约 [10.2, 19.8] GHz；又因 fp2 须在 fs2
+       之后，fs2 实际接受带上沿约 19.6 GHz。下沿由 T_MAX 标定的 300 MHz 边距
+       覆盖（EPE 侧同类问题用显式 edge-margin 守卫剔除；EPPE 侧窗界+标定边距
+       已覆盖，此处记录口径，见 meta.json te2_window_note）；
     2. 同极性（+1/+1）同网格对照 → f1_twin（该声学堆叠基模），支路核验：
        要求 BRANCH_RATIO_LO <= fs2/f1_twin <= BRANCH_RATIO_HI（f2 偶模支路
        比值窗口锚定，见下文"支路核验"），通过后才跑第 3 次；
@@ -519,6 +524,9 @@ def _config_tag(n: int, seed: int, shard_size: int, material_info: dict, alpha: 
         "zref_ohm": ZREF,
         "piezo_bot": ALN1.name,
         "piezo_top_sha256": material_info["sha256"],
+        # 代码常量材料指纹（ALN1/MO/SIN）：与 piezo_top sha256 对称，
+        # 防 mason_sim.materials 常量改动后旧 shard 被静默复用
+        "code_materials": corpus_infra.materials_fingerprint([ALN1, MO, SIN]),
     }
     return corpus_infra.make_config_tag(payload)
 
@@ -609,6 +617,12 @@ def run_pipeline(
             ),
         },
         "te2_window_ghz": [TE2_WINDOW_HZ[0] / 1e9, TE2_WINDOW_HZ[1] / 1e9],
+        "te2_window_note": (
+            "find_te2_resonances 的 edge_skip（窗内 2% 点=200 MHz）使 TE2 有效检出域"
+            "隐式内缩为约 [10.2, 19.8] GHz；fp2 须在 fs2 之后，fs2 实际接受带上沿"
+            "约 19.6 GHz。下沿由 T_MAX 标定的 300 MHz 边距覆盖"
+            "（EPE 侧同类问题用显式 edge-margin 守卫剔除）"
+        ),
         "te1_diag_window_ghz": [TE1_DIAG_WINDOW_HZ[0] / 1e9, TE1_DIAG_WINDOW_HZ[1] / 1e9],
         "branch_guard": {
             "ratio_lo": BRANCH_RATIO_LO,

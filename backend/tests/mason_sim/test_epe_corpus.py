@@ -288,3 +288,19 @@ def test_meta_path_suffix_validation() -> None:
     assert corpus._meta_path(Path("/x/epe_corpus.npz")) == Path("/x/epe_corpus.meta.json")
     with pytest.raises(ValueError, match="npz"):
         corpus._meta_path(Path("/x/epe_corpus.txt"))
+
+
+def test_config_tag_includes_code_materials_fingerprint() -> None:
+    """P9（WP2b 复审加固）：config_tag 计入代码常量材料指纹（piezo/MO/SIN）。
+
+    与直接计算一致；ALSCN 与 ALN1 口径指纹不同（材料不同 → 指纹不同）。
+    """
+    from app.mason_sim import ALN1, ALSCN, MO, SIN
+    from app.mason_sim import corpus as corpus_infra
+
+    tag_scn = json.loads(corpus._config_tag(12, corpus.SEED_DEFAULT, "ALSCN", 5))
+    assert tag_scn["code_materials"] == corpus_infra.materials_fingerprint([ALSCN, MO, SIN])
+    assert len(tag_scn["code_materials"]) == 64
+    tag_aln = json.loads(corpus._config_tag(12, corpus.SEED_DEFAULT, "ALN1", 5))
+    assert tag_aln["code_materials"] == corpus_infra.materials_fingerprint([ALN1, MO, SIN])
+    assert tag_aln["code_materials"] != tag_scn["code_materials"]

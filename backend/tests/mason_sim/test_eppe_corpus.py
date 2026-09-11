@@ -117,6 +117,17 @@ def test_solve_and_dense_grids() -> None:
 # ============================================================
 # 支路核验
 # ============================================================
+def test_config_tag_includes_code_materials_fingerprint(cal_materials) -> None:
+    """config_tag 计入代码常量材料指纹（ALN1/MO/SIN），与直接计算一致（防常量改动混料）。"""
+    from app.mason_sim import MO, SIN
+    from app.mason_sim import corpus as corpus_infra
+
+    piezo_top, alpha, info = cal_materials
+    payload = json.loads(corpus._config_tag(12, TEST_SEED, 5, info, alpha))
+    assert payload["code_materials"] == corpus_infra.materials_fingerprint([ALN1, MO, SIN])
+    assert len(payload["code_materials"]) == 64
+
+
 def test_branch_anchor_ok_unit() -> None:
     """支路核验谓词：f2/f1 比值窗口 [1.9, 2.8]（含端点）；nan/非正 f1 一律拒绝。"""
     ok = corpus.branch_anchor_ok
@@ -251,7 +262,12 @@ def _run_12(tmp_path: Path) -> tuple[Path, Path]:
 
 
 def test_end_to_end_12_samples(tmp_path: Path) -> None:
-    """12 样本端到端：形状/dtype/有限性/物理范围/meta 字段；丢弃计数闭合。"""
+    """12 样本端到端：形状/dtype/有限性/物理范围/meta 字段；丢弃计数闭合。
+
+    产量钉死 m==4（2026-09-11 比值窗口守卫下实测；种子/材料/几何采样全确定，
+    产量完全可复现）——保证下方 TE2 窗/支路比值/有限性断言必然执行
+    （不接受 0 产量空转）。
+    """
     out, _shards = _run_12(tmp_path)
 
     data = np.load(out)
@@ -262,7 +278,7 @@ def test_end_to_end_12_samples(tmp_path: Path) -> None:
     diag = data["diag"]
 
     m = x.shape[0]
-    assert 0 <= m <= 12
+    assert m == 4, f"产量漂移（期望 4，实测 {m}）——种子/材料/守卫语义被改动？"
     assert x.shape == (m, 6) and x.dtype == np.float64
     assert y.shape == (m, 7) and y.dtype == np.float64
     assert z.shape == (m, 2801) and z.dtype == np.complex64
@@ -270,17 +286,16 @@ def test_end_to_end_12_samples(tmp_path: Path) -> None:
     assert diag.shape == (m, 4) and diag.dtype == np.float64
     np.testing.assert_allclose(f, 8.0 + 0.005 * np.arange(2801), rtol=0.0, atol=1e-12)
 
-    if m > 0:
-        assert np.isfinite(x).all()
-        assert np.isfinite(y).all()
-        assert np.isfinite(z.real).all() and np.isfinite(z.imag).all()
-        # TE2 窗约束与 fp>fs 在产物上成立
-        assert ((y[:, 0] > 10.0) & (y[:, 0] <= 20.0)).all()
-        assert (y[:, 1] > y[:, 0]).all()
-        assert ((y[:, 2] > 0.0) & (y[:, 2] < 20.0)).all()  # AlScN kt2≈19% 物理天花板
-        # 支路核验在产物上成立：f2/f1_twin ∈ [1.9, 2.8]
-        ratio = y[:, 0] / diag[:, 3]
-        assert ((ratio >= corpus.BRANCH_RATIO_LO) & (ratio <= corpus.BRANCH_RATIO_HI)).all()
+    assert np.isfinite(x).all()
+    assert np.isfinite(y).all()
+    assert np.isfinite(z.real).all() and np.isfinite(z.imag).all()
+    # TE2 窗约束与 fp>fs 在产物上成立
+    assert ((y[:, 0] > 10.0) & (y[:, 0] <= 20.0)).all()
+    assert (y[:, 1] > y[:, 0]).all()
+    assert ((y[:, 2] > 0.0) & (y[:, 2] < 20.0)).all()  # AlScN kt2≈19% 物理天花板
+    # 支路核验在产物上成立：f2/f1_twin ∈ [1.9, 2.8]
+    ratio = y[:, 0] / diag[:, 3]
+    assert ((ratio >= corpus.BRANCH_RATIO_LO) & (ratio <= corpus.BRANCH_RATIO_HI)).all()
 
     meta = json.loads((tmp_path / "corpus.meta.json").read_text())
     assert meta["seed"] == TEST_SEED

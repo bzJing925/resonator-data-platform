@@ -325,6 +325,9 @@ def _config_tag(n: int, seed: int, material: str, shard_size: int) -> str:
         "edge_margin_mhz": EDGE_MARGIN_HZ / 1e6,
         "alpha": ALPHA,
         "zref_ohm": ZREF,
+        # 代码常量材料指纹（当前压电材料/MO/SIN）：防 mason_sim.materials 常量
+        # 改动后旧 shard 被静默复用（WP2b 复审加固）
+        "code_materials": corpus_infra.materials_fingerprint([PIEZO_MATERIALS[material], MO, SIN]),
     }
     return corpus_infra.make_config_tag(payload)
 

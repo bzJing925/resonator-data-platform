@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -33,6 +34,22 @@ from pathlib import Path
 import numpy as np
 
 SHARD_NAME_FMT = "shard_{idx:05d}.npz"
+
+
+def materials_fingerprint(materials: Sequence[object]) -> str:
+    """代码常量材料指纹：各材料 {name + 数值字段} canonical JSON 的 sha256。
+
+    支持 PiezoMaterial（name/rho/c33/e33/eps）与 AcousticMaterial（name/rho/v/alpha）
+    （字段经 vars() 反射取得，新增字段自动计入）。凡影响 shard 内容的材料常量
+    都必须经此计入 config_tag——防止 mason_sim.materials 常量被改动后，
+    旧 shard 被静默复用（指纹即变，续跑拒绝）。
+    """
+    payload: list[dict] = []
+    for m in materials:
+        fields = {k: float(v) for k, v in vars(m).items() if k != "name"}
+        payload.append({"name": str(m.name), **fields})
+    canonical = json.dumps(payload, sort_keys=True)
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 @dataclass(frozen=True)

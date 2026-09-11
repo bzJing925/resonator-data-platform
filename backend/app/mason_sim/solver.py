@@ -147,6 +147,12 @@ class EPPEParams:
     zref: float = 50.0
     t_pf: float = 0.0
 
+    def __post_init__(self) -> None:
+        # t_pf 负值/NaN/inf 会在 build 的 `t_pf > 0` 分支静默退化为无 PF 层，
+        # 必须在构造期拒绝（fail-fast，含语料 worker 路径）。
+        if not np.isfinite(self.t_pf) or self.t_pf < 0.0:
+            raise ValueError(f"t_pf 必须为有限非负值（0 表示无 PF 层），收到 {self.t_pf!r}")
+
 
 # ============================================================
 # MNA circuit

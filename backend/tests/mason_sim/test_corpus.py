@@ -217,6 +217,29 @@ def test_git_sha_format() -> None:
     assert len(base) == 40 and all(c in "0123456789abcdef" for c in base)
 
 
+def test_materials_fingerprint_deterministic_and_sensitive() -> None:
+    """材料指纹：同材料同值 → 同指纹；任一数值字段或名称扰动 → 指纹变。"""
+    from app.mason_sim.materials import ALN1, MO, SIN, AcousticMaterial, PiezoMaterial
+
+    fp1 = corpus.materials_fingerprint([ALN1, MO, SIN])
+    fp2 = corpus.materials_fingerprint([ALN1, MO, SIN])
+    assert fp1 == fp2 and len(fp1) == 64
+
+    # 压电层数值扰动（c33 ×1.0001）→ 指纹变
+    aln_perturbed = PiezoMaterial(
+        name=ALN1.name, rho=ALN1.rho, c33=ALN1.c33 * 1.0001, e33=ALN1.e33, eps=ALN1.eps
+    )
+    assert corpus.materials_fingerprint([aln_perturbed, MO, SIN]) != fp1
+    # 声学层数值扰动（Mo v +1）→ 指纹变
+    mo_perturbed = AcousticMaterial(name=MO.name, rho=MO.rho, v=MO.v + 1.0, alpha=MO.alpha)
+    assert corpus.materials_fingerprint([ALN1, mo_perturbed, SIN]) != fp1
+    # 只改名（数值不变）→ 指纹也变（name 计入，防止同名异物静默混料）
+    aln_renamed = PiezoMaterial(
+        name="AlN_renamed", rho=ALN1.rho, c33=ALN1.c33, e33=ALN1.e33, eps=ALN1.eps
+    )
+    assert corpus.materials_fingerprint([aln_renamed, MO, SIN]) != fp1
+
+
 def test_meta_path_for_derivation() -> None:
     """meta 路径派生：.npz → .meta.json；非 .npz 报错。"""
     assert corpus.meta_path_for(Path("/x/corpus.npz")) == Path("/x/corpus.meta.json")

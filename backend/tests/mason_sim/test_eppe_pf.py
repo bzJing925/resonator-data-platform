@@ -63,6 +63,16 @@ def test_t_pf_default_is_zero() -> None:
     assert _eppe_params().t_pf == 0.0
 
 
+def test_t_pf_negative_or_nan_rejected() -> None:
+    """t_pf 负值/NaN/inf 一律 ValueError（不得静默退化为无 PF 层）。"""
+    with pytest.raises(ValueError, match="t_pf"):
+        _eppe_params(-1.0)
+    with pytest.raises(ValueError, match="t_pf"):
+        _eppe_params(float("nan"))
+    with pytest.raises(ValueError, match="t_pf"):
+        _eppe_params(float("inf"))
+
+
 def test_t_pf_zero_sweep_bitwise_identical_to_default() -> None:
     """显式 t_pf=0.0 与默认构造的扫频结果逐位一致（退化情形不改动既有电路）。"""
     freq = build_frequency_grid(3e9, 22e9, f_step_hz=2e6)
