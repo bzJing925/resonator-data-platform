@@ -1,0 +1,37 @@
+{
+  "piezo": {
+    "name": "AlScN_cal",
+    "rho": 3280.17,
+    "c33": 269494996623.44724,
+    "e33": 2.337460977703177,
+    "eps": 1.071577200808711e-10
+  },
+  "alpha": 0.021999999999823393,
+  "t_piezo_nm": 363.6547145782041,
+  "t_mo_nm": 130.0,
+  "t_pf_nm_pf1": 63.5,
+  "target": "baseline.npz area-mean pf=0",
+  "method": "scipy.optimize.least_squares (trf, jac=3-point, bounds 严格) 多起点（名义+LHS，固定种子）；pf=0 面积均值 7 参数加权残差；pf=1 由 pf=0 结果直接预测（变体 A，t_pf=63.5 nm SiN）",
+  "bounds_pct": 10.0,
+  "residuals_summary": {
+    "pf0": {
+      "fs_mhz": 1.0999999999992127,
+      "fp_mhz": -0.43749999999942446,
+      "k2eff_pct_pt": 0.02065368910809795,
+      "qs_rel_pct": 90.15971787666624,
+      "qp_rel_pct": -40.54983435030704,
+      "qs_bodeq_rel_pct": 162.74024342354605,
+      "qp_bodeq_rel_pct": -40.14795886953513,
+      "objective_cost": 758.0871009000816
+    },
+    "pf1_predict": {
+      "fs_mhz": 300.2500000000001,
+      "fp_mhz": 408.10833333333375,
+      "k2eff_pct_pt": 3.967320424795668,
+      "weighted_rms": 191.83145262494318
+    },
+    "joint_variant_pf1_weighted_rms": 121.01005868532334
+  },
+  "commit_sha": "fbcac9867f662059d4b41bab7b87fdefc9ddd733",
+  "calibrated_at": "2026-09-11T03:03:42.498133+00:00"
+}
