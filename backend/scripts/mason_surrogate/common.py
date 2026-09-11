@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import math
 import sys
 from pathlib import Path
 from typing import NamedTuple
@@ -36,6 +37,17 @@ Q_COLS = (3, 4, 5, 6)  # qs, qp, qs_bodeq, qp_bodeq
 
 
 # ---------------------------------------------------------------- 归一化
+
+
+def json_safe(obj):
+    """递归把 NaN/±Inf 浮点转 None（JSON 标准不允许；配合 allow_nan=False 兜底响亮失败）。"""
+    if isinstance(obj, dict):
+        return {k: json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [json_safe(v) for v in obj]
+    if isinstance(obj, float) and not math.isfinite(obj):
+        return None
+    return obj
 
 
 class NormStats(NamedTuple):

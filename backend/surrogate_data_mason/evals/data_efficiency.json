@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-11T12:29:17.097104+00:00",
+  "generated_at": "2026-09-11T13:28:22.190610+00:00",
   "task": "WP4b data-efficiency: EPPE subset size × {scratch, EPE-pretrain→finetune}",
   "seed_base": 20260913,
   "source_data": "surrogate_data_mason/unified_dataset.npz",

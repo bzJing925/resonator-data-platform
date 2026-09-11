@@ -22,7 +22,6 @@ train_stage2_mason.py 的 CLI 不支持 checkpoint 初始化（该脚本正由�
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import sys
 import time
@@ -39,6 +38,7 @@ for p in (PROJECT_ROOT, SCRIPTS_DIR):
         sys.path.insert(0, str(p))
 
 from app.ml.sparse.reconstructor import SparseReconstructor  # noqa: E402
+from mason_surrogate.build_unified_dataset import file_sha256  # noqa: E402
 from mason_surrogate.common import (  # noqa: E402
     NormStats,
     UnifiedMLP,
@@ -47,11 +47,14 @@ from mason_surrogate.common import (  # noqa: E402
     build_cond,
     build_sparse_samples,
     fit_norm,
+    json_safe,
     masked_mse,
     precompute_baselines,
 )
-
-FP_RATIO_CLIP = (1.0005, 1.5)
+from mason_surrogate.train_stage1_mason import (  # noqa: E402
+    load_unified,
+    predict_fp_ratio,
+)
 
 DEFAULT_CFG = {
     "data": "surrogate_data_mason/unified_dataset.npz",
@@ -63,7 +66,7 @@ DEFAULT_CFG = {
     "lr": 1e-3,
     "weight_decay": 1e-4,
     "patience": 20,
-    "k": 256,
+    # 注意：k 不在 cfg——稀疏位置数以 Stage 1 ckpt 为准（对齐 801730d 后的原版）
     "d_model": 64,
     "n_layers": 4,
     "n_heads": 4,
@@ -79,27 +82,9 @@ DEFAULT_CFG = {
 }
 
 
-def load_unified(path: str | Path) -> dict[str, NDArray]:
-    with np.load(path) as d:
-        return {k: d[k] for k in d.files}
-
-
-def sha256_file(path: str | Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def predict_fp_ratio(params_denorm: NDArray[np.float64]) -> NDArray[np.float64]:
-    ratio = params_denorm[:, 1] / np.maximum(params_denorm[:, 0], 1e-9)
-    return np.clip(ratio, FP_RATIO_CLIP[0], FP_RATIO_CLIP[1])
-
-
 @torch.no_grad()
-def stage1_predict(cfg: dict, data: dict[str, NDArray]) -> tuple[NDArray, NDArray]:
-    """Stage 1 checkpoint 前向：去归一化 7 参数 + 归一化 dB 稀疏值（K 个）。"""
+def stage1_predict(cfg: dict, data: dict[str, NDArray]) -> tuple[NDArray, NDArray, int]:
+    """Stage 1 checkpoint 前向：去归一化 7 参数 + 归一化 dB 稀疏值 + k（ckpt 为准）。"""
     s1_cfg = json.loads(Path(cfg["stage1_config"]).read_text(encoding="utf-8"))
     ckpt = torch.load(cfg["stage1_ckpt"], map_location="cpu", weights_only=True)
     model = UnifiedMLP(in_dim=7, hidden=ckpt["hidden"], n_res_blocks=ckpt["n_res_blocks"],
@@ -115,7 +100,7 @@ def stage1_predict(cfg: dict, data: dict[str, NDArray]) -> tuple[NDArray, NDArra
         params.append(out["params"].numpy())
         sparse.append(out["sparse"].numpy())
     params_pred = np.concatenate(params, axis=0) * y_stats.std + y_stats.mean
-    return params_pred, np.concatenate(sparse, axis=0)
+    return params_pred, np.concatenate(sparse, axis=0), int(ckpt["k"])
 
 
 def prepare(cfg: dict) -> dict:
@@ -130,7 +115,7 @@ def prepare(cfg: dict) -> dict:
     s1_cfg = json.loads(Path(cfg["stage1_config"]).read_text(encoding="utf-8"))
     db_mean, db_std = float(s1_cfg["db_mean"]), float(s1_cfg["db_std"])
 
-    params_pred, sparse_pred_norm = stage1_predict(cfg, data)
+    params_pred, sparse_pred_norm, k = stage1_predict(cfg, data)
     fp_ratio_pred = predict_fp_ratio(params_pred)
 
     cond_raw = build_cond(params_pred)
@@ -142,12 +127,20 @@ def prepare(cfg: dict) -> dict:
         cond_stats = fit_norm(cond_raw[tr_np])
         norm_source = "fit_train"
 
-    pos = batch_sparse_positions(grid, fp_ratio_pred, k=cfg["k"])
+    # 稀疏位置来自预测 fp_ratio（训练/推理一致）；k 以 Stage 1 ckpt 为准
+    pos = batch_sparse_positions(grid, fp_ratio_pred, k=k)
     samples_raw, valid = build_sparse_samples(data["z_w_db"], data["w_mask"], pos, grid)
     samples = samples_raw.copy()
     samples[..., 1] = (samples[..., 1] - db_mean) / db_std
     samples_e2e = samples_raw.copy()
     samples_e2e[..., 1] = sparse_pred_norm.astype(np.float32)
+
+    n_valid_sparse_min = int(valid.sum(1).min())
+    # 全掩码样本会让 attention 全 pad → NaN 静默污染；构建器已丢弃零覆盖，此处兜底断言
+    assert n_valid_sparse_min >= 1, (
+        f"存在 n_valid_sparse=0 的样本（min={n_valid_sparse_min}）："
+        "稀疏点全无效会污染 attention，检查数据集构建"
+    )
 
     t_base = time.time()
     baseline = precompute_baselines(pos, samples[..., 1], valid, grid, fill_value=0.0)
@@ -171,9 +164,12 @@ def prepare(cfg: dict) -> dict:
         "cond_stats": cond_stats,
         "norm_source": norm_source,
         "db_mean": db_mean, "db_std": db_std,
+        "k": k,
+        "n_valid_sparse_min": n_valid_sparse_min,
     }
     print(f"stage2 prepare: {time.time() - t0:.1f}s "
-          f"(n_train={len(tr_np)} n_val={len(va_np)} n_test={len(te_np)})", flush=True)
+          f"(n_train={len(tr_np)} n_val={len(va_np)} n_test={len(te_np)} "
+          f"k={k} min_valid_sparse={n_valid_sparse_min})", flush=True)
     return arrays
 
 
@@ -306,13 +302,15 @@ def train(cfg: dict) -> dict:
         {"model_state": model.state_dict(), "d_model": cfg["d_model"],
          "n_layers": cfg["n_layers"], "n_heads": cfg["n_heads"],
          "dim_feedforward": cfg["dim_feedforward"], "dropout": cfg["dropout"],
-         "max_freq": float(cfg["max_freq"]), "k": cfg["k"], "best_epoch": r["best_epoch"]},
+         "max_freq": float(cfg["max_freq"]), "k": a["k"], "best_epoch": r["best_epoch"]},
         out_dir / "stage2.pt",
     )
     config = {
         **{k_: cfg[k_] for k_ in ("epochs", "batch_size", "lr", "weight_decay", "patience",
-                                  "k", "d_model", "n_layers", "n_heads", "dim_feedforward",
+                                  "d_model", "n_layers", "n_heads", "dim_feedforward",
                                   "dropout", "seed", "num_threads", "train_target_stride")},
+        "k": a["k"],
+        "k_source": "stage1 ckpt（稀疏位置数以 Stage 1 为准）",
         "epochs_run": len(r["history"]),
         "best_epoch": r["best_epoch"],
         "best_val": r["best_val"],
@@ -328,19 +326,22 @@ def train(cfg: dict) -> dict:
         "db_mean": a["db_mean"], "db_std": a["db_std"],
         "stage1_ckpt": cfg["stage1_ckpt"],
         "stage1_config": cfg["stage1_config"],
-        "dataset_sha256": sha256_file(cfg["data"]),
+        "dataset_sha256": file_sha256(Path(cfg["data"])),
         "train_seconds": train_seconds,
     }
     (out_dir / "stage2_config.json").write_text(
-        json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8"
+        json.dumps(json_safe(config), indent=2, ensure_ascii=False, allow_nan=False),
+        encoding="utf-8",
     )
-    (out_dir / "stage2_history.json").write_text(json.dumps(r["history"], indent=2),
-                                                 encoding="utf-8")
+    (out_dir / "stage2_history.json").write_text(
+        json.dumps(json_safe(r["history"]), indent=2, allow_nan=False), encoding="utf-8"
+    )
     (out_dir / "stage2_eval.json").write_text(
-        json.dumps({"eval": ev, "best_epoch": r["best_epoch"], "best_val": r["best_val"],
-                    "epochs_run": len(r["history"]), "train_seconds": train_seconds,
-                    "max_freq": float(cfg["max_freq"])},
-                   indent=2, ensure_ascii=False),
+        json.dumps(json_safe({"eval": ev, "best_epoch": r["best_epoch"],
+                              "best_val": r["best_val"],
+                              "epochs_run": len(r["history"]), "train_seconds": train_seconds,
+                              "max_freq": float(cfg["max_freq"])}),
+                   indent=2, ensure_ascii=False, allow_nan=False),
         encoding="utf-8",
     )
     print(f"saved: {out_dir / 'stage2.pt'} (best val={r['best_val']:.6f} "
@@ -358,7 +359,7 @@ def main() -> None:
     ap.add_argument("--out", dest="out_dir", default=DEFAULT_CFG["out_dir"])
     ap.add_argument("--stage1-ckpt", default=DEFAULT_CFG["stage1_ckpt"])
     ap.add_argument("--stage1-config", default=DEFAULT_CFG["stage1_config"])
-    for key in ("epochs", "batch_size", "patience", "k", "d_model", "n_layers", "n_heads",
+    for key in ("epochs", "batch_size", "patience", "d_model", "n_layers", "n_heads",
                 "dim_feedforward", "seed", "num_threads", "train_target_stride"):
         ap.add_argument(f"--{key.replace('_', '-')}", type=int, default=DEFAULT_CFG[key])
     for key in ("lr", "weight_decay", "dropout", "max_freq"):

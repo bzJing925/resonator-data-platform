@@ -28,7 +28,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import subprocess
 import sys
@@ -44,6 +43,9 @@ SCRIPTS_DIR = Path(__file__).resolve().parents[1]
 for p in (PROJECT_ROOT, SCRIPTS_DIR):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
+
+from mason_surrogate.build_unified_dataset import file_sha256  # noqa: E402
+from mason_surrogate.common import json_safe  # noqa: E402
 
 SCRIPT_S1 = SCRIPTS_DIR / "mason_surrogate" / "train_stage1_mason_subset.py"
 SCRIPT_S2 = SCRIPTS_DIR / "mason_surrogate" / "train_stage2_mason_subset.py"
@@ -139,7 +141,7 @@ def write_subset_npz(data: dict[str, NDArray], rows: dict[int, NDArray], out_pat
             arrays[key] = arr[order]
         else:
             arrays[key] = arr
-    np.savez(out_path, **arrays)
+    np.savez_compressed(out_path, **arrays)  # 压缩落盘（子集约 98MB 磁盘缩减）
     return out_path
 
 
@@ -170,24 +172,25 @@ def finetune_protocols(cfg: dict) -> list[tuple[str, str, float]]:
 
 # ---------------------------------------------------------------- 子进程驱动
 
-
-def sha256_file(path: str | Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
+SUBPROCESS_TIMEOUT_S = 4 * 3600  # 4h 裕量：hang 变响亮失败而非无限等待
 
 
 def run_script(script: Path, args: list[str], log_path: Path) -> None:
-    """以当前 venv 解释器子进程跑训练脚本，日志落盘；失败时带日志尾部报错。"""
+    """以当前 venv 解释器子进程跑训练脚本，日志落盘；失败/超时带日志尾部报错。"""
     log_path.parent.mkdir(parents=True, exist_ok=True)
     cmd = [sys.executable, str(script), *args]
     t0 = time.time()
     with open(log_path, "w", encoding="utf-8") as lf:
         lf.write(f"cmd: {' '.join(cmd)}\nstart: {datetime.now(UTC).isoformat()}\n")
         lf.flush()
-        proc = subprocess.run(cmd, cwd=PROJECT_ROOT, stdout=lf, stderr=subprocess.STDOUT)
+        try:
+            proc = subprocess.run(cmd, cwd=PROJECT_ROOT, stdout=lf,
+                                  stderr=subprocess.STDOUT, timeout=SUBPROCESS_TIMEOUT_S)
+        except subprocess.TimeoutExpired as e:
+            tail = "\n".join(log_path.read_text(encoding="utf-8").splitlines()[-30:])
+            raise RuntimeError(
+                f"训练子进程超时（>{SUBPROCESS_TIMEOUT_S}s）log={log_path}\n{tail}"
+            ) from e
     dt = time.time() - t0
     if proc.returncode != 0:
         tail = "\n".join(log_path.read_text(encoding="utf-8").splitlines()[-30:])
@@ -468,11 +471,14 @@ def phase_aggregate(cfg: dict) -> dict:
                     missing.append(d.name)
     anchor_rows: list[dict] = []
     s2_pre = out_root / "s2_pretrain"
-    if (s2_pre / "stage2_eval.json").exists():
+    pre_eval = pre_dir / "stage1_eval.json"
+    if (s2_pre / "stage2_eval.json").exists() and pre_eval.exists():
         anchor_rows.append({"n_eppe_train": 0, "mode": "zeroshot", "protocol": "n/a",
                             "seed": base, "out_dir": str(s2_pre),
-                            **collect_stage1_metrics(pre_dir / "stage1_eval.json"),
+                            **collect_stage1_metrics(pre_eval),
                             **collect_stage2_metrics(s2_pre / "stage2_eval.json")})
+    elif (s2_pre / "stage2_eval.json").exists():
+        missing.append(f"{pre_dir.name}/stage1_eval.json (anchor zeroshot 缺 stage1 侧)")
     variants = [("scratch", "n/a"), *[(dm, p) for dm, p, _ in protos]]
     for dir_mode, proto in variants:
         d = out_root / f"s2_{dir_mode}_n{ANCHOR_N}_s{base}"
@@ -492,7 +498,8 @@ def phase_aggregate(cfg: dict) -> dict:
         "task": "WP4b data-efficiency: EPPE subset size × {scratch, EPE-pretrain→finetune}",
         "seed_base": base,
         "source_data": cfg["data"],
-        "source_data_sha256": sha256_file(cfg["data"]) if Path(cfg["data"]).exists() else None,
+        "source_data_sha256": file_sha256(Path(cfg["data"]))
+        if Path(cfg["data"]).exists() else None,
         "config": {k: cfg[k] for k in ("ns", "epochs", "patience", "lr", "batch_size",
                                        "epochs_stage2", "patience_stage2", "lr_stage2",
                                        "max_freq", "finetune_protocols")},
@@ -503,7 +510,10 @@ def phase_aggregate(cfg: dict) -> dict:
     }
     eval_out = Path(cfg["eval_out"])
     eval_out.parent.mkdir(parents=True, exist_ok=True)
-    eval_out.write_text(json.dumps(doc, indent=2, ensure_ascii=False), encoding="utf-8")
+    eval_out.write_text(
+        json.dumps(json_safe(doc), indent=2, ensure_ascii=False, allow_nan=False),
+        encoding="utf-8",
+    )
     xlsx = write_xlsx(curve_rows, anchor_rows, cfg["xlsx_out"], readme)
     print(f"saved: {eval_out}\nsaved: {xlsx}", flush=True)
     if missing:

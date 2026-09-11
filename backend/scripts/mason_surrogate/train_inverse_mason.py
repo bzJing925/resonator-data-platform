@@ -21,14 +21,12 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import sys
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import NamedTuple
 
 import numpy as np
 import torch
@@ -38,9 +36,21 @@ from numpy.typing import NDArray
 _F = nn.functional  # mse_loss / cross_entropy（避免 N812 非小写别名）
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]  # backend/
-for p in (PROJECT_ROOT,):
+SCRIPTS_DIR = Path(__file__).resolve().parents[1]
+for p in (PROJECT_ROOT, SCRIPTS_DIR):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
+
+# 归一化/IO 复用包内既有件（common.py / build_unified_dataset / train_stage1_mason）
+from mason_surrogate.build_unified_dataset import file_sha256  # noqa: E402
+from mason_surrogate.common import (  # noqa: E402
+    NormStats,
+    apply_norm,
+    fit_norm,
+    invert_norm,
+    json_safe,
+)
+from mason_surrogate.train_stage1_mason import load_unified  # noqa: E402
 
 Y_FS_COL = 0  # y7 第 0 列 = fs_ghz（输入前 7 列即 y7 归一化）
 FLAG_COL = 7  # 输入第 8 列 = structure_flag
@@ -66,42 +76,7 @@ DEFAULT_CFG = {
 }
 
 
-# --------------------------------------------- 归一化（本地实现，独立于 common.py）
-
-
-class NormStats(NamedTuple):
-    mean: NDArray[np.float64]
-    std: NDArray[np.float64]
-
-
-def fit_norm(x: NDArray) -> NormStats:
-    mean = np.asarray(x, dtype=np.float64).mean(axis=0)
-    std = np.asarray(x, dtype=np.float64).std(axis=0)
-    return NormStats(mean, np.where(std < 1e-12, 1.0, std))
-
-
-def apply_norm(x: NDArray, stats: NormStats) -> NDArray[np.float32]:
-    return ((np.asarray(x, dtype=np.float64) - stats.mean) / stats.std).astype(np.float32)
-
-
-def invert_norm(x: NDArray, stats: NormStats) -> NDArray[np.float64]:
-    return np.asarray(x, dtype=np.float64) * stats.std + stats.mean
-
-
-def load_unified(path: str | Path) -> dict[str, NDArray]:
-    with np.load(path) as d:
-        return {k: d[k] for k in d.files}
-
-
-def sha256_file(path: str | Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-# --------------------------------------------- 模型（新写，不 import 既有脚本内部件）
+# --------------------------------------------- 模型（反向三头为本文件新写）
 
 
 class _ResBlock(nn.Module):
@@ -149,7 +124,11 @@ def routed_loss(
     cls_tgt: torch.Tensor,
     t2_tgt: torch.Tensor,
 ) -> torch.Tensor:
-    """按 structure_flag 路由：EPE(flag=0) 只算 t1 MSE；EPPE(flag=1) 算 cls CE + t2 MSE。"""
+    """按 structure_flag 路由：EPE(flag=0) 只算 t1 MSE；EPPE(flag=1) 算 cls CE + t2 MSE。
+
+    注意损失是项级等权（t1 / cls / t2 各项取各自子集均值后直接相加），
+    而非样本级等权：批内 EPE/EPPE 比例不影响各项权重。
+    """
     epe = flag == 0
     eppe = ~epe
     losses: list[torch.Tensor] = []
@@ -408,14 +387,17 @@ def train(cfg: dict) -> dict:
         "t1_mean": t1_stats.mean.tolist(), "t1_std": t1_stats.std.tolist(),
         "t2_mean": t2_stats.mean.tolist(), "t2_std": t2_stats.std.tolist(),
         "t_aln_classes": list(T_ALN_CLASSES),
-        "dataset_sha256": sha256_file(cfg["data"]),
+        "dataset_sha256": file_sha256(Path(cfg["data"])),
         "norm_note": "y7 统计仅由 train split 计算；flag 列不归一化；"
         "t1 统计仅 EPE train（t_piezo）；t2 统计仅 EPPE train（t_alscn）",
     }
     (out_dir / "inverse_config.json").write_text(
-        json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8"
+        json.dumps(json_safe(config), indent=2, ensure_ascii=False, allow_nan=False),
+        encoding="utf-8",
     )
-    (out_dir / "inverse_history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
+    (out_dir / "inverse_history.json").write_text(
+        json.dumps(json_safe(history), indent=2, allow_nan=False), encoding="utf-8"
+    )
 
     # ---- 评估：clean + fs 抖动鲁棒性 + 灵敏度一致性 ----
     clean = evaluate_from_checkpoint(out_dir, data, config)
@@ -484,7 +466,10 @@ def train(cfg: dict) -> dict:
     }
     eval_path = Path(cfg["eval_out"])
     eval_path.parent.mkdir(parents=True, exist_ok=True)
-    eval_path.write_text(json.dumps(eval_doc, indent=2, ensure_ascii=False), encoding="utf-8")
+    eval_path.write_text(
+        json.dumps(json_safe(eval_doc), indent=2, ensure_ascii=False, allow_nan=False),
+        encoding="utf-8",
+    )
     print(f"saved: {out_dir / 'inverse.pt'} (best val={best_val:.5f} @epoch {best_epoch})")
     print(f"saved: {eval_path}")
     print_eval(eval_doc)
@@ -494,7 +479,8 @@ def train(cfg: dict) -> dict:
 
 def print_eval(doc: dict) -> None:
     t = doc["test"]
-    print("\n== 反向模型 test 评估（clean / fs±10MHz 抖动）==")
+    jitter_mhz = t["fs_jitter"]["delta_mhz"]
+    print(f"\n== 反向模型 test 评估（clean / fs±{jitter_mhz:.0f}MHz 抖动）==")
     if "epe" in t["clean"]:
         e, ej = t["clean"]["epe"], t["fs_jitter"]["epe"]
         delta = t["degradation"]["epe"]["t_piezo_mae_nm_delta"]

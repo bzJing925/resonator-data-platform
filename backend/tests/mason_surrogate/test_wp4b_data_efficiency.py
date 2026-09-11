@@ -2,10 +2,13 @@
 
 覆盖：
 - stratified_subset：分层比例/最少每类 1 个/确定性/n=全集/超量报错
-- build_curve_rows / write_subset_npz：子集只来自 EPPE train split，无 test 泄漏，
+- curve_subset_rows / write_subset_npz：子集只来自 EPPE train split，无 test 泄漏，
   npz 往返后 split 标签与源数组一致
+- finetune_protocols：双协议映射、目录命名向后兼容、非法协议报错
 - collect_stage1_metrics / collect_stage2_metrics：从 eval json 提取指标
-- write_xlsx：sheet 名、表头、行数、readme 口径说明
+- write_xlsx：sheet 名、表头（含 protocol 列）、行数、readme 口径说明
+- json_safe：NaN/±Inf → None
+- subset 训练器冒烟：stage2 的 k 以 stage1 ckpt 为准（cfg 不再含 k）
 """
 
 from __future__ import annotations
@@ -223,3 +226,46 @@ def test_write_xlsx_structure(tmp_path):
     assert "20260913" in readme_text
     assert "full-lr" in readme_text and "lowlr" in readme_text  # 双协议口径
     assert "欠训练" in readme_text  # n≥300 反转的方法学说明
+
+
+def test_json_safe_nan_inf_to_none():
+    from mason_surrogate.common import json_safe
+
+    obj = {"a": float("nan"), "b": [1.0, float("inf")], "c": {"d": float("-inf")},
+           "e": (float("nan"), 2), "f": "ok", "g": None}
+    out = json_safe(obj)
+    assert out == {"a": None, "b": [1.0, None], "c": {"d": None}, "e": [None, 2],
+                   "f": "ok", "g": None}
+    # 转换后可过 allow_nan=False 的标准 JSON 序列化
+    json.dumps(out, allow_nan=False)
+
+
+def test_subset_trainers_smoke_k_from_stage1_ckpt(tmp_path):
+    """subset stage1(k=32) → subset stage2：k 以 stage1 ckpt 为准，cfg 不再含 k。"""
+    import torch
+    from mason_surrogate import train_stage1_mason_subset as ts1s
+    from mason_surrogate import train_stage2_mason_subset as ts2s
+
+    assert "k" not in ts2s.DEFAULT_CFG, "subset stage2 的 k 应由 stage1 ckpt 提供"
+
+    data = _synthetic_data()
+    npz = tmp_path / "tiny.npz"
+    rde.write_subset_npz(data, rde.curve_subset_rows(data, n_eppe=10, seed=0), npz)
+
+    s1_cfg = dict(ts1s.DEFAULT_CFG)
+    s1_cfg.update(data=str(npz), out_dir=str(tmp_path / "s1"), epochs=2, warmup_epochs=1,
+                  batch_size=32, hidden=32, n_res_blocks=1, k=32, patience=5)
+    ts1s.train(s1_cfg)
+
+    s2_cfg = dict(ts2s.DEFAULT_CFG)
+    s2_cfg.update(data=str(npz), stage1_ckpt=str(tmp_path / "s1" / "stage1.pt"),
+                  stage1_config=str(tmp_path / "s1" / "stage1_config.json"),
+                  out_dir=str(tmp_path / "s2"), epochs=1, batch_size=32, d_model=16,
+                  n_layers=1, n_heads=2, dim_feedforward=32, num_threads=2, patience=5)
+    ts2s.train(s2_cfg)
+    ckpt = torch.load(tmp_path / "s2" / "stage2.pt", map_location="cpu", weights_only=True)
+    assert ckpt["k"] == 32  # 来自 stage1 ckpt，而非任何 cfg 缺省
+    s2_conf = json.loads((tmp_path / "s2" / "stage2_config.json").read_text())
+    assert s2_conf["k"] == 32 and s2_conf["k_source"].startswith("stage1")
+    ev = json.loads((tmp_path / "s2" / "stage2_eval.json").read_text())
+    assert ev["eval"]["eppe"]["n_test"] > 0

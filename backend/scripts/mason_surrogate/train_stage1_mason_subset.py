@@ -28,7 +28,6 @@ train_stage1_mason.py 的 CLI 不支持从已有 checkpoint 初始化（该脚�
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import sys
 import time
@@ -44,6 +43,7 @@ for p in (PROJECT_ROOT, SCRIPTS_DIR):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 
+from mason_surrogate.build_unified_dataset import file_sha256  # noqa: E402
 from mason_surrogate.common import (  # noqa: E402
     NormStats,
     UnifiedMLP,
@@ -51,11 +51,15 @@ from mason_surrogate.common import (  # noqa: E402
     batch_sparse_positions,
     fit_norm,
     invert_norm,
+    json_safe,
     masked_mse,
     param_metrics,
 )
-
-FP_RATIO_CLIP = (1.0005, 1.5)  # 与 train_stage1_mason 一致
+from mason_surrogate.train_stage1_mason import (  # noqa: E402
+    FP_RATIO_CLIP,
+    load_unified,
+    predict_fp_ratio,
+)
 
 DEFAULT_CFG = {
     "data": "surrogate_data_mason/unified_dataset.npz",
@@ -75,24 +79,6 @@ DEFAULT_CFG = {
     "init_from": None,
     "init_config": None,
 }
-
-
-def load_unified(path: str | Path) -> dict[str, NDArray]:
-    with np.load(path) as d:
-        return {k: d[k] for k in d.files}
-
-
-def sha256_file(path: str | Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def predict_fp_ratio(params_denorm: NDArray[np.float64]) -> NDArray[np.float64]:
-    ratio = params_denorm[:, 1] / np.maximum(params_denorm[:, 0], 1e-9)
-    return np.clip(ratio, FP_RATIO_CLIP[0], FP_RATIO_CLIP[1])
 
 
 def resolve_norm_stats(cfg: dict, data: dict[str, NDArray], tr_np: NDArray) -> tuple:
@@ -227,16 +213,19 @@ def train(cfg: dict) -> dict:
         "norm_source": norm_source,
         "init_from": cfg["init_from"],
         "init_config": cfg["init_config"],
-        "dataset_sha256": sha256_file(cfg["data"]),
+        "dataset_sha256": file_sha256(Path(cfg["data"])),
     }
     (out_dir / "stage1_config.json").write_text(
-        json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8"
+        json.dumps(json_safe(config), indent=2, ensure_ascii=False, allow_nan=False),
+        encoding="utf-8",
     )
-    (out_dir / "stage1_history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
+    (out_dir / "stage1_history.json").write_text(
+        json.dumps(json_safe(history), indent=2, allow_nan=False), encoding="utf-8"
+    )
     (out_dir / "stage1_eval.json").write_text(
-        json.dumps({"eval": ev, "best_epoch": best_epoch, "best_val": best_val,
-                    "epochs_run": len(history), "train_seconds": train_seconds},
-                   indent=2, ensure_ascii=False),
+        json.dumps(json_safe({"eval": ev, "best_epoch": best_epoch, "best_val": best_val,
+                              "epochs_run": len(history), "train_seconds": train_seconds}),
+                   indent=2, ensure_ascii=False, allow_nan=False),
         encoding="utf-8",
     )
     print(f"saved: {out_dir / 'stage1.pt'} (best val={best_val:.5f} @epoch {best_epoch}, "
