@@ -1,14 +1,15 @@
 # WP3 Mason EPE ↔ 生产代理校准报告（4–7 GHz）
 
-- 生成时间（UTC）：2026-09-11T03:03:42.498181+00:00
-- commit：fbcac9867f662059d4b41bab7b87fdefc9ddd733
+- status: ok（仅在通过失败闸门后生成本报告，见脚本 main 的 COST_GATE 逻辑）
+- 生成时间（UTC）：2026-09-11T04:04:09.831852+00:00
+- commit：9c41999b6b544866f63d1d7974467d0f0c182d48
 - 目标：`/Users/jingbozuo/Projects/aln-data-backend-ml/backend/surrogate_data/baseline.npz` 面积均值（12 面积 × 2 pf → (pf,7)）；1D Mason 的 fs/fp/k²eff 与面积无关，实测跨面积散布是横向物理，论文口径取面积均值
 - 主校准：pf=0（t_pf=0）；pf=1 预测 t_pf=63.5 nm SiN（62/65 合并态）
 - 评估：4–7 GHz @1 MHz；标签评估面积固定 2000 µm²（Bode-Q 经 50 Ω 变换依赖面积）；最终谱评估 4–7 GHz @3 MHz（1001 点，与 z_base_full 对齐）
-- 优化器：scipy least_squares trf，jac=3-point，diff_step≈[1 nm, 1e-3×4]，max_nfev=150，多起点 6（名义+LHS，种子 20260910）
+- 优化器：scipy least_squares trf，jac=3-point，diff_step=[0.0029, 0.001, 0.001, 0.001, 0.002]（相对步长，绝对步长 = diff_step×|x|），max_nfev=150，多起点 6（名义+LHS，种子 20260910）
 - 权重：fs/fp 1/MHz、1/MHz；k²eff 1/pct-pt；Q 各 0.2/（相对 %）
 - 材料界：c33/e33/eps/alpha 相对 ALSCN 名义 ±10%；rho 固定；t_piezo ∈ [324, 365] nm（工艺档案簇，2026-09-10）；t_mo 对称候选 130/150/165/185/200 nm
-- 总耗时：113.2 s
+- 总耗时：109.3 s
 
 ## 论文一句话数字
 
@@ -35,7 +36,7 @@
 | c33 (Pa) | 2.694950e+11 | 2.924660e+11 | -7.85% |
 | e33 (C/m²) | 2.337461 | 2.553130 | -8.45% |
 | eps (F/m) | 1.071577e-10 | 1.146210e-10 | -6.51% |
-| alpha (dB/m) | 0.02200 | 0.02000 | +10.00% |
+| alpha（vendor α 约定，见 solver.py DB_PER_NEPER） | 0.02200 | 0.02000 | +10.00% |
 | rho (kg/m³) | 3280.17 | 3280.17 | 固定 |
 
 ## pf=0 校准残差（7 参数，面积均值目标）
@@ -127,6 +128,8 @@
 ## 复现
 
 ```bash
+cd backend  # 从 repo 根目录
 uv run --no-sync python scripts/calibrate_mason_epe.py \
-    --baseline /Users/jingbozuo/Projects/aln-data-backend-ml/backend/surrogate_data/baseline.npz --outdir /Users/jingbozuo/Projects/aln-data-backend-ml/backend/surrogate_data_mason/calibration --seed 20260910
+    --baseline surrogate_data/baseline.npz --outdir surrogate_data_mason/calibration \
+    --seed 20260910
 ```

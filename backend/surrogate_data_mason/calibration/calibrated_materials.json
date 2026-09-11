@@ -1,4 +1,5 @@
 {
+  "status": "ok",
   "piezo": {
     "name": "AlScN_cal",
     "rho": 3280.17,
@@ -32,6 +33,6 @@
     },
     "joint_variant_pf1_weighted_rms": 121.01005868532334
   },
-  "commit_sha": "fbcac9867f662059d4b41bab7b87fdefc9ddd733",
-  "calibrated_at": "2026-09-11T03:03:42.498133+00:00"
+  "commit_sha": "9c41999b6b544866f63d1d7974467d0f0c182d48",
+  "calibrated_at": "2026-09-11T04:04:09.831801+00:00"
 }

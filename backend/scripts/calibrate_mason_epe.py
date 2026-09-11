@@ -75,7 +75,9 @@ SEED_DEFAULT = 20260910  # 与 build_mason_epe_corpus.py 一致
 BOUNDS_PCT = 10.0  # 材料标度因子 ±10% 有界
 T_PIEZO_BOUNDS_NM = (324.0, 365.0)  # 工艺档案簇（来源日期 2026-09-10）
 T_MO_CANDIDATES_NM = (130.0, 150.0, 165.0, 185.0, 200.0)  # 对称电极候选
-ALPHA_NOMINAL = 0.02  # 压电层声学衰减名义值 (dB/m)，同 EPEStackParams 默认
+# 压电层声学衰减名义值，同 EPEStackParams 默认 0.02；单位为 vendor α 约定
+# （传播常数 k = 2πf/v·(1 − j·α/DB_PER_NEPER)，见 app/mason_sim/solver.py）
+ALPHA_NOMINAL = 0.02
 T_PF_NM_PF1 = 63.5  # pf=1 态 SiN 钝化层厚度（62/65 合并态）
 EVAL_AREA_UM2 = 2000.0  # 标签评估面积：Bode-Q 经 50 Ω 变换依赖面积，固定 2000 µm²
 F_START_HZ, F_STOP_HZ = 4.0e9, 7.0e9  # 校准频带
@@ -83,13 +85,20 @@ FULL_GRID_STEP_HZ = 3.0e6  # 最终谱评估网格（与 z_base_full 的 1001 �
 LOW_BAND_GHZ = (4.0, 4.3)  # 谱残差"低频电平偏移"统计带（低于 fs 的电容区）
 ZP_HALF_WIN_GHZ = 0.15  # Zp 峰值统计窗口半宽
 PENALTY = 1.0e3  # 无效样本惩罚（加权残差单位，每分量）
+# 产物失败闸门：最优 cost 超过此值视为校准失败（审查实证：不可达伪目标 fs=9 GHz 时
+# least_squares 仍 success=True（xtol 收敛）而 cost=1.37e7、产物貌似合理——
+# WP2b 将机器消费 calibrated_materials.json，必须按 cost/valid/success 三重拦截）
+COST_GATE = 1.0e5
 
 THETA_NAMES = ("t_piezo_nm", "s_c33", "s_e33", "s_eps", "s_alpha")
 # 名义起点：t_piezo 取工艺簇区间中值，材料标度取 1
 NOMINAL_THETA = np.array([(T_PIEZO_BOUNDS_NM[0] + T_PIEZO_BOUNDS_NM[1]) / 2.0, 1.0, 1.0, 1.0, 1.0])
 # 数值 Jacobian（3-point 中心差分）相对步长：绝对步长 = diff_step×|x|，
 # 即 ≈[1 nm, 1e-3, 1e-3, 1e-3, 2e-3]。fs/fp/k²eff 标签吸附频率网格（阶梯函数），
-# 默认步长（~1e-8）看不到梯度，必须放大到足以跨越 1 MHz 频格。
+# 默认步长（~1e-8）在任何方向都看不到梯度。t_piezo/s_c33 方向靠放大步长跨越
+# 1 MHz 频格获得割线梯度；s_e33/s_eps 方向标签层近简并（fp 只约束 kt2 组合，
+# 频格割线近乎随机噪声），有效梯度通道是光滑的 Q 残差（相位斜率/Bode-Q）；
+# s_alpha 同样经 Q 通道起作用。
 DIFF_STEP = np.array([2.9e-3, 1.0e-3, 1.0e-3, 1.0e-3, 2.0e-3])
 X_SCALE = np.array([40.0, 0.1, 0.1, 0.1, 0.1])  # TRF 变量尺度
 
@@ -442,6 +451,7 @@ def build_materials_payload(
     theta = best.theta
     piezo = make_piezo(theta)
     return {
+        "status": "ok",  # 仅在通过 COST_GATE 闸门后写出（见 main）
         "piezo": {
             "name": piezo.name,
             "rho": piezo.rho,  # 固定（未参与校准）
@@ -477,8 +487,8 @@ def _materials_table(best: FitResult) -> list[str]:
         f"| c33 (Pa) | {piezo.c33:.6e} | {ALSCN.c33:.6e} | {_fmt_pct((theta[1] - 1) * 100)}% |",
         f"| e33 (C/m²) | {piezo.e33:.6f} | {ALSCN.e33:.6f} | {_fmt_pct((theta[2] - 1) * 100)}% |",
         f"| eps (F/m) | {piezo.eps:.6e} | {ALSCN.eps:.6e} | {_fmt_pct((theta[3] - 1) * 100)}% |",
-        f"| alpha (dB/m) | {ALPHA_NOMINAL * theta[4]:.5f} | {ALPHA_NOMINAL:.5f} "
-        f"| {_fmt_pct((theta[4] - 1) * 100)}% |",
+        f"| alpha（vendor α 约定，见 solver.py DB_PER_NEPER） | {ALPHA_NOMINAL * theta[4]:.5f} "
+        f"| {ALPHA_NOMINAL:.5f} | {_fmt_pct((theta[4] - 1) * 100)}% |",
         f"| rho (kg/m³) | {piezo.rho:.2f} | {ALSCN.rho:.2f} | 固定 |",
     ]
     return rows
@@ -523,6 +533,14 @@ def _spectra_table(title: str, rows_in: list[dict]) -> list[str]:
     return rows
 
 
+def _repo_rel(path: str) -> str:
+    """报告复现命令用：尽量转为相对 backend/ 根的路径，不嵌机器绝对路径。"""
+    try:
+        return str(Path(path).resolve().relative_to(_BACKEND_ROOT))
+    except ValueError:
+        return str(path)
+
+
 def render_report(
     *,
     args: argparse.Namespace,
@@ -534,7 +552,6 @@ def render_report(
     target1: np.ndarray,
     labels_a0: dict,
     labels_a1: dict,
-    joint: FitResult,
     labels_b0: dict,
     labels_b1: dict,
     res0: dict,
@@ -551,6 +568,7 @@ def render_report(
     lines: list[str] = [
         "# WP3 Mason EPE ↔ 生产代理校准报告（4–7 GHz）",
         "",
+        "- status: ok（仅在通过失败闸门后生成本报告，见脚本 main 的 COST_GATE 逻辑）",
         f"- 生成时间（UTC）：{datetime.now(UTC).isoformat()}",
         f"- commit：{commit_sha}",
         f"- 目标：`{args.baseline}` 面积均值（12 面积 × 2 pf → (pf,7)）；"
@@ -559,7 +577,8 @@ def render_report(
         f"- 评估：4–7 GHz @{args.grid_step_mhz:g} MHz；标签评估面积固定 "
         f"{EVAL_AREA_UM2:.0f} µm²（Bode-Q 经 50 Ω 变换依赖面积）；"
         f"最终谱评估 4–7 GHz @3 MHz（{n_freq_full} 点，与 z_base_full 对齐）",
-        f"- 优化器：scipy least_squares trf，jac=3-point，diff_step≈[1 nm, 1e-3×4]，"
+        f"- 优化器：scipy least_squares trf，jac=3-point，diff_step={DIFF_STEP.tolist()}"
+        "（相对步长，绝对步长 = diff_step×|x|），"
         f"max_nfev={args.max_nfev}，多起点 {len(starts)}（名义+LHS，种子 {args.seed}）",
         f"- 权重：fs/fp {weights[0]:g}/MHz、{weights[1]:g}/MHz；k²eff {weights[2]:g}/pct-pt；"
         f"Q 各 {weights[3]:g}/（相对 %）",
@@ -649,8 +668,10 @@ def render_report(
         "## 复现",
         "",
         "```bash",
+        "cd backend  # 从 repo 根目录",
         "uv run --no-sync python scripts/calibrate_mason_epe.py \\",
-        f"    --baseline {args.baseline} --outdir {args.outdir} --seed {args.seed}",
+        f"    --baseline {_repo_rel(args.baseline)} --outdir {_repo_rel(args.outdir)} \\",
+        f"    --seed {args.seed}",
         "```",
         "",
     ]
@@ -734,6 +755,15 @@ def main(argv: list[str] | None = None) -> int:
     print(f"[WP3] 最优几何 t_mo={best_t_mo:g} nm, cost={best.cost:.3f}")
 
     labels_a0 = simulate_labels(best.theta, best_t_mo, 0.0, EVAL_AREA_UM2, freq_eval)
+
+    # ---- 产物失败闸门（写文件前；COST_GATE 注释见常量定义）----
+    if not best.success or not labels_a0.get("valid", False) or best.cost > COST_GATE:
+        print(
+            f"[WP3] 校准失败闸门触发，不写任何产物：success={best.success} "
+            f"valid={labels_a0.get('valid', False)} cost={best.cost:.3f}（闸门 cost>{COST_GATE:g}）"
+        )
+        return 2
+
     labels_a1 = simulate_labels(best.theta, best_t_mo, T_PF_NM_PF1, EVAL_AREA_UM2, freq_eval)
 
     # ---- (B) 变体：pf=0/pf=1 联合拟合（仅最优几何，试一次） ----
@@ -808,6 +838,9 @@ def main(argv: list[str] | None = None) -> int:
     residuals_doc = {
         "note": "残差 = 校准/预测值 − 目标值（目标 = baseline.npz 面积均值）；"
         "谱/Zp 残差用变体 (A) 材料直接评估/预测",
+        "commit_sha": commit_sha,
+        "seed": int(args.seed),
+        "generated_at": datetime.now(UTC).isoformat(),
         "target_area_mean": {
             "pf0": {k: float(v) for k, v in zip(PARAM_KEYS, target0, strict=True)},
             "pf1": {k: float(v) for k, v in zip(PARAM_KEYS, target1, strict=True)},
@@ -848,7 +881,6 @@ def main(argv: list[str] | None = None) -> int:
         target1=target1,
         labels_a0=labels_a0,
         labels_a1=labels_a1,
-        joint=joint,
         labels_b0=labels_b0,
         labels_b1=labels_b1,
         res0=res0,

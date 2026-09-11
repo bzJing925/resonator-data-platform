@@ -4,6 +4,8 @@
   eps×0.95, alpha×1.05=0.021）生成伪目标，同一套有界 LS（起点=名义值）恢复；
 - 边界执行：伪目标材料越 ±10% 界时拟合值被钳在界内；
 - 种子确定性：同种子两次拟合逐位一致；make_starts 可复现且首行为名义值；
+- 并行路径：workers=2（spawn ProcessPoolExecutor）与串行结果逐位一致；
+- 产物失败闸门：物理不可达目标（fs=9 GHz）下 main 返回非零且不写任何产物；
 - 谱残差计算：同曲线 RMSE=0；+3 dB 平移 RMSE=3；
 - smoke：端到端 main() 在伪造 baseline.npz 上产出 3 个产物文件且 schema 键齐全。
 
@@ -149,13 +151,44 @@ def test_fit_deterministic_same_seed() -> None:
     target = _labels_vec(labels)
     starts = cal.make_starts(1, seed=777)
     r1 = cal.fit_geometry(
-        [(0.0, target)], TRUE_T_MO_NM, starts, cal.default_weights(), freq, max_nfev=25
+        [(0.0, target)], TRUE_T_MO_NM, starts, cal.default_weights(), freq, max_nfev=15
     )
     r2 = cal.fit_geometry(
-        [(0.0, target)], TRUE_T_MO_NM, starts, cal.default_weights(), freq, max_nfev=25
+        [(0.0, target)], TRUE_T_MO_NM, starts, cal.default_weights(), freq, max_nfev=15
     )
     assert np.array_equal(r1[0].theta, r2[0].theta)
     assert r1[0].cost == r2[0].cost
+
+
+def test_parallel_matches_serial() -> None:
+    """workers=2（spawn ProcessPoolExecutor）与串行逐位一致（全部起点，不只最优）。"""
+    freq = build_frequency_grid(*TEST_BAND_HZ, f_step_hz=1e6)
+    labels = cal.simulate_labels(TRUE_THETA, TRUE_T_MO_NM, 0.0, 2000.0, freq)
+    target = _labels_vec(labels)
+    starts = cal.make_starts(2, seed=555)
+    serial = cal.fit_geometry(
+        [(0.0, target)],
+        TRUE_T_MO_NM,
+        starts,
+        cal.default_weights(),
+        freq,
+        max_nfev=12,
+        workers=1,
+    )
+    parallel = cal.fit_geometry(
+        [(0.0, target)],
+        TRUE_T_MO_NM,
+        starts,
+        cal.default_weights(),
+        freq,
+        max_nfev=12,
+        workers=2,
+    )
+    assert len(serial) == len(parallel) == 2
+    for r_seq, r_par in zip(serial, parallel, strict=True):
+        assert np.array_equal(r_seq.theta, r_par.theta)
+        assert r_seq.cost == r_par.cost
+        assert r_seq.start_idx == r_par.start_idx
 
 
 def test_area_mean_targets() -> None:
@@ -214,6 +247,51 @@ def _fabricate_baseline(path: Path) -> None:
     np.savez_compressed(path, pfs=pfs, areas=areas, params_base=params, z_base_full=z)
 
 
+def _fabricate_unreachable_baseline(path: Path) -> None:
+    """物理不可达伪目标（fs=9 GHz，远超 Mason 堆叠在界内可达范围）：纯数字，无需 Mason。"""
+    pfs = np.array([0.0, 1.0])
+    areas = np.array([2000.0])
+    params = np.zeros((2, 1, 7))
+    params[0, 0] = [9.0, 9.5, 5.0, 100.0, 100.0, 100.0, 100.0]
+    params[1, 0] = [8.5, 9.0, 4.0, 100.0, 100.0, 100.0, 100.0]
+    z = np.full((2, 1, 1001), 40.0)
+    np.savez_compressed(path, pfs=pfs, areas=areas, params_base=params, z_base_full=z)
+
+
+def test_main_unreachable_target_gated(tmp_path: Path) -> None:
+    """产物失败闸门：不可达目标（fs=9 GHz）→ main 返回 2 且不写任何产物。
+
+    审查实证：不可达伪目标下 least_squares 仍 success=True（xtol 收敛）、cost=1.37e7、
+    产物看起来合理——WP2b 机器消费 calibrated_materials.json 之前必须按闸门拦截。
+    """
+    baseline = tmp_path / "baseline.npz"
+    _fabricate_unreachable_baseline(baseline)
+    outdir = tmp_path / "calibration"
+    rc = cal.main(
+        [
+            "--baseline",
+            str(baseline),
+            "--outdir",
+            str(outdir),
+            "--geometries",
+            "150",
+            "--n-starts",
+            "1",
+            "--max-nfev",
+            "10",
+            "--grid-step-mhz",
+            "2.0",
+            "--workers",
+            "1",
+            "--seed",
+            "123",
+        ]
+    )
+    assert rc == 2
+    for name in ("calibrated_materials.json", "residuals.json", "calibration_report.md"):
+        assert not (outdir / name).exists(), name
+
+
 def test_main_smoke_end_to_end(tmp_path: Path) -> None:
     """端到端 smoke：伪造 baseline 上 main() 产出 3 文件且 schema 必要键齐全。"""
     baseline = tmp_path / "baseline.npz"
@@ -230,9 +308,9 @@ def test_main_smoke_end_to_end(tmp_path: Path) -> None:
             "--n-starts",
             "1",
             "--max-nfev",
-            "12",
+            "45",
             "--grid-step-mhz",
-            "2.0",
+            "3.0",
             "--workers",
             "1",
             "--seed",
@@ -243,6 +321,7 @@ def test_main_smoke_end_to_end(tmp_path: Path) -> None:
 
     mats = json.loads((outdir / "calibrated_materials.json").read_text(encoding="utf-8"))
     for key in (
+        "status",
         "piezo",
         "alpha",
         "t_piezo_nm",
@@ -256,6 +335,7 @@ def test_main_smoke_end_to_end(tmp_path: Path) -> None:
         "calibrated_at",
     ):
         assert key in mats, key
+    assert mats["status"] == "ok"
     for key in ("name", "rho", "c33", "e33", "eps"):
         assert key in mats["piezo"], key
     assert mats["t_pf_nm_pf1"] == 63.5
@@ -265,8 +345,10 @@ def test_main_smoke_end_to_end(tmp_path: Path) -> None:
     assert lo[1] - 1e-12 <= mats["piezo"]["c33"] / ALSCN.c33 <= hi[1] + 1e-12
 
     res = json.loads((outdir / "residuals.json").read_text(encoding="utf-8"))
-    for key in ("pf0", "pf1", "spectra", "zp"):
+    for key in ("pf0", "pf1", "spectra", "zp", "commit_sha", "seed", "generated_at"):
         assert key in res, key
+    assert res["seed"] == 123
 
     report = (outdir / "calibration_report.md").read_text(encoding="utf-8")
     assert "校准后 Mason" in report
+    assert "status: ok" in report
