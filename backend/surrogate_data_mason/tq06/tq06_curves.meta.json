@@ -1,0 +1,69 @@
+{
+  "task": "WP-A TQ06 14GHz P3F bilayer attribution + calibration",
+  "generated_at": "2026-09-14T09:35:50.657612+00:00",
+  "commit_sha": "88260cb784de7404ad80d7c50f0baa9401c0e99f",
+  "verdict": "A",
+  "verdict_note": "归属 A = 底 AlN(170)/顶 AlScN(190)，reverse=(+1,−1)；A(mo_b,mo_t) 与 B(mo_t,mo_b) 镜像简并，绝对归属需工艺记录/XRD 判定",
+  "electrode_nm": {
+    "mo_bot": 90.21531794696755,
+    "mo_top": 150.67915819954692
+  },
+  "subset_files": [
+    "1_EG0.75_FL2_CB_D_X0Y0N10_Fail_S11.s1p",
+    "1_EG0.75_FL1_No AG_E_X-1Y-1N16_Fail_S11.s1p",
+    "1_EG0.75_FL1_No AG_F_X1Y0N11_Fail_S11.s1p",
+    "1_EG0.75_FL2_CB_C_X1Y-1N14_Fail_S11.s1p",
+    "1_EG0.75_FL1_No AG_F[2]_X1Y0N11_Fail_S11.s1p",
+    "1_EG0.75_FL2_No AG_D_X1Y0N11_Fail_S11.s1p",
+    "1_EG0.75_FL2_No AG_C_X1Y-1N14_Fail_S11.s1p",
+    "1_EG0_FL1.5_B_X2Y-1N13_Fail_S11.s1p",
+    "1_EG1.5_FL1_A_X1Y-1N14_Fail_S11.s1p",
+    "1_EG0.75_FL2_CB_B_X-1Y0N9_Fail_S11.s1p"
+  ],
+  "subset_target_median": {
+    "fs_ghz": 14.252749999999999,
+    "fp_ghz": 14.4356,
+    "k2eff_pct": 2.9683558727545316,
+    "qs": 144.73146643400108,
+    "qp": 233.93369128251544,
+    "qs_bodeq": 143.15898139352402,
+    "qp_bodeq": 226.77427024817868
+  },
+  "labels_before": {
+    "fs_ghz": 14.252,
+    "fp_ghz": 14.576,
+    "k2eff_pct": 5.362704400041525,
+    "qs": 316.7562432629351,
+    "qp": 326.8451139911973,
+    "qs_bodeq": 317.48975245214484,
+    "qp_bodeq": 327.42203160406666
+  },
+  "labels_after": {
+    "fs_ghz": 14.232,
+    "fp_ghz": 14.45,
+    "k2eff_pct": 3.666287250429738,
+    "qs": 166.6061582993766,
+    "qp": 173.86331511096586,
+    "qs_bodeq": 165.83245653294256,
+    "qp_bodeq": 162.7788659665713
+  },
+  "te1_band_range_db": {
+    "mason_before": 14.603061044720352,
+    "mason_after": 12.34977358945439
+  },
+  "sim_grid": "3-22 GHz @2 MHz",
+  "eval_area_um2": 2000.0,
+  "meas_names": [
+    "1_EG0.75_FL2_CB_D_X0Y0N10_Fail_S11.s1p",
+    "1_EG0.75_FL1_No AG_E_X-1Y-1N16_Fail_S11.s1p",
+    "1_EG0.75_FL1_No AG_F_X1Y0N11_Fail_S11.s1p",
+    "1_EG0.75_FL2_CB_C_X1Y-1N14_Fail_S11.s1p",
+    "1_EG0.75_FL1_No AG_F[2]_X1Y0N11_Fail_S11.s1p",
+    "1_EG0.75_FL2_No AG_D_X1Y0N11_Fail_S11.s1p",
+    "1_EG0.75_FL2_No AG_C_X1Y-1N14_Fail_S11.s1p",
+    "1_EG0_FL1.5_B_X2Y-1N13_Fail_S11.s1p",
+    "1_EG1.5_FL1_A_X1Y-1N14_Fail_S11.s1p",
+    "1_EG0.75_FL2_CB_B_X-1Y0N9_Fail_S11.s1p"
+  ],
+  "npz": "tq06_curves.npz"
+}
