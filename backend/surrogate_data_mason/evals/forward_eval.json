@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-11T11:14:29.124532+00:00",
+  "generated_at": "2026-09-14T03:41:10.457611+00:00",
   "task": "WP4a unified forward surrogate on Mason corpora (EPE+EPPE co-train)",
   "seed": 20260911,
   "warnings": [],
@@ -12,6 +12,10 @@
       "w_hi": 1.2,
       "n": 1001,
       "step": 0.0003999999999999999
+    },
+    "anchor": {
+      "epe": "fs (TE1)",
+      "eppe": "fs2 (TE2)"
     },
     "sources": {
       "epe": {
@@ -48,7 +52,7 @@
     "best_epoch": 141,
     "best_val": 0.00206711676178707,
     "epochs_run": 171,
-    "train_seconds": 88.0,
+    "train_seconds": null,
     "per_structure": {
       "epe": {
         "fs_mae_mhz": 23.060327792641004,

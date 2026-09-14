@@ -61,7 +61,7 @@ solver_error。
 用法：
     uv run python scripts/build_mason_eppe_corpus.py --calibrate   # 复现 T_ALSCN_MAX_NM 标定
     uv run python scripts/build_mason_eppe_corpus.py --smoke 200   # 冒烟：吞吐/ETA/有效率/标签分布
-    uv run python scripts/build_mason_eppe_corpus.py               # 全量 8000 attempted
+    uv run python scripts/build_mason_eppe_corpus.py --n 16000  # 生产全量（meta n_requested=16000）
 """
 
 from __future__ import annotations

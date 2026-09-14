@@ -46,6 +46,7 @@ from mason_surrogate.build_unified_dataset import file_sha256  # noqa: E402
 from mason_surrogate.common import (  # noqa: E402
     T_ALN_CLASSES_NM,
     NormStats,
+    _ResBlock,
     apply_norm,
     fit_norm,
     invert_norm,
@@ -78,15 +79,6 @@ DEFAULT_CFG = {
 
 
 # --------------------------------------------- 模型（反向三头为本文件新写）
-
-
-class _ResBlock(nn.Module):
-    def __init__(self, dim: int) -> None:
-        super().__init__()
-        self.net = nn.Sequential(nn.Linear(dim, dim), nn.GELU(), nn.Linear(dim, dim))
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return x + self.net(x)
 
 
 class InverseMLP(nn.Module):

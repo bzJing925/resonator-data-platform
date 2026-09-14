@@ -50,6 +50,7 @@ def _minimal_meta(data_path: Path) -> dict:
         }
     return {
         "w_grid": {"w_lo": 0.8, "w_hi": 1.2, "n": 1001, "step": 4e-4},
+        "anchor": {"epe": "fs (TE1)", "eppe": "fs2 (TE2)"},
         "sources": {
             name: {"sha256": "x", "mason_sim_commit_sha": None, "n_in": int((struct == f).sum()),
                    "n_kept": int((struct == f).sum()), "n_dropped_zero_coverage": 0,
@@ -82,6 +83,8 @@ def test_build_forward_eval_happy_path(trained_ckpt):
     assert warnings == []
     assert out["seed"] == 20260911  # 从 stage1 config 读，非硬编码
     assert out["dataset"]["dataset_sha256"] == ef.file_sha256(trained_ckpt["data"])
+    # 锚点注记透传（EPPE 行为 TE2 锚 fs2，与 unified_dataset.meta.json 一致）
+    assert out["dataset"]["anchor"] == {"epe": "fs (TE1)", "eppe": "fs2 (TE2)"}
     s1 = out["stage1"]["per_structure"]["all"]
     assert "fs_mae_mhz" in s1 and "sparse_rmse_db" in s1
     s2 = out["stage2"]["per_structure"]["all"]

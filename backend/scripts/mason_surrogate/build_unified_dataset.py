@@ -29,6 +29,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]  # backend/
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from app.mason_sim.corpus import atomic_savez, atomic_write_json  # noqa: E402
+
 W_LO, W_HI, W_N = 0.80, 1.20, 1001
 SPLIT_SEED = 20260911
 SPLIT_RATIOS = (0.85, 0.075, 0.075)  # train / val / test
@@ -179,21 +181,27 @@ def _corpus_meta(path: Path) -> dict:
 
 
 def build_and_save(epe_path: Path, eppe_path: Path, out_npz: Path, out_meta: Path) -> dict:
-    """构建并落盘 npz（spec 键）+ meta.json（来源 SHA/网格/掩码率/样本数）。"""
+    """构建并落盘 npz（spec 键）+ meta.json（来源 SHA/网格/掩码率/样本数）。
+
+    落盘走 app/mason_sim/corpus.py 的原子写（tmp + os.replace，防中断半截文件）。
+    """
     out = build_unified(epe_path, eppe_path)
-    np.savez(
+    atomic_savez(
         out_npz,
-        x7=out["x7"],
-        y7=out["y7"],
-        z_w_db=out["z_w_db"],
-        w_mask=out["w_mask"],
-        w_grid=out["w_grid"],
-        f_a=out["f_a"],
-        fp_ratio=out["fp_ratio"],
-        split=out["split"],
-        # 行回溯索引（复审次要项 6）：按行定位来源语料
-        src_structure=out["src_structure"].astype(np.int8),
-        src_index=out["src_index"].astype(np.int64),
+        {
+            "x7": out["x7"],
+            "y7": out["y7"],
+            "z_w_db": out["z_w_db"],
+            "w_mask": out["w_mask"],
+            "w_grid": out["w_grid"],
+            "f_a": out["f_a"],
+            "fp_ratio": out["fp_ratio"],
+            "split": out["split"],
+            # 行回溯索引（复审次要项 6）：按行定位来源语料
+            "src_structure": out["src_structure"].astype(np.int8),
+            "src_index": out["src_index"].astype(np.int64),
+        },
+        compressed=False,  # 与既往 np.savez 行为一致（58MB 不压缩）
     )
     n = {
         EPE: int((out["src_structure"] == EPE).sum()),
@@ -239,7 +247,7 @@ def build_and_save(epe_path: Path, eppe_path: Path, out_npz: Path, out_meta: Pat
         "split": {"seed": SPLIT_SEED, "ratios": SPLIT_RATIOS, "counts": split_counts},
         "n_total": int(n[EPE] + n[EPPE]),
     }
-    out_meta.write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+    atomic_write_json(out_meta, meta)
     return meta
 
 

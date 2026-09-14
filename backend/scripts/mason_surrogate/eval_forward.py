@@ -151,6 +151,8 @@ def build_forward_eval(
             "dataset_sha256": data_sha,
             "n_total": int(len(data["split"])),
             "w_grid": meta["w_grid"],
+            # 锚点注记（与 unified_dataset.meta.json 一致）：EPPE 行指标锚 TE2 的 fs2
+            "anchor": meta.get("anchor"),
             "sources": {
                 k: {"sha256": v["sha256"], "mason_sim_commit_sha": v["mason_sim_commit_sha"]}
                 for k, v in meta["sources"].items()
