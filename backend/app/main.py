@@ -36,6 +36,7 @@ from app.api import (
     process,
     query,
     surrogate,
+    sync,
     system,
     tasks,
     upload,
@@ -167,6 +168,7 @@ app.include_router(export.router, prefix="/api")
 app.include_router(process.router, prefix="/api")
 app.include_router(surrogate.router, prefix="/api")
 app.include_router(web_sync.router, prefix="/api")
+app.include_router(sync.router, prefix="/api")
 
 # 静态文件服务 + SPA fallback
 if STATIC_DIR:

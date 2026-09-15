@@ -99,7 +99,7 @@ def create_batch_and_dispatch(
     batch_no: str,
     mapping_id: int,
     *,
-    source: Literal["http", "watch"] = "http",
+    source: Literal["http", "watch", "sync"] = "http",
     f_start_ghz: float | None = None,
     f_end_ghz: float | None = None,
     deembed: bool = False,
