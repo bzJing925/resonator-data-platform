@@ -13,7 +13,6 @@ import json
 import os
 import re
 import tempfile
-from collections import defaultdict
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -24,7 +23,7 @@ import pyarrow as pa
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Batch, Device, Mapping, MappingEntry
+from app.models import Batch, Device, Mapping
 from app.share_pack import write_pack
 
 WEB_SITE = "https://bzjing925.github.io/aln-data-web"
@@ -77,113 +76,16 @@ def fetch_web_snapshot() -> tuple[list[dict], list[dict], list[dict]]:
     return batches, mappings, devices
 
 
-def _nullable(value):
-    # PyArrow 的 to_pylist 通常已转换为 None；这里也兼容 pandas/numpy 的 NaN。
-    try:
-        return None if value != value else value
-    except Exception:  # noqa: BLE001
-        return value
-
-
 def import_web_snapshot(
     db: Session, batches: list[dict], mappings: list[dict], devices: Iterable[dict]
 ) -> dict[str, int]:
-    """增量导入网页快照。
+    """增量导入网页快照（薄封装，逻辑在 snapshot_service）。"""
+    from app.services.snapshot_service import import_snapshot
 
-    同名本机批次/对照表优先，避免覆盖用户本地工作；下一次网页新增的对象会被导入。
-    """
-    local_mappings = {row.name: row for row in db.scalars(select(Mapping)).all()}
-    mapping_ids: dict[int, int] = {}
-    added_mappings = 0
-    for remote in mappings:
-        name = str(remote.get("name") or "").strip()
-        if not name:
-            continue
-        mapping = local_mappings.get(name)
-        if mapping is None:
-            mapping = Mapping(name=name, file_path=f"web://{name}", entry_count=0)
-            db.add(mapping)
-            db.flush()
-            entries = remote.get("entries") or []
-            db.bulk_insert_mappings(
-                MappingEntry,
-                [
-                    {
-                        "mapping_id": mapping.id,
-                        "mark": str(entry.get("mark") or ""),
-                        "description": _nullable(entry.get("description")),
-                        "eg": _nullable(entry.get("eg")),
-                        "fl": _nullable(entry.get("fl")),
-                        "ag": _nullable(entry.get("ag")),
-                        "area_s11": _nullable(entry.get("area_s11")),
-                        "area_s22": _nullable(entry.get("area_s22")),
-                        "has_pf": bool(entry.get("has_pf")),
-                        "raw_tokens": None,
-                    }
-                    for entry in entries
-                    if entry.get("mark") is not None
-                ],
-            )
-            mapping.entry_count = len(entries)
-            local_mappings[name] = mapping
-            added_mappings += 1
-        if remote.get("id") is not None:
-            mapping_ids[int(remote["id"])] = mapping.id
-
-    local_batch_nos = set(db.scalars(select(Batch.batch_no)).all())
-    batch_ids: dict[str, int] = {}
-    added_batches = 0
-    for remote in batches:
-        batch_no = str(remote.get("batch_no") or "").strip()
-        if not batch_no or batch_no in local_batch_nos:
-            continue
-        mapping_id = mapping_ids.get(int(remote.get("mapping_id") or 0))
-        if mapping_id is None:
-            raise WebSyncError(f"批次 {batch_no} 引用了快照中不存在的对照表")
-        batch = Batch(
-            batch_no=batch_no,
-            mapping_id=mapping_id,
-            f_start_ghz=_nullable(remote.get("f_start_ghz")),
-            f_end_ghz=_nullable(remote.get("f_end_ghz")),
-            deembedded=bool(remote.get("deembedded")),
-            deembed_method=str(remote.get("deembed_method") or "default"),
-            process_type=str(remote.get("process_type") or "AUTO"),
-            file_path=f"web://{batch_no}",
-            raw_zip_path=None,
-            source="web",
-            device_count=int(remote.get("device_count") or 0),
-            uploaded_by="web-sync",
-        )
-        db.add(batch)
-        db.flush()
-        batch_ids[batch_no] = batch.id
-        added_batches += 1
-
-    rows_by_batch: dict[str, list[dict]] = defaultdict(list)
-    for index, remote in enumerate(devices):
-        batch_id = batch_ids.get(str(remote.get("batch_no") or ""))
-        if batch_id is None:
-            continue
-        values = {
-            key: _nullable(value)
-            for key, value in remote.items()
-            if key in _DEVICE_COLUMNS and key not in {"id", "batch_id", "s_param_path"}
-        }
-        values["batch_id"] = batch_id
-        values["original_filename"] = str(values.get("original_filename") or f"web-{index}")
-        values["s_param_port"] = "S22" if values.get("s_param_port") == "S22" else "S11"
-        if values.get("pf") is not None:
-            values["pf"] = "Y" if str(values["pf"]).upper() in {"Y", "1", "TRUE"} else "N"
-        values["deembedded"] = bool(values.get("deembedded"))
-        rows_by_batch[str(remote.get("batch_no"))].append(values)
-    for rows in rows_by_batch.values():
-        db.bulk_insert_mappings(Device, rows)
-    db.commit()
-    return {
-        "mappings_added": added_mappings,
-        "batches_added": added_batches,
-        "devices_added": sum(len(rows) for rows in rows_by_batch.values()),
-    }
+    try:
+        return import_snapshot(db, batches, mappings, devices, source="web")
+    except ValueError as exc:
+        raise WebSyncError(str(exc)) from exc
 
 
 def pull_from_web(db: Session) -> dict[str, int]:
