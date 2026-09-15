@@ -18,7 +18,7 @@ def test_config_round_trip(tmp_path, monkeypatch):
     assert loaded.username == "bozuo"
 
 
-def test_client_calls(monkeypatch):
+def test_client_calls():
     seen = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -26,7 +26,9 @@ def test_client_calls(monkeypatch):
         if request.url.path == "/api/health":
             return httpx.Response(200, json={"status": "ok"})
         if request.url.path == "/api/sync/snapshot":
-            return httpx.Response(200, json={"batches": [], "mappings": [], "devices_arrow_gz_b64": ""})
+            return httpx.Response(
+                200, json={"batches": [], "mappings": [], "devices_arrow_gz_b64": ""}
+            )
         if request.url.path == "/api/tasks/7":
             return httpx.Response(200, json={"id": 7, "status": "success"})
         return httpx.Response(404, json={"detail": "nope"})
@@ -34,8 +36,28 @@ def test_client_calls(monkeypatch):
     cfg = server_client.ServerConfig(server_url="http://server", username="u")
     client = server_client.ServerClient(cfg, transport=httpx.MockTransport(handler))
     assert client.reachable() is True
-    assert client.fetch_snapshot({"A"}) == {"batches": [], "mappings": [], "devices_arrow_gz_b64": ""}
+    assert client.fetch_snapshot({"A"}) == {
+        "batches": [],
+        "mappings": [],
+        "devices_arrow_gz_b64": "",
+    }
     assert json.loads(seen["/api/sync/snapshot"].content) == {"known_batch_nos": ["A"]}
     assert client.task_status(7)["status"] == "success"
     with pytest.raises(server_client.ServerError):
         client.task_status(999)
+
+
+def test_download_s1p_not_found_raises_server_error(tmp_path):
+    """流式 404 必须抛 ServerError 且消息含状态码（钉住契约防 ResponseNotRead 回归）。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/sync/download":
+            return httpx.Response(404, json={"detail": "not found"})
+        return httpx.Response(404, json={"detail": "nope"})
+
+    cfg = server_client.ServerConfig(server_url="http://server", username="u")
+    client = server_client.ServerClient(cfg, transport=httpx.MockTransport(handler))
+    dest = tmp_path / "down.s1p"
+    with pytest.raises(server_client.ServerError, match="404"):
+        client.download_s1p("B1", "dev.s2p", "S11", dest)
+    assert not dest.exists()

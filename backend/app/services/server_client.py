@@ -44,7 +44,10 @@ def load_config() -> ServerConfig | None:
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        return ServerConfig(server_url=str(data["server_url"]), username=str(data.get("username") or "anonymous"))
+        return ServerConfig(
+            server_url=str(data["server_url"]),
+            username=str(data.get("username") or "anonymous"),
+        )
     except (OSError, json.JSONDecodeError, KeyError, TypeError):
         return None
 
@@ -52,16 +55,24 @@ def load_config() -> ServerConfig | None:
 def save_config(config: ServerConfig) -> None:
     _config_dir().mkdir(parents=True, exist_ok=True)
     _config_path().write_text(
-        json.dumps({"server_url": config.server_url, "username": config.username}, ensure_ascii=False, indent=2),
+        json.dumps(
+            {"server_url": config.server_url, "username": config.username},
+            ensure_ascii=False,
+            indent=2,
+        ),
         encoding="utf-8",
     )
 
 
 class ServerClient:
-    def __init__(self, config: ServerConfig, *, transport: httpx.BaseTransport | None = None) -> None:
+    def __init__(
+        self, config: ServerConfig, *, transport: httpx.BaseTransport | None = None
+    ) -> None:
         self.config = config
         self._http = httpx.Client(
-            base_url=f"{config.server_url}/api", timeout=httpx.Timeout(60.0, read=300.0), transport=transport
+            base_url=f"{config.server_url}/api",
+            timeout=httpx.Timeout(60.0, read=300.0),
+            transport=transport,
         )
 
     def close(self) -> None:
@@ -70,7 +81,7 @@ class ServerClient:
     def __enter__(self) -> ServerClient:
         return self
 
-    def __exit__(self, *exc) -> None:
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         self.close()
 
     def _check(self, response: httpx.Response) -> httpx.Response:
@@ -131,7 +142,12 @@ class ServerClient:
             return self._check(
                 self._http.get(
                     "/sync/sparam",
-                    params={"batch_no": batch_no, "filename": filename, "port": port, "param": param},
+                    params={
+                        "batch_no": batch_no,
+                        "filename": filename,
+                        "port": port,
+                        "param": param,
+                    },
                 )
             ).json()
         except httpx.HTTPError as exc:
@@ -143,6 +159,9 @@ class ServerClient:
                 "GET", "/sync/download",
                 params={"batch_no": batch_no, "filename": filename, "port": port},
             ) as response:
+                # 流式响应先读入（错误页 body 小，开销可忽略），
+                # 否则 _check 访问 response.text 会抛 ResponseNotRead
+                response.read()
                 self._check(response)
                 with dest.open("wb") as out:
                     for chunk in response.iter_bytes():
