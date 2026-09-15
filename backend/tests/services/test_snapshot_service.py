@@ -1,9 +1,5 @@
 """快照导出→导入 round-trip：空库导入后数据逐行一致；known 差集过滤。"""
 
-import base64
-import gzip
-
-import pyarrow as pa
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
@@ -35,13 +31,6 @@ def _seed(db: Session) -> None:
     db.commit()
 
 
-def _decode_devices(payload_b64: str) -> list[dict]:
-    if not payload_b64:
-        return []
-    raw = gzip.decompress(base64.b64decode(payload_b64))
-    return pa.ipc.open_file(pa.py_buffer(raw)).read_all().to_pylist()
-
-
 def test_snapshot_round_trip() -> None:
     src = _session()
     _seed(src)
@@ -49,7 +38,7 @@ def test_snapshot_round_trip() -> None:
     assert [b["batch_no"] for b in snap["batches"]] == ["B-1"]
     assert snap["batches"][0]["uploaded_by"] == "tester"
     assert [m["name"] for m in snap["mappings"]] == ["MAP-A"]
-    devices = _decode_devices(snap["devices_arrow_gz_b64"])
+    devices = snapshot_service.decode_devices(snap["devices_arrow_gz_b64"])
     assert len(devices) == 2
 
     dst = _session()
@@ -61,6 +50,12 @@ def test_snapshot_round_trip() -> None:
     assert batch.source == "server"
     assert batch.file_path == "server://B-1"
     assert dst.scalar(select(Mapping).where(Mapping.name == "MAP-A")).file_path == "server://MAP-A"
+    imported = dst.scalars(select(Device).order_by(Device.id)).all()
+    assert [d.original_filename for d in imported] == ["d0.s1p", "d1.s1p"]
+    assert [d.s_param_port for d in imported] == ["S11", "S22"]
+    assert all(d.pf == "Y" for d in imported)
+    assert all(d.fs_ghz == 4.8 for d in imported)
+    assert all(d.deembedded is False for d in imported)
     # 幂等：重复导入不再新增
     again = snapshot_service.import_snapshot(
         dst, snap["batches"], snap["mappings"], devices, source="server"
@@ -75,3 +70,4 @@ def test_snapshot_known_batches_excluded() -> None:
     assert snap["batches"] == []
     assert snap["mappings"] == []
     assert snap["devices_arrow_gz_b64"] == ""
+    assert snapshot_service.decode_devices("") == []

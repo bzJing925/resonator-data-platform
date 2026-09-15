@@ -12,13 +12,23 @@ from collections import defaultdict
 from collections.abc import Iterable
 
 import pyarrow as pa
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy import BigInteger, Boolean, Float, Integer, SmallInteger, String, select
+from sqlalchemy.orm import Session, selectinload
 
 from app.models import Batch, Device, Mapping, MappingEntry
 
 _DEVICE_COLUMNS = {column.name for column in Device.__table__.columns}
 _SHARED_DEVICE_COLUMNS = sorted(_DEVICE_COLUMNS - {"id", "batch_id", "s_param_path"})
+_DEVICE_CHUNK = 5000
+
+_ARROW_TYPE_MAP = (
+    (Boolean, pa.bool_()),
+    (SmallInteger, pa.int64()),
+    (BigInteger, pa.int64()),
+    (Integer, pa.int64()),
+    (Float, pa.float64()),
+    (String, pa.string()),
+)
 
 
 def _nullable(value):
@@ -49,17 +59,46 @@ def _mapping_payload(mapping: Mapping) -> dict:
     }
 
 
+def _devices_arrow_schema() -> pa.Schema:
+    """从 Device 列类型推出固定 Arrow schema，避免分块间 null 列类型漂移。"""
+    fields = []
+    for name in _SHARED_DEVICE_COLUMNS:
+        sa_type = Device.__table__.columns[name].type
+        for sa_cls, arrow_type in _ARROW_TYPE_MAP:
+            if isinstance(sa_type, sa_cls):
+                fields.append(pa.field(name, arrow_type))
+                break
+        else:
+            fields.append(pa.field(name, pa.string()))
+    fields.append(pa.field("batch_no", pa.string()))
+    return pa.schema(fields)
+
+
+def _write_chunk(writer, sink, schema: pa.Schema, chunk: list[dict]):
+    table = pa.Table.from_pylist(chunk, schema=schema)
+    if writer is None:
+        writer = pa.ipc.new_file(sink, schema)
+    writer.write_table(table)
+    return writer
+
+
 def build_snapshot(db: Session, known_batch_nos: set[str]) -> dict:
-    """导出 known_batch_nos 之外的全部批次，返回可 JSON 序列化的 dict。"""
+    """导出 known_batch_nos 之外的全部批次，返回可 JSON 序列化的 dict。
+
+    devices 走 Core 流式查询分块写入 Arrow IPC（固定 schema），首次全量
+    同步不会把 ORM 实例/pylist/Arrow 三份副本同时留在内存。
+    """
+    batch_stmt = (
+        select(Batch)
+        .options(selectinload(Batch.mapping).selectinload(Mapping.entries))
+        .order_by(Batch.id)
+    )
     if known_batch_nos:
-        batches = db.scalars(
-            select(Batch).where(Batch.batch_no.notin_(known_batch_nos))
-        ).all()
-    else:
-        batches = db.scalars(select(Batch)).all()
+        batch_stmt = batch_stmt.where(Batch.batch_no.notin_(known_batch_nos))
+    batches = db.scalars(batch_stmt).all()
+
     mappings_payload: dict[int, dict] = {}
     batches_payload: list[dict] = []
-    devices_payload: list[dict] = []
     for batch in batches:
         batches_payload.append(
             {
@@ -77,17 +116,31 @@ def build_snapshot(db: Session, known_batch_nos: set[str]) -> dict:
         )
         if batch.mapping_id not in mappings_payload and batch.mapping is not None:
             mappings_payload[batch.mapping_id] = _mapping_payload(batch.mapping)
-        for device in batch.devices:
-            row = {column: getattr(device, column) for column in _SHARED_DEVICE_COLUMNS}
-            row["batch_no"] = batch.batch_no
-            devices_payload.append(row)
+
+    device_columns = [Device.__table__.columns[c] for c in _SHARED_DEVICE_COLUMNS]
+    device_stmt = (
+        select(*device_columns, Batch.batch_no)
+        .join(Batch, Device.batch_id == Batch.id)
+        .order_by(Batch.id, Device.id)
+        .execution_options(yield_per=_DEVICE_CHUNK)
+    )
+    if known_batch_nos:
+        device_stmt = device_stmt.where(Batch.batch_no.notin_(known_batch_nos))
 
     arrow_b64 = ""
-    if devices_payload:
-        table = pa.Table.from_pylist(devices_payload)
-        sink = pa.BufferOutputStream()
-        with pa.ipc.new_file(sink, table.schema) as writer:
-            writer.write_table(table)
+    schema = _devices_arrow_schema()
+    sink = pa.BufferOutputStream()
+    writer = None
+    chunk: list[dict] = []
+    for row in db.execute(device_stmt):
+        chunk.append(dict(row._mapping))
+        if len(chunk) >= _DEVICE_CHUNK:
+            writer = _write_chunk(writer, sink, schema, chunk)
+            chunk = []
+    if chunk:
+        writer = _write_chunk(writer, sink, schema, chunk)
+    if writer is not None:
+        writer.close()
         arrow_b64 = base64.b64encode(gzip.compress(sink.getvalue().to_pybytes())).decode("ascii")
 
     return {
