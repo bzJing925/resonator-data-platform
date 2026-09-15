@@ -152,8 +152,19 @@ def device_sparam(
             }
         # fallback: 继续走 skrf 路径
 
-    # --- skrf 标准路径 ---
-    return build_sparam_response(device, device_id, param)
+    # --- skrf 标准路径（本地无文件时桌面模式代理到服务器）---
+    try:
+        return build_sparam_response(device, device_id, param)
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise
+        from app.services.server_proxy import proxy_sparam
+
+        proxied = proxy_sparam(device, param)
+        if proxied is not None:
+            proxied["device_id"] = device_id
+            return proxied
+        raise
 
 
 @router.get("/{device_id}/bodeq")
@@ -261,6 +272,17 @@ def download_device_s1p(
     batch_no = device.batch.batch_no if device.batch else None
     path = _resolve_sparam_path(device.s_param_path, batch_no=batch_no)
     if not path.exists():
+        from app.services.server_proxy import proxy_download
+
+        proxied = proxy_download(device)
+        if proxied is not None:
+            tmp, cleanup = proxied
+            return FileResponse(
+                tmp,
+                media_type="application/octet-stream",
+                filename=path.name,
+                background=cleanup,
+            )
         raise HTTPException(status_code=404, detail=f"S 参数文件不存在: {path}")
 
     return FileResponse(
