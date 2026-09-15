@@ -26,6 +26,8 @@ frontend/.vite/
 frontend/release/
 frontend/electron-dist/
 frontend/*.tsbuildinfo
+frontend/test-results/
+frontend/playwright-report/
 
 # 数据导出/临时
 backend/exports/
