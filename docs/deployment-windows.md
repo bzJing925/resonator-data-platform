@@ -298,16 +298,13 @@ docker compose -f deploy\docker-compose.yml restart nginx
 
 把这台机器当作课题组内网服务器（多人浏览器访问 + 桌面版同步目标）时，在上面 5 步之外再做这几件事：
 
-1. **固定 IP**：在路由器给本机 MAC 绑定固定 IP（或设静态 IP），桌面版"服务器地址"配置依赖它不变。
+1. **固定 IP**：在路由器给本机 MAC 绑定固定 IP（或设静态 IP），桌面版「服务器地址」配置依赖它不变。
 2. **开机自启**：Docker Desktop → Settings → General 勾选 "Start Docker Desktop when you sign in"；compose 各服务已带 `restart: unless-stopped`，登录后自动恢复。建议给这台机器配一个自动登录的专用账户。
-3. **防火墙放行**：首次启动 Docker 后 Windows 防火墙若提示，允许 8080 端口入站（ nginx ）；或 PowerShell 管理员执行：
-   ```powershell
-   New-NetFirewallRule -DisplayName "ALN-Data-8080" -Direction Inbound -LocalPort 8080 -Protocol TCP -Action Allow
-   ```
+3. **防火墙放行**：见 §2.4，若已按 §2.4 建过规则可跳过。
 4. **完全离线（不能联网）的机器**：在能联网的机器上构建镜像后导出，U 盘拷入导入：
    ```powershell
    # 能联网的机器（构建完成后）
-   docker save -o aln-images.tar deploy-api deploy-worker postgres:15-alpine redis:7-alpine deploy-nginx
+   docker save -o aln-images.tar deploy-api deploy-worker postgres:15-alpine redis:7-alpine nginx:alpine
    # 离线服务器
    docker load -i aln-images.tar
    ```
