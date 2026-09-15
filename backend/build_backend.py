@@ -36,6 +36,9 @@ def run(onefile: bool = False):
 
     work_dir = ROOT / "build" / "pyinstaller" / "work"
     dist_dir = ROOT / "build" / "pyinstaller" / "dist"
+    # PyInstaller 会仅依据 .toc 缓存判断 PYZ 是否可复用；若构建曾中断或清理过
+    # PYZ-00.pyz，本次会生成缺失 Python 归档的不可启动应用。工作目录必须成对清理。
+    shutil.rmtree(work_dir, ignore_errors=True)
 
     # 默认 --onedir：onefile 每次启动都解压到全新 _MEI 临时目录，macOS 会对其中
     # 数百个 dylib 逐个重新做安全校验（路径无缓存复用），实测仅此一项就要 60–90s；

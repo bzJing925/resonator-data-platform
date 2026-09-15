@@ -13,6 +13,9 @@ meipass = getattr(sys, "_MEIPASS", None)
 if meipass:
     os.environ["ALN_DESKTOP"] = "1"
     os.environ["ALN_DESKTOP_MODE"] = "true"
+    # 桌面版不能继承开发终端中的任意 DEBUG 值（如 "release"），
+    # Settings 要求布尔值，错误值会让后端在导入前直接退出。
+    os.environ["DEBUG"] = "false"
     # 桌面版数据目录强制固定到用户目录，覆盖 .env 里可能写死的开发绝对路径
     desktop_dir = os.path.join(os.path.expanduser("~"), ".aln-data")
     os.environ["ALN_DESKTOP_DIR"] = desktop_dir
