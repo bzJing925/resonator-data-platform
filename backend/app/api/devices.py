@@ -12,7 +12,6 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Any
 
-import numpy as np
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 
@@ -25,9 +24,10 @@ log = logging.getLogger("aln")
 
 router = APIRouter(prefix="/devices", tags=["devices"])
 
-# 缓存容量 ≈ 100 个文件 × 600 KB ≈ 60 MB，在容器内存预算内。
-_NETWORK_CACHE_SIZE = 128
-_BODEQ_CACHE_SIZE = 128
+# S 参数网络和 BodeQ 曲线都会持有完整频率数据。限制为 32 项，使两类热点缓存
+# 在大量随机浏览设备时仍保持可预测的内存上限。
+_NETWORK_CACHE_SIZE = 32
+_BODEQ_CACHE_SIZE = 32
 
 
 @lru_cache(maxsize=_NETWORK_CACHE_SIZE)
@@ -44,21 +44,17 @@ def _load_network(path_str: str):
 
 @lru_cache(maxsize=_BODEQ_CACHE_SIZE)
 def _calc_bodeq_cached(
-    s_hash: bytes,
-    freq_hash: bytes,
-    s_bytes: bytes,
-    freq_bytes: bytes,
+    path_str: str,
 ) -> dict[str, Any]:
-    """缓存 BodeQ 计算结果。
+    """缓存 BodeQ 计算结果，复用已缓存的 ``skrf.Network``。
 
-    numpy array 不可 hash，因此序列化为 bytes + 长度元组作为缓存 key。
-    实际 key 是 (s_hash, freq_hash)，s_bytes/freq_bytes 仅用于反序列化。
+    以数组 ``tobytes()`` 作为 LRU 参数会额外保留每份频谱和频率轴的副本；
+    S 参数文件入库后不会修改，因此路径是稳定且轻量的 cache key。
     """
     from app.core.extract import calc_bodeq_curve
 
-    s = np.frombuffer(s_bytes, dtype=np.complex128)
-    freq = np.frombuffer(freq_bytes, dtype=np.float64)
-    return calc_bodeq_curve(s, freq)
+    net = _load_network(path_str)
+    return calc_bodeq_curve(net.s[:, 0, 0], net.f)
 
 
 def _resolve_sparam_path(rel_or_abs: str, batch_no: str | None = None) -> Path:
@@ -147,13 +143,7 @@ def device_bodeq(device_id: int, db: DbSession) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=f"S 参数文件不存在: {path}")
 
     try:
-        net = _load_network(str(path))
-        s = net.s[:, 0, 0]
-        freq = net.f
-        # BodeQ 计算缓存：key 为 numpy array 的 bytes 摘要
-        s_bytes = s.tobytes()
-        freq_bytes = freq.tobytes()
-        result = _calc_bodeq_cached(hash(s_bytes), hash(freq_bytes), s_bytes, freq_bytes)
+        result = _calc_bodeq_cached(str(path))
     except HTTPException:
         raise
     except Exception as exc:
