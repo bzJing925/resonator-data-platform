@@ -29,6 +29,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api import (
     batches,
+    desktop_sync,
     devices,
     export,
     files,
@@ -169,6 +170,7 @@ app.include_router(process.router, prefix="/api")
 app.include_router(surrogate.router, prefix="/api")
 app.include_router(web_sync.router, prefix="/api")
 app.include_router(sync.router, prefix="/api")
+app.include_router(desktop_sync.router, prefix="/api")
 
 # 静态文件服务 + SPA fallback
 if STATIC_DIR:
