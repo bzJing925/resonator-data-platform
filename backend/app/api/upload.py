@@ -25,6 +25,7 @@ from app.services.upload_service import (
     MappingNotFoundError,
     TaskDispatchError,
     create_batch_and_dispatch,
+    create_table_batch,
 )
 
 router = APIRouter(prefix="/uploads", tags=["uploads"])
@@ -51,8 +52,14 @@ def create_upload(
         or fname_lower.endswith(".s1p")
         or fname_lower.endswith(".s2p")
         or fname_lower.endswith(".snp")
+        or fname_lower.endswith(".xlsx")
+        or fname_lower.endswith(".xls")
+        or fname_lower.endswith(".csv")
     ):
-        raise HTTPException(status_code=400, detail="仅支持 .zip / .s1p / .s2p / .snp 文件")
+        raise HTTPException(
+            status_code=400,
+            detail="仅支持 .zip / .s1p / .s2p / .snp / .xlsx / .xls / .csv 文件",
+        )
     if process_type not in ("AUTO", "S1P", "S2P", "BOTH"):
         raise HTTPException(
             status_code=400, detail="process_type 必须是 AUTO / S1P / S2P / BOTH 之一"
@@ -67,6 +74,7 @@ def create_upload(
     is_snp = (
         fname_lower.endswith(".s1p") or fname_lower.endswith(".s2p") or fname_lower.endswith(".snp")
     )
+    is_table = fname_lower.endswith((".xlsx", ".xls", ".csv"))
     batch_no = Path(file.filename).stem
     if not batch_no:
         raise HTTPException(status_code=400, detail="文件名为空，无法解析批次号")
@@ -82,7 +90,7 @@ def create_upload(
                 f"请检查 DATA_ROOT ({settings.DATA_ROOT}) 是否存在且当前用户可写。"
             ),
         ) from exc
-    saved_name = f"{uuid.uuid4().hex}.zip"
+    saved_name = f"{uuid.uuid4().hex}{Path(file.filename).suffix.lower() if is_table else '.zip'}"
     saved_path = month_dir / saved_name
 
     max_bytes = settings.UPLOAD_MAX_GB * 1024**3
@@ -157,18 +165,27 @@ def create_upload(
     # zip 已经在盘上了；下面任何 DB 失败都得把 zip 删掉，避免
     # 并发上传同名文件触发 batch_no unique 冲突时孤儿 zip 占盘。
     try:
-        task = create_batch_and_dispatch(
-            db,
-            zip_path=saved_path,
-            batch_no=batch_no,
-            mapping_id=mapping_id,
-            source="http",
-            f_start_ghz=f_start_ghz,
-            f_end_ghz=f_end_ghz,
-            deembed=deembed,
-            deembed_method=deembed_method,
-            process_type=process_type,
-        )
+        if is_table:
+            task = create_table_batch(
+                db,
+                table_path=saved_path,
+                batch_no=batch_no,
+                mapping_id=mapping_id,
+                deembedded=deembed,
+            )
+        else:
+            task = create_batch_and_dispatch(
+                db,
+                zip_path=saved_path,
+                batch_no=batch_no,
+                mapping_id=mapping_id,
+                source="http",
+                f_start_ghz=f_start_ghz,
+                f_end_ghz=f_end_ghz,
+                deembed=deembed,
+                deembed_method=deembed_method,
+                process_type=process_type,
+            )
         if task is None:
             saved_path.unlink(missing_ok=True)
             raise HTTPException(status_code=500, detail="创建批次失败")

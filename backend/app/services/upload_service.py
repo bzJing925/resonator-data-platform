@@ -16,7 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
-from app.models import Batch, Mapping, UploadTask
+from app.models import Batch, Device, Mapping, UploadTask
 from app.workers.dispatch import dispatch_batch_task
 
 logger = logging.getLogger(__name__)
@@ -170,6 +170,71 @@ def create_batch_and_dispatch(
         task.celery_task_id = celery_task_id
         db.commit()
 
+    return task
+
+
+def create_table_batch(
+    db: Session,
+    table_path: Path,
+    batch_no: str,
+    mapping_id: int,
+    *,
+    deembedded: bool = False,
+    uploaded_by: str = "anonymous",
+) -> UploadTask:
+    """导入已提取参数表格，不经过 snp 解压/计算流水线。
+
+    表格列契约与分享包上传器完全一致，故桌面端和网页版会看到同一套字段。
+    """
+    mapping = db.get(Mapping, mapping_id)
+    if mapping is None:
+        raise MappingNotFoundError(f"对照表 {mapping_id} 不存在")
+
+    from app.share_pack import rows_from_xlsx
+
+    rows, _failures, stats, _entries, _report = rows_from_xlsx(table_path, deembedded)
+    unique_batch_no = _generate_unique_batch_no(db, batch_no)
+    now = datetime.now(UTC)
+    task = UploadTask(
+        batch_no=unique_batch_no,
+        status="success",
+        progress_pct=100,
+        stage="done",
+        stage_progress_pct=100,
+        progress_msg=f"已从表格导入 {len(rows)} 条记录",
+        finished_at=now,
+        kind="upload",
+    )
+    db.add(task)
+    db.flush()
+
+    batch = Batch(
+        batch_no=unique_batch_no,
+        mapping_id=mapping_id,
+        deembedded=bool(deembedded),
+        deembed_method="default",
+        process_type=stats["process_type"],
+        file_path=str(table_path),
+        raw_zip_path=None,
+        source="table",
+        device_count=len(rows),
+        task_id=task.id,
+        uploaded_by=uploaded_by,
+    )
+    db.add(batch)
+    db.flush()
+
+    for row in rows:
+        values = {key: row.get(key) for key in Device.__table__.columns.keys() if key in row}
+        values["batch_id"] = batch.id
+        # 表格没有端口列时沿用原始导入行为：视为 S11；PF 约束统一为 Y/N。
+        values["s_param_port"] = "S22" if values.get("s_param_port") == "S22" else "S11"
+        values["pf"] = "Y" if str(values.get("pf") or "").upper() in {"Y", "1", "TRUE"} else "N"
+        values["deembedded"] = bool(deembedded)
+        db.add(Device(**values))
+
+    db.commit()
+    db.refresh(task)
     return task
 
 

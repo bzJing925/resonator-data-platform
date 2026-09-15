@@ -7,6 +7,7 @@ de-embed 静默给出错位的结果。
 
 from __future__ import annotations
 
+import tracemalloc
 from pathlib import Path
 
 import pytest
@@ -48,3 +49,19 @@ def test_extract_raises_on_8col_row(tmp_path: Path) -> None:
     s2p = _make_s2p(tmp_path, body)
     with pytest.raises(ValueError, match="列数 8 < 9"):
         split_s2p_to_s1p(s2p, tmp_path / "s11", tmp_path / "s22")
+
+
+def test_split_large_file_has_bounded_peak_memory(tmp_path: Path) -> None:
+    """拆分时不应随输入行数额外保留整份源文件和两份输出。"""
+    s2p = tmp_path / "large.s2p"
+    with s2p.open("w") as f:
+        f.write(_GOOD_HEADER)
+        for _ in range(100_000):
+            f.write(_GOOD_DATA_ROW)
+
+    tracemalloc.start()
+    split_s2p_to_s1p(s2p, tmp_path / "s11", tmp_path / "s22")
+    _current, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+
+    assert peak < 3 * 1024 * 1024

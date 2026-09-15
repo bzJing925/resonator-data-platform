@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 
 @dataclass(frozen=True)
@@ -68,36 +69,25 @@ def split_s2p_to_s1p(
     s11_path = out_dir_s11 / f"{stem}{sfx_s11}.s1p"
     s22_path = out_dir_s22 / f"{stem}{sfx_s22}.s1p"
 
-    with open(s2p_path) as f:
-        lines = f.readlines()
-
-    header, data = _split_header_data(lines)
+    header = _read_header(s2p_path)
     s11_header = _modify_header(header, "S11")
     s22_header = _modify_header(header, "S22")
-    s11_data = _extract_s11(data)
-    s22_data = _extract_s22(data)
-
-    _write(s11_path, s11_header, s11_data)
-    _write(s22_path, s22_header, s22_data)
+    _split_data_streaming(s2p_path, s11_path, s22_path, s11_header, s22_header)
 
     return SplitResult(s11_path=s11_path, s22_path=s22_path)
 
 
-def _split_header_data(content: list[str]) -> tuple[list[str], list[str]]:
+def _read_header(path: Path) -> list[str]:
+    """读取数据段前的 header，而不把整个 touchstone 文件留在内存中。"""
     header: list[str] = []
-    data: list[str] = []
-    header_ended = False
-    for line in content:
-        stripped = line.strip()
-        if not header_ended:
+    with open(path) as source:
+        for line in source:
+            stripped = line.strip()
             if stripped.startswith("!") or stripped.startswith("#") or not stripped:
                 header.append(line)
             else:
-                data.append(line)
-                header_ended = True
-        else:
-            data.append(line)
-    return header, data
+                break
+    return header
 
 
 def _modify_header(header: list[str], parameter: str) -> list[str]:
@@ -130,34 +120,41 @@ def _modify_header(header: list[str], parameter: str) -> list[str]:
     return new_header
 
 
-def _extract_s11(data_lines: list[str]) -> list[str]:
-    # S2P 数据行格式：freq + S11_re/im + S21_re/im + S12_re/im + S22_re/im = 9 列。
-    # 列数 < 9 视为损坏行 → raise，避免与 _extract_s22 产生数量不对齐的 S11/S22
-    # 进而让下游 skrf de-embed 拿到对不上 frequency 轴的两个文件、静默腐败结果。
-    out: list[str] = []
-    for lineno, line in enumerate(data_lines, start=1):
-        parts = line.strip().split()
-        if not parts:
-            continue  # 空行（常见的末尾换行）跳过
-        if len(parts) < 9:
-            raise ValueError(f"S2P 数据行 {lineno} 列数 {len(parts)} < 9，文件可能截断或损坏")
-        out.append(f"{parts[0]} {parts[1]} {parts[2]}\n")
-    return out
-
-
-def _extract_s22(data_lines: list[str]) -> list[str]:
-    out: list[str] = []
-    for lineno, line in enumerate(data_lines, start=1):
-        parts = line.strip().split()
-        if not parts:
-            continue
-        if len(parts) < 9:
-            raise ValueError(f"S2P 数据行 {lineno} 列数 {len(parts)} < 9，文件可能截断或损坏")
-        out.append(f"{parts[0]} {parts[-2]} {parts[-1]}\n")
-    return out
-
-
-def _write(path: Path, header: list[str], data: list[str]) -> None:
-    with open(path, "w") as f:
-        f.writelines(header)
-        f.writelines(data)
+def _split_data_streaming(
+    source_path: Path,
+    s11_path: Path,
+    s22_path: Path,
+    s11_header: list[str],
+    s22_header: list[str],
+) -> None:
+    """流式拆分数据，并在完整校验后原子发布两份输出文件。"""
+    s11_temp = NamedTemporaryFile(mode="w", dir=s11_path.parent, delete=False, encoding="utf-8")
+    s22_temp = NamedTemporaryFile(mode="w", dir=s22_path.parent, delete=False, encoding="utf-8")
+    s11_temp_path = Path(s11_temp.name)
+    s22_temp_path = Path(s22_temp.name)
+    try:
+        with s11_temp, s22_temp, open(source_path) as source:
+            s11_temp.writelines(s11_header)
+            s22_temp.writelines(s22_header)
+            data_started = False
+            for lineno, line in enumerate(source, start=1):
+                stripped = line.strip()
+                if not data_started:
+                    if stripped.startswith(("!", "#")) or not stripped:
+                        continue
+                    data_started = True
+                if not stripped:
+                    continue
+                parts = stripped.split()
+                if len(parts) < 9:
+                    raise ValueError(
+                        f"S2P 数据行 {lineno} 列数 {len(parts)} < 9，文件可能截断或损坏"
+                    )
+                s11_temp.write(f"{parts[0]} {parts[1]} {parts[2]}\n")
+                s22_temp.write(f"{parts[0]} {parts[-2]} {parts[-1]}\n")
+        s11_temp_path.replace(s11_path)
+        s22_temp_path.replace(s22_path)
+    except Exception:
+        s11_temp_path.unlink(missing_ok=True)
+        s22_temp_path.unlink(missing_ok=True)
+        raise
