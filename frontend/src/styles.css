@@ -754,6 +754,16 @@ textarea {
   align-items: center;
   gap: 4px;
 }
+.analysis-chart-tools {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.analysis-chart-tools .btn {
+  min-width: 38px;
+  padding-inline: 7px;
+}
 .chart-body {
   flex: 1;
   position: relative;

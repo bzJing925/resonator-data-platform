@@ -159,6 +159,12 @@ const Z_MODE_OPTIONS = [
 // Sentinel for "no facet" radio in wafer mode.
 const NO_FACET = '__none__';
 const EMPTY_SELECTION = new Set<string>();
+const CHART_INTERACTION_MODES = [
+  { key: 'zoom', label: '缩放', title: '拖动矩形区域进行缩放' },
+  { key: 'pan', label: '平移', title: '拖动图表平移视图' },
+  { key: 'select', label: '框选', title: '拖动矩形区域选择数据点' },
+  { key: 'lasso', label: '套索', title: '自由绘制区域选择数据点' },
+] as const;
 
 // Resolve a field name into an enriched field object (label/unit/section/
 // isCategorical) using the metadata from useFields().
@@ -283,6 +289,9 @@ export default function Explore() {
   const [fullscreen, setFullscreen] = useState(false);
   const [autorangeRequest, setAutorangeRequest] = useState(0);
   const [showDataPoints, setShowDataPoints] = useState(true);
+  const [chartInteractionMode, setChartInteractionMode] = useState<
+    (typeof CHART_INTERACTION_MODES)[number]['key']
+  >('select');
 
   useEffect(() => {
     const app = document.querySelector('.app');
@@ -735,14 +744,6 @@ export default function Explore() {
         >
           复制
         </button>
-        <button
-          className="btn"
-          onClick={() => runAnalysisCommand('autorange', 'chart')}
-          disabled={workspaceState.activeTabId !== 'chart'}
-          title="坐标轴自动调整"
-        >
-          自动坐标轴
-        </button>
         {!isWafer && (
           <button
             className={`btn${showDataPoints ? ' active' : ''}`}
@@ -795,6 +796,26 @@ export default function Explore() {
                   : '尚未查询'}
               </span>
               <div className="right">
+                <div className="analysis-chart-tools" role="toolbar" aria-label="图表交互工具">
+                  {CHART_INTERACTION_MODES.map((mode) => (
+                    <button
+                      key={mode.key}
+                      className={`btn sm${chartInteractionMode === mode.key ? ' active' : ''}`}
+                      onClick={() => setChartInteractionMode(mode.key)}
+                      title={mode.title}
+                      aria-pressed={chartInteractionMode === mode.key}
+                    >
+                      {mode.label}
+                    </button>
+                  ))}
+                  <button
+                    className="btn sm"
+                    onClick={() => runAnalysisCommand('autorange', 'chart')}
+                    title="恢复全部坐标轴范围"
+                  >
+                    复位
+                  </button>
+                </div>
                 {datasets.length > 0 && (
                   <select
                     className="select"
@@ -883,6 +904,7 @@ export default function Explore() {
                       datasetRevision={chartDataset?.revision}
                       analysisLayout={!zMeta || zMode === 'facet'}
                       showDataPoints={showDataPoints}
+                      interactionMode={chartInteractionMode}
                     />
                   )}
                   {isWafer && (
@@ -900,6 +922,8 @@ export default function Explore() {
                       selectedRowIds={selection.datasetId === chartDataset?.id
                         ? selection.rowIds : EMPTY_SELECTION}
                       revision={chartDataset?.id}
+                      interactionMode={chartInteractionMode}
+                      autorangeRequest={autorangeRequest}
                     />
                   )}
                 </div>

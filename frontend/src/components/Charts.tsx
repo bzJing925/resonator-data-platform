@@ -54,6 +54,19 @@ function applyYAxisAutorange(graphDiv: any) {
   }).catch((error) => reportPlotlyError('load for Y autorange', error));
 }
 
+function applyAxesAutorange(graphDiv: any) {
+  if (!graphDiv?.layout) return;
+  const update = Object.keys(graphDiv.layout).reduce<Record<string, boolean>>((axes, key) => {
+    if (/^[xy]axis\d*$/.test(key)) axes[`${key}.autorange`] = true;
+    return axes;
+  }, {});
+  if (Object.keys(update).length === 0) return;
+  getPlotly().then((Plotly) => {
+    Promise.resolve(Plotly.relayout(graphDiv, update))
+      .catch((error) => reportPlotlyError('relayout axes autorange', error));
+  }).catch((error) => reportPlotlyError('load for axes autorange', error));
+}
+
 function applyPlotPointStyles(
   graphDiv: any,
   sourceTraces: any[],
@@ -739,6 +752,8 @@ export function WaferMap({
   onSelection,
   selectedRowIds,
   revision,
+  interactionMode = 'select',
+  autorangeRequest = 0,
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const graphDivRef = useRef<any>(null);
@@ -857,9 +872,19 @@ export function WaferMap({
     return { traces: outTraces, layout: outLayout };
   }, [rows, valueField, valueLabel, facetField, facets, aggregated]);
   const plotLayout = useMemo(
-    () => ({ ...layout, uirevision: revision || 'wafer-analysis' }),
-    [layout, revision],
+    () => ({
+      ...layout,
+      dragmode: interactionMode,
+      uirevision: revision || 'wafer-analysis',
+    }),
+    [layout, revision, interactionMode],
   );
+  const plotConfig = useMemo(() => ({
+    ...baseConfig,
+    displayModeBar: false,
+    scrollZoom: true,
+    doubleClick: 'reset+autosize',
+  }), []);
 
   const handleClick = useCallback((e) => {
     if (onPointClick && e.points && e.points[0]) {
@@ -870,6 +895,10 @@ export function WaferMap({
   useEffect(() => {
     applyPlotSelection(graphDivRef.current, selectedRowIds);
   }, [selectedRowIds, traces]);
+
+  useEffect(() => {
+    if (autorangeRequest > 0) applyAxesAutorange(graphDivRef.current);
+  }, [autorangeRequest]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -893,7 +922,7 @@ export function WaferMap({
       divId="chart-wafer"
       data={traces}
       layout={plotLayout}
-      config={baseConfig}
+      config={plotConfig}
       style={{ width: '100%', height: '100%' }}
       useResizeHandler
       onInitialized={(_figure, graphDiv) => {
@@ -1679,6 +1708,7 @@ interface UnifiedSpecArgs {
   analysisLayout?: boolean;
   datasetRevision?: number | string;
   showDataPoints?: boolean;
+  interactionMode?: 'zoom' | 'pan' | 'select' | 'lasso';
 }
 
 // Pure chart-spec builder extracted from UnifiedChartGrid's useMemo so the
@@ -1937,6 +1967,7 @@ export function UnifiedChartGrid({
   analysisLayout = false,
   datasetRevision,
   showDataPoints = true,
+  interactionMode = 'select',
 }: UnifiedSpecArgs & {
   onWarningsChange?: (warns: any[]) => void;
   onPointClick?: (d: unknown, event: any) => void;
@@ -1968,13 +1999,17 @@ export function UnifiedChartGrid({
       : buildUnifiedSpec({ chartType, rows, xFields, yFields, zField, facetZ, height, width }),
     [analysisLayout, chartType, rows, xFields, yFields, zField, facetZ, height, width, datasetRevision, showDataPoints],
   );
-  const plotLayout = useMemo(() => ({ ...layout, uirevision: revision || 'analysis' }), [layout, revision]);
+  const plotLayout = useMemo(() => ({
+    ...layout,
+    dragmode: interactionMode,
+    uirevision: revision || 'analysis',
+  }), [layout, revision, interactionMode]);
   const plotConfig = useMemo(() => analysisLayout ? {
     ...baseConfig,
-    displayModeBar: true,
+    displayModeBar: false,
     scrollZoom: true,
     doubleClick: 'reset+autosize',
-  } : baseConfig, [analysisLayout]);
+  } : { ...baseConfig, displayModeBar: false }, [analysisLayout]);
   const hasAppliedPointStylesRef = useRef(false);
   const syncPointStyles = useCallback((graphDiv: any) => {
     const hasStyles = Object.keys(pointStyles || {}).length > 0;
@@ -2012,7 +2047,7 @@ export function UnifiedChartGrid({
   }, [syncPointStyles]);
 
   useEffect(() => {
-    if (autorangeRequest > 0) applyYAxisAutorange(graphDivRef.current);
+    if (autorangeRequest > 0) applyAxesAutorange(graphDivRef.current);
   }, [autorangeRequest]);
 
   useEffect(() => {
