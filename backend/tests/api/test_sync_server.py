@@ -117,11 +117,12 @@ def test_push_batch_idempotent(client, db, tmp_path, dispatch_success):
     assert again.json()["status"] == "already_synced"
 
 
-@pytest.mark.parametrize("batch_no", [".", "..", "../../x", "a/b", "a\\b", "C:"])
+@pytest.mark.parametrize("batch_no", [".", "..", "../../x", "a/b", "a\\b", "C:", ". ", " ."])
 def test_push_batch_rejects_path_traversal(client, batch_no):
     # batch_no 会拼进 files_dir 路径并用于目录清理，必须挡住路径穿越：
     # "." 经 rmtree(files_dir / ".") 会删整个 files_dir；"a\\b"/"C:" 是
-    # Windows 语义下的子目录/盘符相对路径，双语义都需拒绝。
+    # Windows 语义下的子目录/盘符相对路径，". "/" ." 是 Windows 会归一掉的
+    # 尾点空格名，双语义都需拒绝。
     resp = client.post(
         "/api/sync/push-batch",
         files={"file": ("X.zip", _empty_zip(), "application/zip")},

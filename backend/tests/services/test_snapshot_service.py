@@ -63,6 +63,26 @@ def test_snapshot_round_trip() -> None:
     assert again == {"mappings_added": 0, "batches_added": 0, "devices_added": 0}
 
 
+def test_snapshot_multi_chunk_writer_reuse(monkeypatch) -> None:
+    """_DEVICE_CHUNK=1 时每行都触发 flush，钉住 Arrow writer 复用分支。
+
+    2 条 device 会写 2 个 chunk：第二次 _write_chunk 必须复用首个 writer
+    （否则 IPC 流出现多个 header，解码会丢行或报错）。
+    """
+    monkeypatch.setattr(snapshot_service, "_DEVICE_CHUNK", 1)
+    src = _session()
+    _seed(src)
+    snap = snapshot_service.build_snapshot(src, known_batch_nos=set())
+    devices = snapshot_service.decode_devices(snap["devices_arrow_gz_b64"])
+    assert len(devices) == 2
+    assert [d["original_filename"] for d in devices] == ["d0.s1p", "d1.s1p"]
+    assert [d["s_param_port"] for d in devices] == ["S11", "S22"]
+    assert all(d["batch_no"] == "B-1" for d in devices)
+    assert all(d["pf"] == "Y" for d in devices)
+    assert all(d["fs_ghz"] == 4.8 for d in devices)
+    assert all(d["deembedded"] is False for d in devices)
+
+
 def test_snapshot_known_batches_excluded() -> None:
     src = _session()
     _seed(src)

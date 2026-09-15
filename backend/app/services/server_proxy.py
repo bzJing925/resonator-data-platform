@@ -62,4 +62,8 @@ def proxy_download(device) -> tuple[Path, BackgroundTask] | None:
         raise HTTPException(
             status_code=503, detail=f"本地无文件且服务器不可用（需连接内网）: {exc}"
         ) from exc
+    except OSError as exc:
+        # 临时文件写盘失败（磁盘满/权限等），不属于服务器不可用
+        tmp.unlink(missing_ok=True)
+        raise HTTPException(status_code=503, detail=f"下载暂存失败: {exc}") from exc
     return tmp, BackgroundTask(tmp.unlink, missing_ok=True)

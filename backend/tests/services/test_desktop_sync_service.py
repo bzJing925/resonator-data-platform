@@ -48,12 +48,15 @@ def test_list_unsynced_batches(tmp_path, monkeypatch):
     db = _session()
     _batch(db, "L-1")
     _files(tmp_path, "L-1")
+    _batch(db, "W-1", source="watch")              # watcher 入库同样要推送
+    _files(tmp_path, "W-1")
     _batch(db, "WEB-1", source="web")             # 网页快照批次不推送
     _batch(db, "SRV-1", source="server")          # 服务器快照批次不推送
     _batch(db, "DONE-1", synced=datetime.now(UTC))  # 已同步不推送
     _batch(db, "EMPTY-1", count=0)                # 未完成入库不推送
     _batch(db, "NOFILES-1")                        # 文件目录不存在不推送
-    assert [b.batch_no for b in svc.list_unsynced_batches(db)] == ["L-1"]
+    # uploaded_at 是秒级 server_default，同秒插入顺序不定，按集合断言
+    assert sorted(b.batch_no for b in svc.list_unsynced_batches(db)) == ["L-1", "W-1"]
 
 
 def test_pack_batch_zip_decompresses_gz(tmp_path, monkeypatch):
@@ -103,6 +106,38 @@ def test_pack_batch_zip_bad_gzip_raises_server_error(tmp_path, monkeypatch):
     with pytest.raises(ServerError, match="broken.s1p.gz"):
         svc.pack_batch_zip(batch, out)
     assert not out.exists()  # 半截 zip 已清理
+
+
+def test_pack_batch_zip_truncated_gzip_raises_server_error(tmp_path, monkeypatch):
+    """截断的 gzip 抛 EOFError，同样要转为带文件名的 ServerError。"""
+    monkeypatch.setattr(svc, "_files_root", lambda: tmp_path / "files")
+    db = _session()
+    batch = _batch(db, "T-1")
+    root = _files(tmp_path, "T-1", gz=False)
+    (root / "trunc.s1p.gz").write_bytes(gzip.compress(b"data")[:10])  # 截尾
+
+    out = tmp_path / "out.zip"
+    with pytest.raises(ServerError, match="trunc.s1p.gz"):
+        svc.pack_batch_zip(batch, out)
+    assert not out.exists()
+
+
+def test_finalize_rmtree_failure_keeps_files_and_marks_synced(tmp_path, monkeypatch):
+    """删除本地文件失败（OSError）：synced_at 已提交、文件保留、不抛异常只记日志。"""
+    monkeypatch.setattr(svc, "_files_root", lambda: tmp_path / "files")
+    db = _session()
+    _batch(db, "RM-1", count=2)
+    files_dir = _files(tmp_path, "RM-1")
+    client = _StubClient({"status": "already_synced", "device_count": 2}, batch_count=2)
+
+    def _boom(*_args, **_kwargs):
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(svc.shutil, "rmtree", _boom)
+    result = svc.finalize_synced_batch(db, client, "RM-1")
+    assert result == {"status": "synced", "device_count": 2}
+    assert files_dir.exists()
+    assert db.scalar(select(Batch).where(Batch.batch_no == "RM-1")).synced_at is not None
 
 
 class _StubClient:

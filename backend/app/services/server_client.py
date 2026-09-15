@@ -91,7 +91,8 @@ class ServerClient:
 
     def reachable(self) -> bool:
         try:
-            return self._http.get("/health").status_code == 200
+            # 状态端点轮询用：60s 默认连接超时太长，探测要快速失败
+            return self._http.get("/health", timeout=5.0).status_code == 200
         except httpx.HTTPError:
             return False
 
@@ -159,9 +160,11 @@ class ServerClient:
                 "GET", "/sync/download",
                 params={"batch_no": batch_no, "filename": filename, "port": port},
             ) as response:
-                # 流式响应先读入（错误页 body 小，开销可忽略），
-                # 否则 _check 访问 response.text 会抛 ResponseNotRead
-                response.read()
+                # 仅错误路径读入 body（错误页小，开销可忽略），否则 _check
+                # 访问 response.text 会抛 ResponseNotRead；成功路径保持
+                # 真流式写盘，不把大文件整个读进内存。
+                if response.status_code >= 400:
+                    response.read()
                 self._check(response)
                 with dest.open("wb") as out:
                     for chunk in response.iter_bytes():

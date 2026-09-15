@@ -125,11 +125,12 @@ def push_batch(
     # batch_no 会拼进 files_dir 路径并用于目录清理，先做正向路径校验。
     # 服务器可能跑 POSIX 或 Windows：POSIX 的 Path 认不出 Windows 的反斜杠
     # 分隔符与盘符相对路径（"a\\b"、"C:" 在 POSIX 下 name 是其自身），
-    # 需同时按 Windows 语义校验；strip(".") 负责挡住 "." / ".."。
+    # 需同时按 Windows 语义校验；strip(". ") 负责挡住 "." / ".." 以及
+    # Windows 下会被归一掉的尾点空格名（". "、" ."）。
     if (
         Path(batch_no).name != batch_no
         or PureWindowsPath(batch_no).name != batch_no
-        or not batch_no.strip(".")
+        or not batch_no.strip(". ")
     ):
         raise HTTPException(status_code=400, detail="批次名含有非法路径字符")
     if process_type not in ("AUTO", "S1P", "S2P", "BOTH"):

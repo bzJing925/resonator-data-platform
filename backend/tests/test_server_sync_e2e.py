@@ -49,13 +49,17 @@ def server(tmp_path_factory):
     }
     backend_dir = Path(__file__).resolve().parent.parent
     # alembic 全链在 sqlite 上跑不了（初始迁移用 JSONB）；桌面/测试建表走 create_all
-    subprocess.run(
-        [
-            sys.executable, "-c",
-            "from app.db import engine; from app.models import Base; Base.metadata.create_all(engine)",
-        ],
-        cwd=backend_dir, env=env, check=True, capture_output=True,
-    )
+    try:
+        subprocess.run(
+            [
+                sys.executable, "-c",
+                "from app.db import engine; from app.models import Base; "
+                "Base.metadata.create_all(engine)",
+            ],
+            cwd=backend_dir, env=env, check=True, capture_output=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(f"建表失败: {exc.stderr.decode(errors='replace')[:2000]}") from exc
     log_path = root / "server.log"
     with log_path.open("wb") as log_fh:
         proc = subprocess.Popen(
@@ -73,14 +77,20 @@ def server(tmp_path_factory):
                     if httpx.get(f"{base}/api/health", timeout=1).status_code == 200:
                         break
                 except httpx.HTTPError:
-                    time.sleep(0.5)
+                    pass
+                # 无条件限速：非 200（如 404/503）时也要间隔，避免空转
+                time.sleep(0.5)
             else:
                 tail = log_path.read_text(errors="replace")[-2000:]
                 raise RuntimeError(f"服务器子进程启动超时:\n{tail}")
             yield base
         finally:
             proc.terminate()
-            proc.wait(timeout=10)
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=10)
 
 
 def _desktop_session() -> Session:

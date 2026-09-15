@@ -36,7 +36,7 @@ def status(db: DbSession) -> dict[str, Any]:
         try:
             with ServerClient(config) as client:
                 reachable = client.reachable()
-        except Exception:  # noqa: BLE001 — 可达性探测不允许抛出
+        except Exception:  # 可达性探测不允许抛出
             reachable = False
     unsynced = (
         [b.batch_no for b in desktop_sync_service.list_unsynced_batches(db)]

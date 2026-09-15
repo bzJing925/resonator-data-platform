@@ -74,6 +74,7 @@ export const pushBatchToWeb = (batchNo: string, token: string) =>
 
 export const getServerSyncStatus = () =>
   api.get('/desktop-sync/status').then((r: AxiosResponse<ServerSyncStatus>) => r.data);
+// 规格预留封装（当前面板经 status 获取配置，暂未直接调用）
 export const getServerSyncConfig = () =>
   api.get('/desktop-sync/config').then((r) => r.data as { server_url: string | null; username: string | null });
 export const saveServerSyncConfig = (serverUrl: string, username: string) =>

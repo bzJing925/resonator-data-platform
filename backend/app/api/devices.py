@@ -163,6 +163,9 @@ def device_sparam(
         proxied = proxy_sparam(device, param)
         if proxied is not None:
             proxied["device_id"] = device_id
+            # 服务器侧响应里的 file_path 是服务器本地路径，不能透给前端；
+            # 覆盖为本机 DB 里的相对路径
+            proxied["file_path"] = device.s_param_path
             return proxied
         raise
 

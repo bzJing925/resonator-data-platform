@@ -87,7 +87,9 @@ def pack_batch_zip(batch: Batch, out_path: Path) -> Path:
                             gzip.open(file, "rb") as fh,
                         ):
                             shutil.copyfileobj(fh, zout)
-                    except gzip.BadGzipFile as exc:
+                    except (gzip.BadGzipFile, EOFError) as exc:
+                        # BadGzipFile 是非 gzip 内容；EOFError 是截断的 gzip
+                        #（"Compressed file ended before end-of-stream"）
                         raise ServerError(f"gzip 文件损坏: {file}") from exc
                 else:
                     zf.write(file, arcname=arcname)

@@ -47,13 +47,35 @@ def test_client_calls():
         client.task_status(999)
 
 
+class _SyncStream(httpx.SyncByteStream):
+    """自定义同步字节流：让 MockTransport 返回 content 未预读的 Response。
+
+    不用私有 API httpx._content.IteratorByteStream（版本间不稳）。
+    """
+
+    def __init__(self, chunks: list[bytes]) -> None:
+        self._chunks = chunks
+
+    def __iter__(self):
+        yield from self._chunks
+
+    def close(self) -> None:
+        pass
+
+
 def test_download_s1p_not_found_raises_server_error(tmp_path):
-    """流式 404 必须抛 ServerError 且消息含状态码（钉住契约防 ResponseNotRead 回归）。"""
+    """流式 404 必须抛 ServerError 且消息含状态码（钉住契约防 ResponseNotRead 回归）。
+
+    handler 返回带真实 stream 的 404 Response（content 未预读）：
+    直接访问 .text 会抛 ResponseNotRead，证明错误 body 确由
+    download_s1p 的"仅错误时 read()"分支载入，而非测试假数据预读。
+    """
+    body = b'{"detail": "not found"}'
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/api/sync/download":
-            return httpx.Response(404, json={"detail": "not found"})
-        return httpx.Response(404, json={"detail": "nope"})
+            return httpx.Response(404, stream=_SyncStream([body]))
+        return httpx.Response(404, stream=_SyncStream([b'{"detail": "nope"}']))
 
     cfg = server_client.ServerConfig(server_url="http://server", username="u")
     client = server_client.ServerClient(cfg, transport=httpx.MockTransport(handler))
@@ -61,3 +83,11 @@ def test_download_s1p_not_found_raises_server_error(tmp_path):
     with pytest.raises(server_client.ServerError, match="404"):
         client.download_s1p("B1", "dev.s2p", "S11", dest)
     assert not dest.exists()
+
+    # 旁证：同一 stream 形态下未 read() 时 .text 确实抛 ResponseNotRead，
+    # 即上面的 ServerError 走的是条件 read() 分支而非依赖预读 content。
+    with client._http.stream("GET", "/sync/download") as raw:
+        assert raw.status_code == 404
+        with pytest.raises(httpx.ResponseNotRead):
+            _ = raw.text
+    client.close()
