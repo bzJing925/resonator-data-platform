@@ -27,6 +27,7 @@ def settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("app.config.get_settings", lambda: test_settings)
     monkeypatch.setattr("app.api.tasks.get_settings", lambda: test_settings)
     monkeypatch.setattr("app.services.cleanup_service.get_settings", lambda: test_settings)
+    monkeypatch.setattr("app.api.sync.get_settings", lambda: test_settings)
     return test_settings
 
 
