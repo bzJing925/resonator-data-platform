@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import I from '../components/Icons';
 import { listBatches, deleteBatch, renameBatch } from '../api/endpoints';
 import RenameBatchModal from '../components/RenameBatchModal';
+import ServerSyncPanel from '../components/ServerSyncPanel';
 import { usePageState } from '../contexts/PageStateContext';
 import { IS_STATIC } from '../config';
 import type { Batch } from '../types';
@@ -24,6 +25,16 @@ const BatchRow = memo(function BatchRow({ batch, onDelete, onRename }: BatchRowP
         >
           {b.batch_no}
         </Link>
+        {b.synced_at && (
+          <span className="dim" style={{ fontSize: 11, marginLeft: 6 }} title="原始文件已回传服务器">
+            ☁️ 已回传
+          </span>
+        )}
+        {b.source === 'server' && (
+          <span className="dim" style={{ fontSize: 11, marginLeft: 6 }} title="来自服务器快照，原始文件在服务器上">
+            ☁️ 服务器
+          </span>
+        )}
       </td>
       <td>
         <span className="chip">{b.mapping_name || '—'}</span>
@@ -160,6 +171,7 @@ export default function Batches() {
             {error}
           </div>
         )}
+        <ServerSyncPanel onChanged={() => load()} />
         <table className="dtable" style={{ background: 'var(--bg-panel)' }}>
           <thead>
             <tr>

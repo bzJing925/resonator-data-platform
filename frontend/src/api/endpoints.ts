@@ -1,6 +1,6 @@
 import type { AxiosResponse } from 'axios';
 import api from './client';
-import type { Batch, CurveSeries, Device, FieldMeta, FileEntry, Mapping, MappingEntry, PagedList, ProcessStep, ProcessStepData, StatsResponse, SurrogatePredictResponse, SurrogateStatus, Task } from '../types';
+import type { Batch, CurveSeries, Device, FieldMeta, FileEntry, Mapping, MappingEntry, PagedList, ProcessStep, ProcessStepData, ServerSyncStatus, StatsResponse, SurrogatePredictResponse, SurrogateStatus, Task } from '../types';
 import { IS_STATIC } from '../config';
 import * as staticApi from './static';
 
@@ -70,6 +70,21 @@ export const pullWebData = () => api.post('/web-sync/pull', undefined, { timeout
 export const pushBatchToWeb = (batchNo: string, token: string) =>
   api.post(`/web-sync/push/${encodeURIComponent(batchNo)}`, { token }, { timeout: 0 }).then((r) => r.data as {
     batch_no: string; device_count: number; commit_url: string; message: string;
+  });
+
+export const getServerSyncStatus = () =>
+  api.get('/desktop-sync/status').then((r: AxiosResponse<ServerSyncStatus>) => r.data);
+export const getServerSyncConfig = () =>
+  api.get('/desktop-sync/config').then((r) => r.data as { server_url: string | null; username: string | null });
+export const saveServerSyncConfig = (serverUrl: string, username: string) =>
+  api.put('/desktop-sync/config', { server_url: serverUrl, username }).then((r) => r.data);
+export const pullFromServer = () =>
+  api.post('/desktop-sync/pull', undefined, { timeout: 0 }).then((r) => r.data as {
+    mappings_added: number; batches_added: number; devices_added: number;
+  });
+export const pushBatchToServer = (batchNo: string) =>
+  api.post(`/desktop-sync/push/${encodeURIComponent(batchNo)}`, undefined, { timeout: 0 }).then((r) => r.data as {
+    status: string; device_count?: number;
   });
 
 const httpListTasks = (params?: Record<string, unknown>) =>

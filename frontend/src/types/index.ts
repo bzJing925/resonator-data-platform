@@ -75,6 +75,8 @@ export interface Batch {
   };
   raw_zip_deleted?: boolean;
   task_id?: number | string;
+  synced_at?: string | null;
+  source?: string;
 }
 
 export interface Task {
@@ -237,4 +239,13 @@ export interface SurrogatePredictResponse {
   in_grid: boolean;
   true_curves?: number[][];
   true_mean?: Record<string, number>;
+}
+
+export interface ServerSyncStatus {
+  enabled: boolean;
+  configured: boolean;
+  server_url: string | null;
+  username: string | null;
+  reachable: boolean;
+  unsynced_batches: string[];
 }
