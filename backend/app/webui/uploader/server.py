@@ -1,6 +1,7 @@
 """简易上传页面：分享包制作 + 可选一键提交（双击即用的本地小工具）。
 
-功能对齐软件版上传页：多文件(zip/s1p/s2p/snp)、对照表（网站已有/本地 xlsx）、
+功能对齐软件版上传页：多文件(zip/s1p/s2p/snp)、参数表格(xlsx/xls/csv)、
+对照表（网站已有/本地 xlsx/xls/csv）、
 频率范围、去嵌开关+方法、进度条；产出 MB 级分享包，可直接提交 GitHub 触发网站更新。
 
 开发模式：cd backend && uv run python -m app.webui.uploader
@@ -87,9 +88,9 @@ def browse_dialog(kind: str) -> None:
         path = filedialog.askopenfilename(
             title="选择对照表", filetypes=[("对照表", "*.xlsx *.xls *.csv")]
         )
-    elif kind == "xlsx":
+    elif kind == "table":
         path = filedialog.askopenfilename(
-            title="选择参数表格", filetypes=[("参数表格", "*.xlsx *.xls")]
+            title="选择参数表格", filetypes=[("参数表格", "*.xlsx *.xls *.csv")]
         )
     else:
         path = filedialog.askopenfilename(
@@ -111,8 +112,8 @@ class PackReq(BaseModel):
     deembed: bool = False
     deembed_method: str = "default"
     out_dir: str = ""
-    input_type: str = "snp"  # "snp" | "xlsx"
-    xlsx_deembedded: bool = False  # xlsx 模式：数据已去嵌
+    input_type: str = "snp"  # "snp" | "table"（兼容旧客户端的 "xlsx"）
+    xlsx_deembedded: bool = False  # 表格模式：数据已去嵌
 
 
 class SubmitReq(BaseModel):
@@ -175,7 +176,13 @@ def _run_pack(req: PackReq) -> None:
         safe = req.batch_no.replace("#", "").replace("/", "_").replace(" ", "_")
         out = out_dir / f"分享包_{safe}.zip"
 
-        if req.input_type == "xlsx":
+        # 在真正开始打包前再读一次 canonical 网站快照，避免应用长时间打开后
+        # 仍使用旧批次号/旧对照表。离线时保留本地打包能力。
+        site = _fetch_site()
+        if site["online"] and req.batch_no in site["batches"]:
+            raise SystemExit(f"批次号 {req.batch_no} 已存在于网站，请更换")
+
+        if req.input_type in ("table", "xlsx"):
             from app.share_pack import make_share_pack_xlsx
 
             mapping_name = "" if req.mapping_mode == "auto" else req.mapping_name
@@ -192,7 +199,6 @@ def _run_pack(req: PackReq) -> None:
             return
 
         if req.mapping_mode == "site":
-            site = _fetch_site()
             m = next((x for x in site["mappings"] if x["name"] == req.mapping_name), None)
             if not m:
                 raise SystemExit(f"网站上找不到对照表 {req.mapping_name}（离线时可改用本地 xlsx）")
@@ -230,7 +236,9 @@ def _run_pack(req: PackReq) -> None:
         )
         _set_state(running=False, done=True, pack_path=str(out), meta=meta,
                    msg=f"完成：{len(rows)} 行")
-    except Exception as e:
+    # 分享包底层为 CLI 复用，会用 SystemExit 表达可预期的输入校验错误；
+    # 在 Web UI 的后台线程中必须把它转成可显示的失败状态，不能让线程静默退出。
+    except (Exception, SystemExit) as e:
         _set_state(running=False, done=True, error=str(e), msg="失败")
 
 
@@ -242,29 +250,19 @@ def _sanitize(name: str) -> str:
 
 
 def _submit(pack_path: str, token: str) -> str:
-    """上传分享包到新分支并开 PR，返回 PR 链接。"""
+    """直接写入 main 的 uploads/，由仓库工作流校验、合并并发布。"""
     pack = Path(pack_path)
     content = base64.b64encode(pack.read_bytes()).decode()
     api = f"https://api.github.com/repos/{REPO}"
-    ref = _http_json(f"{api}/git/ref/heads/main", token)
-    base_sha = ref["object"]["sha"]
     import time
 
-    branch = f"upload/{_sanitize(pack.stem)}-{int(time.time())}"
-    _http_json(f"{api}/git/refs", token, "POST",
-               {"ref": f"refs/heads/{branch}", "sha": base_sha})
-    _http_json(f"{api}/contents/uploads/{_sanitize(pack.name)}", token, "PUT", {
+    remote_name = f"{_sanitize(pack.stem)}-{int(time.time())}.zip"
+    result = _http_json(f"{api}/contents/uploads/{remote_name}", token, "PUT", {
         "message": f"upload: 分享包 {pack.name}",
         "content": content,
-        "branch": branch,
+        "branch": "main",
     })
-    pr = _http_json(f"{api}/pulls", token, "POST", {
-        "title": f"分享包：{pack.stem}",
-        "head": branch,
-        "base": "main",
-        "body": "CI 校验通过后合并即自动更新网站。",
-    })
-    return pr["html_url"]
+    return result.get("commit", {}).get("html_url", "")
 
 
 def create_app() -> FastAPI:
@@ -306,7 +304,7 @@ def create_app() -> FastAPI:
                                 status_code=502)
         if req.remember:
             _save_config({"token": token})
-        return {"pr_url": url}
+        return {"commit_url": url}
 
     @app.get("/api/config")
     def config():

@@ -49,7 +49,7 @@
   <h2>① 数据文件
     <span style="font-weight:400;margin-left:12px">
       <label style="font-size:12px;cursor:pointer"><input type="radio" name="itype" value="snp" checked onchange="onType()"> snp 压缩包/散文件</label>
-      <label style="font-size:12px;cursor:pointer;margin-left:10px"><input type="radio" name="itype" value="xlsx" onchange="onType()"> 参数表格 (xlsx)</label>
+      <label style="font-size:12px;cursor:pointer;margin-left:10px"><input type="radio" name="itype" value="table" onchange="onType()"> 参数表格 (xlsx / xls / csv)</label>
     </span>
   </h2>
   <div id="xlsx_hint" class="hint" style="display:none;margin-bottom:8px">
@@ -130,13 +130,13 @@
     <button onclick="openDir()">打开所在目录</button>
   </div>
   <hr style="border-color:#232936;margin:12px 0">
-  <div class="hint" style="margin-bottom:8px">提交到 GitHub（合并 PR 后网站自动更新；无 token 则把包发给管理员）：</div>
+  <div class="hint" style="margin-bottom:8px">直接提交到 GitHub 数据仓（CI 校验、合并并发布；无 token 则把包发给管理员）：</div>
   <div class="row">
     <input type="password" id="token" placeholder="GitHub token（仅本机使用，可选记住）">
   </div>
   <div class="row">
     <label class="cb"><input type="checkbox" id="remember"> <span class="hint">记住 token（存 ~/.aln-uploader/config.json，权限 600）</span></label>
-    <button class="primary" id="submitbtn" onclick="submitPack()">提交并创建 PR</button>
+    <button class="primary" id="submitbtn" onclick="submitPack()">直接提交并发布</button>
   </div>
   <div id="submitinfo"></div>
 </div>
@@ -148,7 +148,7 @@ const $ = id => document.getElementById(id);
 const inputType = () => document.querySelector('input[name=itype]:checked').value;
 
 function onType() {
-  const x = inputType() === 'xlsx';
+  const x = inputType() === 'table';
   $('xlsx_hint').style.display = x ? '' : 'none';
   $('de_row').style.display = x ? '' : 'none';
   $('add_hint').textContent = x ? '参数表格每次一个' : '大 zip 直接选本机路径，不经过浏览器上传';
@@ -175,15 +175,15 @@ function refreshGo() {
 }
 
 async function addFile() {
-  const x = inputType() === 'xlsx';
-  const r = await api('/api/browse', {kind: x ? 'xlsx' : 'zip'});
+  const x = inputType() === 'table';
+  const r = await api('/api/browse', {kind: x ? 'table' : 'zip'});
   if (r.path) {
     if (x) files = [r.path]; else files.push(r.path);
     renderFiles();
     if (x && /_de/i.test(r.path.split('/').pop())) $('xlsx_de').checked = true;
   }
   if (!$('batch_no').value && r.path) {
-    let base = r.path.split('/').pop().replace(/\.(zip|s1p|s2p|snp|xlsx|xls)$/i, '');
+    let base = r.path.split('/').pop().replace(/\.(zip|s1p|s2p|snp|xlsx|xls|csv)$/i, '');
     if (x) base = base.replace(/_de_results$|_results$|_de$/i, '');
     $('batch_no').value = base; checkBatch();
   }
@@ -219,7 +219,7 @@ function checkBatch() {
 
 function bootMapping() {
   const sel = $('mapping_sel');
-  const x = inputType() === 'xlsx';
+  const x = inputType() === 'table';
   let html = '';
   if (x) html += '<option value="__auto__">自动生成（从表格 mark 生成，推荐）</option>';
   html += siteState.mappings.map(m =>
@@ -233,7 +233,7 @@ async function boot() {
   siteState = await api('/api/site');
   const b = $('sitebadge');
   if (siteState.online) { b.textContent = '在线'; b.className = 'badge on'; }
-  else { b.textContent = '离线（对照表只能用本地 xlsx）'; b.className = 'badge off'; }
+  else { b.textContent = '离线（对照表只能用本地文件）'; b.className = 'badge off'; }
   bootMapping();
   const cfg = await api('/api/config');
   if (cfg.has_token) $('token').placeholder = '已记住 token（留空即用）';
@@ -241,7 +241,7 @@ async function boot() {
 
 async function startPack() {
   const sel = $('mapping_sel').value;
-  const x = inputType() === 'xlsx';
+  const x = inputType() === 'table';
   const body = {
     inputs: files,
     batch_no: $('batch_no').value.trim(),
@@ -303,9 +303,9 @@ async function submitPack() {
   $('submitinfo').innerHTML = '<span class="hint">提交中…</span>';
   const r = await api('/api/submit', {pack_path: packPath, token: $('token').value, remember: $('remember').checked});
   $('submitbtn').disabled = false;
-  if (r.pr_url) {
-    $('submitinfo').innerHTML = `<div class="ok">已创建 PR：<a href="${r.pr_url}" target="_blank">${r.pr_url}</a></div>
-      <div class="hint">等 CI 校验通过后合并，网站几分钟内更新。</div>`;
+  if (r.commit_url) {
+    $('submitinfo').innerHTML = `<div class="ok">已写入数据仓：<a href="${r.commit_url}" target="_blank">${r.commit_url}</a></div>
+      <div class="hint">等待 CI 校验、合并和发布，网站通常数分钟内更新。</div>`;
   } else {
     $('submitinfo').innerHTML = '<span class="err">' + (r.error || '提交失败') + '</span>';
   }

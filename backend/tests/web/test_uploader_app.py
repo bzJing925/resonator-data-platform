@@ -70,7 +70,8 @@ def test_pack_flow(mini_inputs, tmp_path):
     import io
 
     with zipfile.ZipFile(pack) as zf:
-        rows = list(csv.DictReader(io.StringIO(gzip.decompress(zf.read("devices.csv.gz")).decode())))
+        text = gzip.decompress(zf.read("devices.csv.gz")).decode()
+        rows = list(csv.DictReader(io.StringIO(text)))
     assert len(rows) == 4 and {r["s_param_port"] for r in rows} == {"S11", "S22"}
 
 
@@ -126,3 +127,32 @@ def test_pack_flow_xlsx(tmp_path):
         "C0(pF)", "Cm(pF)", "Lm(nH)", "Rm(Ω)", "R0(Ω)", "Rs(Ω)"}
     assert rep["unknown"] == ["神秘列"]
     assert rep["n_marks"] == 2
+
+
+def test_pack_rechecks_website_batch_before_writing(mini_inputs, tmp_path, monkeypatch):
+    """页面打开后网站有新批次时，后台也必须拒绝重名上传。"""
+    from app.webui.uploader import server
+
+    monkeypatch.setattr(
+        server,
+        "_fetch_site",
+        lambda: {"online": True, "batches": ["#9"], "mappings": []},
+    )
+    server._set_state(running=False, done=False, error=None)
+    client = TestClient(server.create_app())
+    zip_path, map_path = mini_inputs
+    response = client.post("/api/pack", json={
+        "inputs": [str(zip_path)],
+        "batch_no": "#9",
+        "mapping_mode": "local",
+        "mapping_path": str(map_path),
+        "out_dir": str(tmp_path),
+    })
+    assert response.status_code == 200
+
+    for _ in range(40):
+        state = client.get("/api/progress").json()
+        if state["done"]:
+            break
+        time.sleep(0.05)
+    assert state["done"] and "已存在于网站" in state["error"]
