@@ -76,6 +76,10 @@ def pull(db: DbSession) -> dict[str, int]:
     except ServerError as exc:
         db.rollback()
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except ValueError as exc:
+        # import_snapshot 对缺失对照表等快照数据异常抛 ValueError
+        db.rollback()
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.post("/push/{batch_no:path}")

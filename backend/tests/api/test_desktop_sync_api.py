@@ -34,3 +34,14 @@ def test_pull_calls_service(client, tmp_path, monkeypatch):
         resp = client.post("/api/desktop-sync/pull")
     assert resp.status_code == 200
     assert resp.json()["batches_added"] == 2
+
+
+def test_pull_snapshot_value_error_becomes_502(client, tmp_path, monkeypatch):
+    """import_snapshot 对缺失对照表抛 ValueError，端点兜底为 502 而不是 500。"""
+    monkeypatch.setattr("app.api.desktop_sync.server_client._config_dir", lambda: tmp_path)
+    client.put("/api/desktop-sync/config", json={"server_url": "http://s", "username": "u"})
+    with patch("app.api.desktop_sync.desktop_sync_service.pull_from_server") as pull:
+        pull.side_effect = ValueError("批次 B-1 引用了快照中不存在的对照表")
+        resp = client.post("/api/desktop-sync/pull")
+    assert resp.status_code == 502
+    assert "对照表" in resp.json()["detail"]

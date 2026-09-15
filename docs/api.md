@@ -41,6 +41,16 @@
 | 工艺 | GET | `/api/process/{step}` | 某工序全部行（字段元数据 + 数据） |
 | 代理模型 | GET | `/api/surrogate/status` | 模型可用性 + 网格范围（产物缺失时 available=false 降级） |
 | 代理模型 | GET | `/api/surrogate/predict` | 结构参数 → 性能参数 + Z11(dB) 谱（含 B0 基准/稀疏点/同格真值叠加数据） |
+| 同步 | POST | `/api/sync/snapshot` | 差集快照导出（batches/mappings + devices Arrow gzip） |
+| 同步 | POST | `/api/sync/mapping` | 确保服务器存在同名对照表（幂等） |
+| 同步 | POST | `/api/sync/push-batch` | 桌面端推送批次 zip，服务器幂等入库 |
+| 同步 | GET | `/api/sync/sparam` | 按自然键（batch_no+filename+port）取单器件曲线 |
+| 同步 | GET | `/api/sync/download` | 按自然键下载单个 s1p 文件 |
+| 桌面同步 | GET | `/api/desktop-sync/status` | 同步功能开关/配置/可达性/未同步批次 |
+| 桌面同步 | GET | `/api/desktop-sync/config` | 读服务器配置 |
+| 桌面同步 | PUT | `/api/desktop-sync/config` | 写服务器配置 |
+| 桌面同步 | POST | `/api/desktop-sync/pull` | 从服务器拉差集快照导入本地库 |
+| 桌面同步 | POST | `/api/desktop-sync/push/{batch_no}` | 推送本地批次到服务器并清理本地文件 |
 
 ---
 
@@ -521,3 +531,98 @@ full_freq_0, full_z_0, ..., full_freq_N-1, full_z_N-1
 - `sample_*`：Stage 1 输出的 256 个确定性稀疏点（Stage 2 输入）
 - `true_curves`/`true_mean`：同结构格实测谱与参数均值（仅该格已流片时返回，≤5 条）
 - 产物缺失时 503。推理器懒加载常驻；预测按舍入键 LRU 缓存（命中 ~10ms，未命中 ~20–80ms）。
+
+---
+
+## 13. 内网服务器同步
+
+两组端点：服务器角色 `/api/sync/*`（部署在内网服务器，供桌面端调用）与桌面角色 `/api/desktop-sync/*`（桌面模式前端调用，编排下行拉取/上行推送）。
+
+### POST `/api/sync/snapshot`
+
+差集快照导出。请求体：
+
+```json
+{"known_batch_nos": ["T8901P.01"]}
+```
+
+响应只含 `known_batch_nos` 之外的批次：
+
+```json
+{
+  "batches": [{"batch_no": "T8902", "mapping_id": 1, "device_count": 9876, "..." : "..."}],
+  "mappings": [{"id": 1, "name": "ELB003", "entries": [...]}],
+  "devices_arrow_gz_b64": "H4sI..."
+}
+```
+
+devices 为 Arrow IPC 文件（gzip 后 base64），**不含 `s_param_path`**（快照不含文件路径）。
+
+### POST `/api/sync/mapping`
+
+推送批次前确保服务器存在同名对照表。请求体 `{"name": "ELB003", "entries": [{"mark": "A1-1", "eg": 0, "fl": 0, "area_s11": 700, "has_pf": false}]}`。
+
+- 不存在 → 创建，返回 `{"mapping_id": 1, "created": true}`
+- 已存在且内容指纹一致 → `{"mapping_id": 1, "created": false}`
+- 已存在但内容不同 → `409`（请改名）
+
+### POST `/api/sync/push-batch`
+
+`multipart/form-data`：`file`（批次 zip）+ `batch_no` + `mapping_name`；可选 `f_start_ghz` / `f_end_ghz` / `deembed` / `deembed_method` / `process_type` / `uploaded_by`。幂等推送，服务器走标准 Celery 入库管线：
+
+- 批次不存在 → 接收并入队，返回 `{"status": "accepted", "task_id": 12, "device_count": null}`
+- 批次已存在且任务成功 → `{"status": "already_synced", "task_id": 12, "device_count": 9876}`
+- 批次已存在但任务失败/取消 → 清理后按新批次重传
+
+**错误**：`400` 批次名含非法路径字符 / 参数非法；`409` 该批次任务进行中；`413` 文件超限；`422` 对照表不存在（先推对照表）；`503` 任务队列不可用。
+
+### GET `/api/sync/sparam?batch_no&filename&port=S11&param=s11_db`
+
+按自然键取单器件曲线，响应格式同 `/api/devices/{id}/sparam`。
+
+**错误**：`404` 器件不存在；`409` 同批次内同名文件多份（zip 内不同子目录）。
+
+### GET `/api/sync/download?batch_no&filename&port=S11`
+
+按自然键下载单个 s1p 文件，`Content-Type: application/octet-stream`。
+
+**错误**：`404` 器件或文件不存在；`409` 同名文件多份。
+
+### GET `/api/desktop-sync/status`
+
+```json
+{
+  "enabled": true,
+  "configured": true,
+  "server_url": "http://192.168.1.10:8080",
+  "username": "u1",
+  "reachable": true,
+  "unsynced_batches": ["T8903"]
+}
+```
+
+`enabled` 即桌面模式开关；`reachable` 为 `/api/health` 探测结果（探测失败不抛错）。
+
+### GET `/api/desktop-sync/config` / PUT `/api/desktop-sync/config`
+
+读/写服务器配置 `{"server_url": "http://192.168.1.10:8080", "username": "u1"}`，落在 `<desktop_dir>/server.json`。未配置时 GET 返回 `{"server_url": null, "username": null}`。
+
+### POST `/api/desktop-sync/pull`
+
+从服务器拉差集快照并事务性导入本地库：
+
+```json
+{"mappings_added": 0, "batches_added": 2, "devices_added": 10}
+```
+
+**错误**：`400` 未配置服务器地址；`502` 服务器不可达或快照数据异常（已回滚，可重试）。
+
+### POST `/api/desktop-sync/push/{batch_no}`
+
+推送本地批次到服务器：确保对照表 → 重新打包 zip → 推送并轮询入库 → 校验 device_count 一致后删除本地 `files/<batch_no>/` 并打 `synced_at`。重复推送已同步批次幂等早退。
+
+```json
+{"status": "synced", "device_count": 9876}
+```
+
+**错误**：`400` 未配置 / 本机无此批次 / 服务器入库失败 / 疑似同名不同数据（本地文件保留，提示改名重推）。

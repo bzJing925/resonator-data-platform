@@ -1,5 +1,7 @@
 """本地无 snp 文件时，桌面模式透明代理到内网服务器。"""
 
+import asyncio
+
 import pytest
 from fastapi import HTTPException
 
@@ -77,6 +79,35 @@ def test_proxy_unreachable_raises_503(monkeypatch, tmp_path):
     assert excinfo.value.status_code == 503
 
 
+def test_proxy_download_writes_tmp_and_cleans_up(monkeypatch, tmp_path):
+    """命中：桩客户端往 dest 写字节，返回 (tmp, BackgroundTask)；清理任务删 tmp。"""
+    monkeypatch.setattr(server_proxy, "_is_desktop", lambda: True)
+    monkeypatch.setattr(server_proxy.server_client, "_config_dir", lambda: tmp_path)
+    server_proxy.server_client.save_config(ServerConfig(server_url="http://s"))
+
+    class FakeClient:
+        def __init__(self, config):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            pass
+
+        def download_s1p(self, batch_no, filename, port, dest):
+            assert (batch_no, filename, port) == ("B-1", "missing.s1p", "S11")
+            dest.write_bytes(b"# fake s1p from server")
+
+    monkeypatch.setattr(server_proxy, "ServerClient", FakeClient)
+    result = server_proxy.proxy_download(_Device())
+    assert result is not None
+    tmp, cleanup = result
+    assert tmp.read_bytes() == b"# fake s1p from server"
+    asyncio.run(cleanup())
+    assert not tmp.exists()
+
+
 def _seed_missing_file_device(db, batch_no="EP-1", filename="gone.s1p") -> Device:
     """造一个 s_param_path 指向不存在文件的 device（文件已被同步清理）。"""
     mapping = Mapping(name=f"MAP-{batch_no}", file_path="m.csv", entry_count=0)
@@ -138,3 +169,58 @@ def test_sparam_endpoint_proxies_when_desktop(client, db, monkeypatch):
     assert payload["device_id"] == device.id
     assert payload["file_path"] == "gone.s1p"
     assert payload["values"] == [-1.0]
+
+
+def _seed_snapshot_device(db, batch_no="EP-2", filename="remote.s1p") -> Device:
+    """造一个 s_param_path=None 的 device（模拟从服务器快照导入的器件）。"""
+    mapping = Mapping(name=f"MAP-{batch_no}", file_path="m.csv", entry_count=0)
+    db.add(mapping)
+    db.flush()
+    batch = Batch(batch_no=batch_no, mapping_id=mapping.id, file_path="f", device_count=1)
+    db.add(batch)
+    db.flush()
+    device = Device(
+        batch_id=batch.id,
+        original_filename=filename,
+        s_param_path=None,
+        s_param_port="S11",
+    )
+    db.add(device)
+    db.commit()
+    return device
+
+
+def test_download_endpoint_404_without_desktop(client, db):
+    """快照导入器件（无 s_param_path）：非桌面模式（默认 fixture）仍是原 404。"""
+    device = _seed_snapshot_device(db)
+    resp = client.get(f"/api/devices/{device.id}/download-s1p")
+    assert resp.status_code == 404
+    assert "没有 S 参数文件路径" in resp.json()["detail"]
+
+
+def test_download_endpoint_proxies_when_desktop(client, db, monkeypatch, tmp_path):
+    """桌面模式 + 已配置服务器：同请求返回 200，文件内容来自"服务器"。"""
+    device = _seed_snapshot_device(db)
+    monkeypatch.setattr(server_proxy, "_is_desktop", lambda: True)
+    monkeypatch.setattr(server_client, "_config_dir", lambda: tmp_path)
+    server_client.save_config(ServerConfig(server_url="http://s"))
+
+    class FakeClient:
+        def __init__(self, config):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            pass
+
+        def download_s1p(self, batch_no, filename, port, dest):
+            assert (batch_no, filename, port) == ("EP-2", "remote.s1p", "S11")
+            dest.write_bytes(b"# server side s1p")
+
+    monkeypatch.setattr(server_proxy, "ServerClient", FakeClient)
+    resp = client.get(f"/api/devices/{device.id}/download-s1p")
+    assert resp.status_code == 200, resp.text
+    assert resp.content == b"# server side s1p"
+    assert "remote.s1p" in resp.headers["content-disposition"]

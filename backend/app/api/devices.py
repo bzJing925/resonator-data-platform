@@ -269,11 +269,25 @@ def download_device_s1p(
     device = db.get(Device, device_id)
     if device is None:
         raise HTTPException(status_code=404, detail=f"器件 {device_id} 不存在")
-    if not device.s_param_path:
-        raise HTTPException(status_code=404, detail="该器件没有 S 参数文件路径")
 
     batch_no = device.batch.batch_no if device.batch else None
-    path = _resolve_sparam_path(device.s_param_path, batch_no=batch_no)
+    path = _resolve_sparam_path(device.s_param_path or "", batch_no=batch_no)
+    if not device.s_param_path:
+        # 快照导入的器件不落 s_param_path：桌面模式下先尝试代理到服务器
+        # 下载，未命中（非桌面/未配置）才抛 404。
+        from app.services.server_proxy import proxy_download
+
+        proxied = proxy_download(device)
+        if proxied is not None:
+            tmp, cleanup = proxied
+            return FileResponse(
+                tmp,
+                media_type="application/octet-stream",
+                filename=device.original_filename or path.name,
+                background=cleanup,
+            )
+        raise HTTPException(status_code=404, detail="该器件没有 S 参数文件路径")
+
     if not path.exists():
         from app.services.server_proxy import proxy_download
 
