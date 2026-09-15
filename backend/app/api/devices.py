@@ -69,7 +69,7 @@ def _resolve_sparam_path(rel_or_abs: str, batch_no: str | None = None) -> Path:
 
 
 def resolve_device_sparam_path(device: Device) -> Path:
-    """器件 snp 的绝对路径（batch_no 子目录 + 相对路径拼接）。"""
+    """器件 snp 的绝对路径（batch_no 子目录 + 相对路径拼接）。调用方需先判空 s_param_path。"""
     batch_no = device.batch.batch_no if device.batch else None
     return _resolve_sparam_path(device.s_param_path or "", batch_no=batch_no)
 
@@ -100,6 +100,7 @@ def build_sparam_response(device: Device, device_id: int, param: str) -> dict[st
 
 
 def build_bodeq_response(device: Device, device_id: int) -> dict[str, Any]:
+    """计算 BodeQ raw/smooth/fitted 三条曲线 → 响应 dict。文件缺失抛 HTTPException(404)。"""
     if not device.s_param_path:
         raise HTTPException(status_code=404, detail="该器件没有 S 参数文件")
     path = resolve_device_sparam_path(device)
