@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import gzip
+import logging
 import shutil
 import time
 import zipfile
@@ -22,9 +23,19 @@ from app.models import Batch, Mapping
 from app.services.server_client import ServerClient, ServerError
 from app.services.snapshot_service import decode_devices, import_snapshot
 
+log = logging.getLogger("aln")
+
 # 轮询服务器任务状态的节奏与上限
 POLL_INTERVAL_S = 2.0
 POLL_TIMEOUT_S = 3600.0
+
+# extract_batch/deembed 管线落在批次目录顶层的中间产物（s2p 拆分件、
+# 校准拆分件与去嵌结果，见 workers/extract_batch.py 与 core/deembed.py）。
+# 推送只传原始文件，服务器入库时会自行重建；打包必须跳过，
+# 否则服务器会把拆分件当独立 DUT 重复入库。
+_PIPELINE_TEMP_DIRS = frozenset(
+    {"S11_raw", "S22_raw", "cal_S11", "cal_S22", "S11_de", "S22_de"}
+)
 
 
 def _files_root() -> Path:
@@ -38,33 +49,51 @@ def _zip_staging_dir() -> Path:
 
 
 def list_unsynced_batches(db: Session) -> list[Batch]:
-    """本地上传、入库完成、未推送且文件仍在本地的批次。"""
+    """本地上传（http/watch）、入库完成、未推送且文件仍在本地的批次。"""
     batches = db.scalars(
         select(Batch).where(
             Batch.synced_at.is_(None),
             Batch.device_count > 0,
-            Batch.source.notin_(("web", "server")),
+            Batch.source.in_(("http", "watch")),
         ).order_by(Batch.uploaded_at)
     ).all()
     return [b for b in batches if (_files_root() / b.batch_no).is_dir()]
 
 
 def pack_batch_zip(batch: Batch, out_path: Path) -> Path:
-    """把 files/<batch_no>/ 打成服务器 ingest 可吃的 zip（.gz 解压回 .s1p）。"""
+    """把 files/<batch_no>/ 打成服务器 ingest 可吃的 zip（.gz 解压回 .s1p）。
+
+    跳过顶层管线中间目录（_PIPELINE_TEMP_DIRS）与点开头杂项文件
+    （.DS_Store 等）。任何异常都先清理半截 zip 再重抛；
+    损坏的 .gz 转成带文件名的 ServerError。
+    """
     src = _files_root() / batch.batch_no
     if not src.is_dir():
         raise ServerError(f"本地批次目录不存在: {src}")
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for file in sorted(src.rglob("*")):
-            if not file.is_file():
-                continue
-            rel = f"{batch.batch_no}/{file.relative_to(src).as_posix()}"
-            if file.suffix == ".gz":
-                with gzip.open(file, "rb") as fh:
-                    zf.writestr(rel[: -len(".gz")], fh.read())
-            else:
-                zf.write(file, arcname=rel)
+    try:
+        with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for file in sorted(src.rglob("*")):
+                if not file.is_file() or file.name.startswith("."):
+                    continue
+                rel = file.relative_to(src)
+                if rel.parts[0] in _PIPELINE_TEMP_DIRS:
+                    continue
+                arcname = f"{batch.batch_no}/{rel.as_posix()}"
+                if file.suffix == ".gz":
+                    try:
+                        with (
+                            zf.open(arcname[: -len(".gz")], "w") as zout,
+                            gzip.open(file, "rb") as fh,
+                        ):
+                            shutil.copyfileobj(fh, zout)
+                    except gzip.BadGzipFile as exc:
+                        raise ServerError(f"gzip 文件损坏: {file}") from exc
+                else:
+                    zf.write(file, arcname=arcname)
+    except Exception:
+        out_path.unlink(missing_ok=True)
+        raise
     return out_path
 
 
@@ -99,11 +128,11 @@ def wait_task(client: ServerClient, task_id: int) -> dict[str, Any]:
         if task["status"] in {"failed", "cancelled"}:
             raise ServerError(f"服务器入库失败: {task.get('error_msg') or task['status']}")
         time.sleep(POLL_INTERVAL_S)
-    raise ServerError("等待服务器入库超时")
+    raise ServerError(f"等待服务器入库超时: task_id={task_id}")
 
 
 def finalize_synced_batch(db: Session, client: ServerClient, batch_no: str) -> dict[str, Any]:
-    """校验服务器 device_count 与本地一致后，删除本地原始文件并打 synced_at。"""
+    """校验服务器 device_count 与本地一致后，打 synced_at 并删除本地原始文件。"""
     batch = db.scalar(select(Batch).where(Batch.batch_no == batch_no))
     if batch is None:
         raise ServerError(f"本机没有批次 {batch_no}")
@@ -113,9 +142,16 @@ def finalize_synced_batch(db: Session, client: ServerClient, batch_no: str) -> d
             f"疑似同名不同数据：服务器 {remote_count} 条 vs 本地 {batch.device_count} 条，"
             "请给本地批次改名后重推，本地文件未删除"
         )
-    shutil.rmtree(_files_root() / batch_no, ignore_errors=True)
+    # 先提交同步状态再删文件：删除失败只留残留文件（记日志），
+    # 重试走"已同步"早退分支，不会重复推送。
     batch.synced_at = datetime.now(UTC)
     db.commit()
+    files_dir = _files_root() / batch_no
+    if files_dir.is_dir():
+        try:
+            shutil.rmtree(files_dir)
+        except OSError:
+            log.exception("批次 %s 已同步，但删除本地文件失败", batch_no)
     return {"status": "synced", "device_count": remote_count}
 
 

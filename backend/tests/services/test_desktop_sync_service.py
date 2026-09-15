@@ -48,10 +48,11 @@ def test_list_unsynced_batches(tmp_path, monkeypatch):
     db = _session()
     _batch(db, "L-1")
     _files(tmp_path, "L-1")
-    _batch(db, "WEB-1", source="server")          # 快照批次不推送
+    _batch(db, "WEB-1", source="web")             # 网页快照批次不推送
+    _batch(db, "SRV-1", source="server")          # 服务器快照批次不推送
     _batch(db, "DONE-1", synced=datetime.now(UTC))  # 已同步不推送
-    _batch(db, "EMPTY-1", count=0)                  # 未完成入库不推送
-    _batch(db, "NOFILES-1")                          # 文件目录不存在不推送
+    _batch(db, "EMPTY-1", count=0)                # 未完成入库不推送
+    _batch(db, "NOFILES-1")                        # 文件目录不存在不推送
     assert [b.batch_no for b in svc.list_unsynced_batches(db)] == ["L-1"]
 
 
@@ -66,22 +67,66 @@ def test_pack_batch_zip_decompresses_gz(tmp_path, monkeypatch):
         assert zf.read("P-1/dut1.s1p").startswith(b"# GHz S MA")
 
 
+def test_pack_batch_zip_skips_pipeline_temp_dirs(tmp_path, monkeypatch):
+    monkeypatch.setattr(svc, "_files_root", lambda: tmp_path / "files")
+    db = _session()
+    batch = _batch(db, "DE-1")
+    root = tmp_path / "files" / "DE-1"
+    # 去嵌管线中间产物（批次目录顶层），服务器入库会自行重建，不得打包
+    for temp_dir, name in [
+        ("S11_raw", "dut1_S11.s1p"),
+        ("S11_de", "dut1_S11_de.s1p"),
+        ("cal_S11", "OPEN_S11.s1p"),
+    ]:
+        d = root / temp_dir
+        d.mkdir(parents=True)
+        (d / name).write_bytes(b"temp")
+    # 原始上传布局：校准 s2p 与 DUT 同级，必须保留（服务器重跑去嵌需要）
+    (root / "wafer1").mkdir(parents=True)
+    (root / "wafer1" / "dut1.s2p").write_bytes(b"dut")
+    (root / "wafer1" / "OPEN.s2p").write_bytes(b"open")
+    (root / ".DS_Store").write_bytes(b"junk")
+
+    out = svc.pack_batch_zip(batch, tmp_path / "out.zip")
+    with zipfile.ZipFile(out) as zf:
+        assert sorted(zf.namelist()) == ["DE-1/wafer1/OPEN.s2p", "DE-1/wafer1/dut1.s2p"]
+
+
+def test_pack_batch_zip_bad_gzip_raises_server_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(svc, "_files_root", lambda: tmp_path / "files")
+    db = _session()
+    batch = _batch(db, "G-1")
+    root = _files(tmp_path, "G-1")
+    (root / "broken.s1p.gz").write_bytes(b"not a gzip")
+
+    out = tmp_path / "out.zip"
+    with pytest.raises(ServerError, match="broken.s1p.gz"):
+        svc.pack_batch_zip(batch, out)
+    assert not out.exists()  # 半截 zip 已清理
+
+
 class _StubClient:
-    """预置推送结果的任务成功桩。"""
+    """预置推送结果、记录调用次数的任务成功桩。"""
 
     config = SimpleNamespace(username="tester")
 
     def __init__(self, push_result, batch_count):
         self._push = push_result
         self._count = batch_count
+        self.ensure_calls = 0
+        self.pushed_metas = []
+        self.polled_task_ids = []
 
     def ensure_mapping(self, name, entries):
+        self.ensure_calls += 1
         return {"mapping_id": 1, "created": True}
 
     def push_batch(self, zip_path, meta):
+        self.pushed_metas.append(meta)
         return self._push
 
     def task_status(self, task_id):
+        self.polled_task_ids.append(task_id)
         return {"id": task_id, "status": "success"}
 
     def get_batch(self, batch_no):
@@ -102,6 +147,57 @@ def test_push_success_deletes_local_files(tmp_path, monkeypatch):
     assert db.scalar(select(Batch).where(Batch.batch_no == "OK-1")).synced_at is not None
 
 
+def test_push_accepted_waits_task_then_syncs(tmp_path, monkeypatch):
+    """accepted 主路径：ensure→pack→push→wait→finalize 全流程走通。"""
+    monkeypatch.setattr(svc, "_files_root", lambda: tmp_path / "files")
+    monkeypatch.setattr(svc, "_zip_staging_dir", lambda: tmp_path / "staging")
+    monkeypatch.setattr(svc, "POLL_INTERVAL_S", 0)
+    db = _session()
+    _batch(db, "A-1", count=4)
+    files_dir = _files(tmp_path, "A-1")
+    client = _StubClient({"status": "accepted", "task_id": 7}, batch_count=4)
+
+    result = svc.push_batch_to_server(db, client, "A-1")
+    assert result == {"status": "synced", "device_count": 4}
+    assert client.ensure_calls == 1
+    assert client.polled_task_ids == [7]
+    assert not files_dir.exists()
+    assert db.scalar(select(Batch).where(Batch.batch_no == "A-1")).synced_at is not None
+
+
+def test_push_meta_contract(tmp_path, monkeypatch):
+    monkeypatch.setattr(svc, "_files_root", lambda: tmp_path / "files")
+    monkeypatch.setattr(svc, "_zip_staging_dir", lambda: tmp_path / "staging")
+    db = _session()
+    _batch(db, "M-1", count=2)
+    _files(tmp_path, "M-1")
+    ranged = _batch(db, "M-2", count=1)
+    ranged.f_start_ghz = 3.5
+    ranged.f_end_ghz = 4.5
+    ranged.deembedded = True
+    db.commit()
+    _files(tmp_path, "M-2")
+
+    client = _StubClient({"status": "already_synced", "device_count": 2}, batch_count=2)
+    svc.push_batch_to_server(db, client, "M-1")
+    meta = client.pushed_metas[0]
+    assert meta["batch_no"] == "M-1"
+    assert meta["mapping_name"] == "MAP-M-1"
+    assert meta["deembed"] == "false"  # 字符串，非 bool
+    assert meta["deembed_method"] == "default"
+    assert meta["process_type"] == "AUTO"
+    assert meta["uploaded_by"] == "tester"
+    assert "f_start_ghz" not in meta  # None 时不传键（空串会让服务器 422）
+    assert "f_end_ghz" not in meta
+
+    client2 = _StubClient({"status": "already_synced", "device_count": 1}, batch_count=1)
+    svc.push_batch_to_server(db, client2, "M-2")
+    meta2 = client2.pushed_metas[0]
+    assert meta2["deembed"] == "true"
+    assert meta2["f_start_ghz"] == "3.5"
+    assert meta2["f_end_ghz"] == "4.5"
+
+
 def test_push_count_mismatch_keeps_files(tmp_path, monkeypatch):
     monkeypatch.setattr(svc, "_files_root", lambda: tmp_path / "files")
     monkeypatch.setattr(svc, "_zip_staging_dir", lambda: tmp_path / "staging")
@@ -114,6 +210,45 @@ def test_push_count_mismatch_keeps_files(tmp_path, monkeypatch):
         svc.push_batch_to_server(db, client, "BAD-1")
     assert files_dir.exists()
     assert db.scalar(select(Batch).where(Batch.batch_no == "BAD-1")).synced_at is None
+
+
+def test_push_task_failure_keeps_files(tmp_path, monkeypatch):
+    monkeypatch.setattr(svc, "_files_root", lambda: tmp_path / "files")
+    monkeypatch.setattr(svc, "_zip_staging_dir", lambda: tmp_path / "staging")
+    monkeypatch.setattr(svc, "POLL_INTERVAL_S", 0)
+    db = _session()
+    _batch(db, "F-1", count=2)
+    files_dir = _files(tmp_path, "F-1")
+
+    class _FailClient(_StubClient):
+        def task_status(self, task_id):
+            return {"id": task_id, "status": "failed", "error_msg": "boom"}
+
+    client = _FailClient({"status": "accepted", "task_id": 7}, batch_count=2)
+    with pytest.raises(ServerError, match="boom"):
+        svc.push_batch_to_server(db, client, "F-1")
+    assert files_dir.exists()
+    assert db.scalar(select(Batch).where(Batch.batch_no == "F-1")).synced_at is None
+
+
+def test_push_already_synced_skips_ensure_and_push(tmp_path, monkeypatch):
+    monkeypatch.setattr(svc, "_files_root", lambda: tmp_path / "files")
+    monkeypatch.setattr(svc, "_zip_staging_dir", lambda: tmp_path / "staging")
+    db = _session()
+    _batch(db, "S-1", count=2, synced=datetime.now(UTC))
+    _files(tmp_path, "S-1")
+    client = _StubClient({"status": "already_synced", "device_count": 2}, batch_count=2)
+
+    result = svc.push_batch_to_server(db, client, "S-1")
+    assert result["status"] == "synced"
+    assert client.ensure_calls == 0
+    assert client.pushed_metas == []
+
+
+def test_wait_task_timeout_mentions_task_id(monkeypatch):
+    monkeypatch.setattr(svc, "POLL_TIMEOUT_S", 0)
+    with pytest.raises(ServerError, match="task_id=42"):
+        svc.wait_task(_StubClient({}, 0), 42)
 
 
 def test_pull_merges_snapshot(tmp_path, monkeypatch):
