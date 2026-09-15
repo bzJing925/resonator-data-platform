@@ -45,6 +45,8 @@ class BatchListItem(BaseModel):
     deembed_method: str
     process_type: str
     uploaded_at: datetime
+    synced_at: datetime | None = None
+    source: str = ""
 
 
 class BatchListResponse(PaginatedResponse[BatchListItem]):
@@ -70,6 +72,8 @@ class BatchDetail(BaseModel):
     file_path: str
     uploaded_at: datetime
     uploaded_by: str
+    synced_at: datetime | None = None
+    source: str = ""
     task_id: int | None
     wafers: list[int]
     stats: BatchStats

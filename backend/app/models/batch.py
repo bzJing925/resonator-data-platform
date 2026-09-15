@@ -47,6 +47,7 @@ class Batch(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     uploaded_by: Mapped[str] = mapped_column(Text, default="anonymous", nullable=False)
+    synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     task_id: Mapped[int | None] = mapped_column(ForeignKey("upload_tasks.id", ondelete="SET NULL"))
 
     mapping: Mapped[Mapping] = relationship(back_populates="batches")
