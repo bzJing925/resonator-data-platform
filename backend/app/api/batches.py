@@ -78,6 +78,8 @@ def list_batches(
             deembed_method=b.deembed_method,
             process_type=b.process_type,
             uploaded_at=b.uploaded_at,
+            synced_at=b.synced_at,
+            source=b.source,
         )
         for b, mname in rows
     ]
@@ -120,6 +122,8 @@ def get_batch(batch_no: str, db: DbSession) -> BatchDetail:
         file_path=batch.file_path,
         uploaded_at=batch.uploaded_at,
         uploaded_by=batch.uploaded_by,
+        synced_at=batch.synced_at,
+        source=batch.source,
         task_id=batch.task_id,
         wafers=wafers,
         stats=BatchStats(**stats),

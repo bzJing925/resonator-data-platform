@@ -159,7 +159,11 @@ data: {"error_msg": "..."}
       "f_start_ghz": null,
       "f_end_ghz": null,
       "deembedded": false,
-      "uploaded_at": "2026-05-09T12:34:56Z"
+      "deembed_method": "default",
+      "process_type": "AUTO",
+      "uploaded_at": "2026-05-09T12:34:56Z",
+      "synced_at": null,
+      "source": "http"
     }
   ]
 }

@@ -2,20 +2,10 @@
 
 from datetime import UTC, datetime
 
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import Session
-
-from app.models import Base, Batch, Mapping
+from app.models import Batch, Mapping
 
 
-def _session() -> Session:
-    engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine)
-    return Session(engine)
-
-
-def test_batch_synced_at_defaults_null_and_settable() -> None:
-    db = _session()
+def test_batch_synced_at_defaults_null_and_settable(db) -> None:
     mapping = Mapping(name="M1", file_path="m.csv", entry_count=0)
     db.add(mapping)
     db.flush()
@@ -23,10 +13,14 @@ def test_batch_synced_at_defaults_null_and_settable() -> None:
     db.add(batch)
     db.commit()
 
-    loaded = db.scalar(select(Batch).where(Batch.batch_no == "B-1"))
+    loaded = db.get(Batch, batch.id)
+    assert loaded is not None
     assert loaded.synced_at is None
 
-    now = datetime.now(UTC)
+    now = datetime(2026, 9, 15, 12, 0, 0, tzinfo=UTC)
     loaded.synced_at = now
     db.commit()
-    assert db.scalar(select(Batch).where(Batch.batch_no == "B-1")).synced_at is not None
+    db.refresh(loaded)
+    assert loaded.synced_at is not None
+    # SQLite 不保留时区信息，去掉 tzinfo 后应与写入值相等（验证 DB round-trip）
+    assert loaded.synced_at == now.replace(tzinfo=None)
