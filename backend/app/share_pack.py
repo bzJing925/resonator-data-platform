@@ -39,7 +39,7 @@ _CAL_KEYWORDS = ("OPEN", "SHORT", "WO", "WS")
 ProgressCb = Callable[[str, int, int, str], None]  # (stage, current, total, msg)
 
 # ---------------------------------------------------------------------------
-# 参数表格（xlsx）直传：表头别名 → devices 列
+# 参数表格（xlsx / xls / csv）直传：表头别名 → devices 列
 # ---------------------------------------------------------------------------
 
 # 必填表头（用户提示文案里的最小集合）
@@ -123,7 +123,7 @@ def rows_from_xlsx(
     deembedded: bool,
     progress_cb: ProgressCb | None = None,
 ) -> tuple[list[dict], list[str], dict, dict, dict]:
-    """参数表格 → (rows, failures, stats, mapping_entries, report)。
+    """参数表格（xlsx / xls / csv）→ (rows, failures, stats, mapping_entries, report)。
 
     deembedded 由调用方（页面勾选/CLI 参数）指定，写入每行与 meta。
     mapping_entries 从表格唯一 mark 派生（eg/fl/ag/area/pf 取该行值）。
@@ -136,7 +136,11 @@ def rows_from_xlsx(
     if not xlsx_path.exists():
         raise SystemExit(f"表格不存在: {xlsx_path}")
     cb("读表", 0, 1, f"读取 {xlsx_path.name}")
-    df = pd.read_excel(xlsx_path)
+    if xlsx_path.suffix.lower() == ".csv":
+        # Excel 导出的 CSV 常含 BOM；utf-8-sig 能同时兼容普通 UTF-8。
+        df = pd.read_csv(xlsx_path, encoding="utf-8-sig")
+    else:
+        df = pd.read_excel(xlsx_path)
 
     # 表头映射
     col_map: dict[str, str] = {}  # xlsx 列名 → devices 列名
@@ -152,6 +156,13 @@ def rows_from_xlsx(
             unknown.append(str(c))
 
     have = set(col_map.values())
+    # 历史导出表有时仅提供 ``Area``；其中的值（如 100 / 900）即物理面积，
+    # 而不是设计编号。若专用 ``Area(um2)`` 列存在，仍优先使用它，避免改变
+    # 同时包含两列的旧表解析结果。
+    area_um2_fallback = None
+    if "area_um2" not in have and "area_n" in have:
+        area_um2_fallback = next(src for src, dest in col_map.items() if dest == "area_n")
+        have.add("area_um2")
     missing = [h for h in ("original_filename", "display_name", "eg", "fl", "ag", "pf",
                            "area_um2", "fs_ghz", "fp_ghz", "zs_ohm", "zp_ohm", "qs", "qp",
                            "qs_bodeq", "qp_bodeq", "k2eff_pct")
@@ -167,6 +178,8 @@ def rows_from_xlsx(
     failures: list[str] = []
     for i, rec in enumerate(df.itertuples(index=False, name=None), 1):
         r = {dev: rec[pos[src]] for src, dev in col_map.items()}
+        if area_um2_fallback is not None:
+            r["area_um2"] = rec[pos[area_um2_fallback]]
         row = {c: None for c in PACK_COLUMNS}
         for dev, v in r.items():
             row[dev] = None if pd.isna(v) else v
@@ -237,7 +250,7 @@ def rows_from_xlsx(
         "process_type": ptype,
         "deembedded": bool(deembedded),
         "deembed_method": None,
-        "source": "xlsx",
+        "source": xlsx_path.suffix.lower().lstrip("."),
     }
     report = {
         "mapped": sorted(set(col_map.values())),

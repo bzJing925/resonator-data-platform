@@ -230,6 +230,44 @@ def test_make_share_pack_xlsx(tmp_path):
     assert e2["has_pf"] is False
 
 
+def test_make_share_pack_xlsx_accepts_area_as_physical_area_fallback(tmp_path):
+    """仅有历史 ``Area`` 列时，将其作为物理面积，而非拒绝整张表。"""
+    from app.share_pack import make_share_pack_xlsx
+
+    xlsx = tmp_path / "area_only.xlsx"
+    _make_params_xlsx(xlsx, n_marks=1, both_ports=False, extra_unknown=False)
+    import pandas as pd
+
+    frame = pd.read_excel(xlsx).drop(columns=["Area(um2)"])
+    frame["Area"] = 900
+    frame.to_excel(xlsx, index=False)
+
+    _, _ = make_share_pack_xlsx(xlsx, "#AREA", tmp_path / "area.zip", deembedded=False)
+    with zipfile.ZipFile(tmp_path / "area.zip") as zf:
+        rows = list(csv.DictReader(io.StringIO(
+            gzip.decompress(zf.read("devices.csv.gz")).decode("utf-8")
+        )))
+    assert rows[0]["area_um2"] == "900"
+
+
+def test_make_share_pack_csv(tmp_path):
+    """参数 CSV 与 Excel 表格走同一列映射和分享包契约。"""
+    from app.share_pack import make_share_pack_xlsx
+
+    xlsx = tmp_path / "source.xlsx"
+    _make_params_xlsx(xlsx, n_marks=1, both_ports=False, extra_unknown=False)
+    import pandas as pd
+
+    csv_path = tmp_path / "source.csv"
+    pd.read_excel(xlsx).to_csv(csv_path, index=False, encoding="utf-8-sig")
+
+    meta, report = make_share_pack_xlsx(csv_path, "#CSV", tmp_path / "share.zip", deembedded=False)
+
+    assert meta["source"] == "csv"
+    assert meta["device_count"] == 1
+    assert report["n_marks"] == 1
+
+
 def test_make_share_pack_xlsx_de(tmp_path):
     """勾选已去嵌：meta 与每行 deembedded=True。"""
     from app.share_pack import make_share_pack_xlsx

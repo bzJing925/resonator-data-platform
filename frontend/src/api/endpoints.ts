@@ -63,6 +63,15 @@ export const uploadBatch = (formData: FormData, onProgress?: (e: { loaded: numbe
     })
     .then((r) => r.data);
 
+export const pullWebData = () => api.post('/web-sync/pull', undefined, { timeout: 0 }).then((r) => r.data as {
+  mappings_added: number; batches_added: number; devices_added: number;
+});
+
+export const pushBatchToWeb = (batchNo: string, token: string) =>
+  api.post(`/web-sync/push/${encodeURIComponent(batchNo)}`, { token }, { timeout: 0 }).then((r) => r.data as {
+    batch_no: string; device_count: number; commit_url: string; message: string;
+  });
+
 const httpListTasks = (params?: Record<string, unknown>) =>
   api.get('/tasks', { params }).then((r: AxiosResponse<Task[] | PagedList<Task>>) => r.data);
 export const getTask = (taskId: number | string) =>

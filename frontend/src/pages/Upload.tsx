@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import I from '../components/Icons';
-import { listMappings, uploadBatch } from '../api/endpoints';
+import { listMappings, pullWebData, pushBatchToWeb, uploadBatch } from '../api/endpoints';
 import { useUploadProgress } from '../contexts/UploadProgressContext';
 import { usePageState } from '../contexts/PageStateContext';
 import useSSE from '../hooks/useSSE';
@@ -54,6 +54,9 @@ const UPLOAD_INITIAL_STATE = {
   deembedMethod: 'default',
 };
 
+const RAW_FILE_EXTS = ['.zip', '.s1p', '.s2p', '.snp'];
+const TABLE_FILE_EXTS = ['.xlsx', '.xls', '.csv'];
+
 export default function Upload() {
   const [state, setState] = usePageState('upload', UPLOAD_INITIAL_STATE);
   const {
@@ -72,16 +75,23 @@ export default function Upload() {
 
   const [mappings, setMappings] = useState<Mapping[]>([]);
   const [files, setFiles] = useState<File[]>([]);
+  const [uploadKind, setUploadKind] = useState<'raw' | 'table'>('raw');
   const [dragOver, setDragOver] = useState<boolean>(false);
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [taskInfo, setTaskInfo] = useState<{ task_id: string | number; batch_no: string } | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [uploadPct, setUploadPct] = useState<number>(0);
+  const [syncToWeb, setSyncToWeb] = useState<boolean>(false);
+  const [webToken, setWebToken] = useState<string>('');
+  const [webSyncMessage, setWebSyncMessage] = useState<string | null>(null);
+  const [pullingWeb, setPullingWeb] = useState<boolean>(false);
+  const [pushingWeb, setPushingWeb] = useState<boolean>(false);
+  const pushedBatchRef = useRef<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const navigate = useNavigate();
   const { addTask } = useUploadProgress();
 
-  useEffect(() => {
+  const refreshMappings = useCallback(() => {
     listMappings()
       .then((data) => {
         const list = Array.isArray(data) ? data : (data as { items?: Mapping[] })?.items || [];
@@ -89,24 +99,51 @@ export default function Upload() {
         if (list.length && !mappingId) setMappingId(String(list[0].id));
       })
       .catch(() => setMappings([]));
-  }, []);
+  }, [mappingId, setMappingId]);
+
+  useEffect(() => {
+    refreshMappings();
+  }, [refreshMappings]);
 
   const sse = useSSE(taskInfo?.task_id, { enabled: !!taskInfo });
 
   useEffect(() => {
     if (sse.done && sse.status === 'success' && taskInfo?.batch_no) {
-      const t = setTimeout(() => navigate(`/batches/${encodeURIComponent(taskInfo.batch_no)}`), 1500);
-      return () => clearTimeout(t);
+      const finish = () => setTimeout(() => navigate(`/batches/${encodeURIComponent(taskInfo.batch_no)}`), 1500);
+      if (!syncToWeb || !webToken || pushedBatchRef.current === taskInfo.batch_no) {
+        const timer = finish();
+        return () => clearTimeout(timer);
+      }
+      pushedBatchRef.current = taskInfo.batch_no;
+      setPushingWeb(true);
+      setWebSyncMessage('正在写入网页版数据仓…');
+      let active = true;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      pushBatchToWeb(taskInfo.batch_no, webToken)
+        .then((result) => {
+          if (active) setWebSyncMessage(result.message);
+        })
+        .catch((error) => {
+          if (active) setWebSyncMessage(`网页版同步失败：${error?.response?.data?.detail || error.message}`);
+        })
+        .finally(() => {
+          if (active) setPushingWeb(false);
+          if (active) timer = finish();
+        });
+      return () => {
+        active = false;
+        if (timer) clearTimeout(timer);
+      };
     }
-  }, [sse.done, sse.status, taskInfo, navigate]);
+  }, [sse.done, sse.status, taskInfo, navigate, syncToWeb, webToken]);
 
-  const VALID_EXTS = ['.zip', '.s1p', '.s2p', '.snp'];
+  const validExts = uploadKind === 'raw' ? RAW_FILE_EXTS : TABLE_FILE_EXTS;
 
   const validateFiles = (list: File[]) => {
-    const bad = list.filter((f) => !VALID_EXTS.some((ext) => f.name.toLowerCase().endsWith(ext)));
+    const bad = list.filter((f) => !validExts.some((ext) => f.name.toLowerCase().endsWith(ext)));
     if (bad.length) {
-      setSubmitError(`仅支持 ${VALID_EXTS.join(' / ')} 文件，以下文件被忽略：${bad.map((f) => f.name).join(', ')}`);
-      return list.filter((f) => VALID_EXTS.some((ext) => f.name.toLowerCase().endsWith(ext)));
+      setSubmitError(`仅支持 ${validExts.join(' / ')} 文件，以下文件被忽略：${bad.map((f) => f.name).join(', ')}`);
+      return list.filter((f) => validExts.some((ext) => f.name.toLowerCase().endsWith(ext)));
     }
     const empty = list.filter((f) => f.size === 0);
     if (empty.length) {
@@ -120,7 +157,7 @@ export default function Upload() {
   const onPickFiles = (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
     const picked = validateFiles(Array.from(fileList));
-    if (picked.length) setFiles((prev) => [...prev, ...picked]);
+    if (picked.length) setFiles((prev) => uploadKind === 'table' ? [picked[0]] : [...prev, ...picked]);
   };
 
   const onDrop = (e: React.DragEvent) => {
@@ -145,7 +182,7 @@ export default function Upload() {
   const submit = async () => {
     setSubmitError(null);
     if (files.length === 0) {
-      setSubmitError('请选择 .zip / .s1p / .s2p / .snp 文件');
+      setSubmitError(`请选择 ${validExts.join(' / ')} 文件`);
       return;
     }
     if (!mappingId) {
@@ -198,6 +235,31 @@ export default function Upload() {
     setUploadPct(0);
     setSubmitError(null);
     setDragOver(false);
+    setWebSyncMessage(null);
+    pushedBatchRef.current = null;
+    if (inputRef.current) inputRef.current.value = '';
+  };
+
+  const pullFromWeb = async () => {
+    setPullingWeb(true);
+    setWebSyncMessage('正在下载网页版已发布的数据和对照表…');
+    try {
+      const result = await pullWebData();
+      setWebSyncMessage(`已同步：新增 ${result.batches_added} 个批次、${result.devices_added} 个数据点、${result.mappings_added} 份对照表。`);
+      refreshMappings();
+    } catch (error: any) {
+      setWebSyncMessage(`从网页版同步失败：${error?.response?.data?.detail || error.message}`);
+    } finally {
+      setPullingWeb(false);
+    }
+  };
+
+  const changeUploadKind = (kind: 'raw' | 'table') => {
+    if (kind === uploadKind) return;
+    setUploadKind(kind);
+    setFiles([]);
+    setSubmitError(null);
+    setDeembed(false);
     if (inputRef.current) inputRef.current.value = '';
   };
 
@@ -213,6 +275,9 @@ export default function Upload() {
             <I.table size={13} /> 先去添加对照表
           </Link>
         )}
+        <button className="btn" onClick={pullFromWeb} disabled={pullingWeb || submitting}>
+          <I.download size={13} /> {pullingWeb ? '同步中…' : '从网页版同步'}
+        </button>
       </div>
 
       <div
@@ -230,8 +295,11 @@ export default function Upload() {
       >
         <div className="chart-card" style={{ margin: 0 }}>
           <div className="chart-head">
-            <span className="title">① 数据包</span>
-            <span className="axes">.zip / .s1p / .s2p / .snp · 支持拖拽多选</span>
+            <span className="title">① 数据来源</span>
+            <div className="right" style={{ display: 'flex', gap: 6 }}>
+              <button className={`btn sm${uploadKind === 'raw' ? ' active' : ''}`} onClick={() => changeUploadKind('raw')}>原始测量数据</button>
+              <button className={`btn sm${uploadKind === 'table' ? ' active' : ''}`} onClick={() => changeUploadKind('table')}>参数表格</button>
+            </div>
           </div>
           <div style={{ padding: 14 }}>
             {files.length > 0 ? (
@@ -293,12 +361,12 @@ export default function Upload() {
                   <input
                     ref={inputRef}
                     type="file"
-                    accept=".zip,.s1p,.s2p,.snp"
-                    multiple
+                    accept={validExts.join(',')}
+                    multiple={uploadKind === 'raw'}
                     style={{ display: 'none' }}
                     onChange={(e) => onPickFiles(e.target.files)}
                   />
-                  + 继续添加文件
+                  {uploadKind === 'raw' ? '+ 继续添加文件' : '更换表格文件'}
                 </label>
               </div>
             ) : (
@@ -320,8 +388,8 @@ export default function Upload() {
                 <input
                   ref={inputRef}
                   type="file"
-                  accept=".zip,.s1p,.s2p,.snp"
-                  multiple
+                  accept={validExts.join(',')}
+                  multiple={uploadKind === 'raw'}
                   style={{ display: 'none' }}
                   onChange={(e) => onPickFiles(e.target.files)}
                 />
@@ -330,7 +398,9 @@ export default function Upload() {
                   {dragOver ? '释放以上传' : '点击或拖拽文件到此处'}
                 </div>
                 <div className="dim mono" style={{ fontSize: 10.5 }}>
-                  支持 .zip / .s1p / .s2p / .snp · 可多选
+                  {uploadKind === 'raw'
+                    ? '支持 .zip / .s1p / .s2p / .snp · 可多选'
+                    : '支持 .xlsx / .xls / .csv · 已提取参数表格，单文件导入'}
                 </div>
               </label>
             )}
@@ -361,6 +431,33 @@ export default function Upload() {
                   </option>
                 ))}
               </select>
+            </div>
+            <div className="field">
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={syncToWeb}
+                  onChange={(e) => setSyncToWeb(e.target.checked)}
+                  disabled={submitting || !!taskInfo}
+                />
+                <span style={{ fontSize: 13, color: 'var(--fg-1)' }}>入库后同步到网页版</span>
+              </label>
+              {syncToWeb && (
+                <div style={{ marginTop: 8 }}>
+                  <input
+                    className="input mono"
+                    type="password"
+                    placeholder="GitHub Token（Contents: Read and write）"
+                    value={webToken}
+                    onChange={(e) => setWebToken(e.target.value)}
+                    disabled={submitting || !!taskInfo}
+                    style={{ width: '100%' }}
+                  />
+                  <div className="dim" style={{ fontSize: 10.5, marginTop: 4 }}>
+                    直接写入网页版数据仓；网站会在 CI 校验、合并和发布后更新。Token 不保存。
+                  </div>
+                </div>
+              )}
             </div>
             <div className="field">
               <div className="field-label">
@@ -504,8 +601,11 @@ export default function Upload() {
               )}
               {sse.done && sse.status === 'success' && (
                 <div style={{ marginTop: 10, color: 'var(--pass)', fontSize: 12 }}>
-                  <I.check size={12} /> 完成，即将跳转到批次详情...
+                  <I.check size={12} /> {pushingWeb ? '本机入库完成，正在同步到网页版…' : '完成，即将跳转到批次详情...'}
                 </div>
+              )}
+              {webSyncMessage && (
+                <div className="dim" style={{ marginTop: 8, fontSize: 11.5 }}>{webSyncMessage}</div>
               )}
             </div>
           </div>

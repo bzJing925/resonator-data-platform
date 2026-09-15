@@ -39,6 +39,7 @@ from app.api import (
     system,
     tasks,
     upload,
+    web_sync,
 )
 from app.config import get_settings
 
@@ -165,6 +166,7 @@ app.include_router(files.router, prefix="/api")
 app.include_router(export.router, prefix="/api")
 app.include_router(process.router, prefix="/api")
 app.include_router(surrogate.router, prefix="/api")
+app.include_router(web_sync.router, prefix="/api")
 
 # 静态文件服务 + SPA fallback
 if STATIC_DIR:

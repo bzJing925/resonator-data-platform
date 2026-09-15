@@ -27,7 +27,7 @@ from app.share_pack import PACK_COLUMNS, make_share_pack  # noqa: F401, E402
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="snp zip/散文件/参数表格 → 参数分享包")
-    ap.add_argument("inputs", nargs="+", help="snp 压缩包/散文件，或一个参数表格 .xlsx")
+    ap.add_argument("inputs", nargs="+", help="snp 压缩包/散文件，或一个参数表格 .xlsx/.xls/.csv")
     ap.add_argument("--batch-no", required=True, help="批次号（如 '#5'，网站上必须唯一）")
     ap.add_argument("--mapping", default=None,
                     help="对照表 xlsx/csv 路径（snp 模式必填；表格模式可选，仅取其名字）")
@@ -42,12 +42,14 @@ def main() -> None:
     args = ap.parse_args()
     cb = lambda stage, cur, tot, msg: print(f"[{stage}] {cur}/{tot} {msg}")  # noqa: E731
 
-    xlsx_inputs = [p for p in args.inputs if str(p).lower().endswith((".xlsx", ".xls"))]
+    xlsx_inputs = [
+        p for p in args.inputs if str(p).lower().endswith((".xlsx", ".xls", ".csv"))
+    ]
     if xlsx_inputs:
         from app.share_pack import make_share_pack_xlsx
 
         if len(args.inputs) > 1:
-            raise SystemExit("表格模式一次只接受一个 .xlsx")
+            raise SystemExit("表格模式一次只接受一个 .xlsx / .xls / .csv 文件")
         mapping_name = Path(args.mapping).stem if args.mapping else ""
         meta, report = make_share_pack_xlsx(
             args.inputs[0], args.batch_no, args.out,
