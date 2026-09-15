@@ -117,14 +117,31 @@ def test_push_batch_idempotent(client, db, tmp_path, dispatch_success):
     assert again.json()["status"] == "already_synced"
 
 
-def test_push_batch_rejects_path_traversal(client):
-    # batch_no 会拼进 files_dir 路径并用于 rmtree，必须挡住路径穿越
+@pytest.mark.parametrize("batch_no", [".", "..", "../../x", "a/b", "a\\b", "C:"])
+def test_push_batch_rejects_path_traversal(client, batch_no):
+    # batch_no 会拼进 files_dir 路径并用于目录清理，必须挡住路径穿越：
+    # "." 经 rmtree(files_dir / ".") 会删整个 files_dir；"a\\b"/"C:" 是
+    # Windows 语义下的子目录/盘符相对路径，双语义都需拒绝。
     resp = client.post(
         "/api/sync/push-batch",
         files={"file": ("X.zip", _empty_zip(), "application/zip")},
-        data={"batch_no": "../../x", "mapping_name": "NOPE"},
+        data={"batch_no": batch_no, "mapping_name": "NOPE"},
     )
     assert resp.status_code == 400
+
+
+@pytest.mark.parametrize("batch_no", ["T8901P.01", "批 次.01", "batch 01"])
+def test_push_batch_accepts_normal_batch_no(client, batch_no):
+    """正常批次名（含点号、中文、空格）不应被路径校验误伤。
+
+    用不存在的 mapping 名：请求若穿过 batch_no 校验，会落在 mapping 查询的 422。
+    """
+    resp = client.post(
+        "/api/sync/push-batch",
+        files={"file": ("X.zip", _empty_zip(), "application/zip")},
+        data={"batch_no": batch_no, "mapping_name": "NOPE"},
+    )
+    assert resp.status_code == 422
 
 
 def test_push_batch_invalid_form_values_400(client, db):

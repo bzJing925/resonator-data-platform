@@ -6,6 +6,7 @@ import hashlib
 import json
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path, PureWindowsPath
 from typing import Annotated, Any
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
@@ -121,9 +122,16 @@ def push_batch(
     process_type: Annotated[str, Form()] = "AUTO",
     uploaded_by: Annotated[str, Form()] = "anonymous",
 ) -> dict[str, Any]:
-    # batch_no 会拼进 files_dir 路径并用于目录清理，先挡住路径穿越
-    if "/" in batch_no or "\\" in batch_no or ".." in batch_no:
-        raise HTTPException(status_code=400, detail="batch_no 含非法字符（/、\\、..）")
+    # batch_no 会拼进 files_dir 路径并用于目录清理，先做正向路径校验。
+    # 服务器可能跑 POSIX 或 Windows：POSIX 的 Path 认不出 Windows 的反斜杠
+    # 分隔符与盘符相对路径（"a\\b"、"C:" 在 POSIX 下 name 是其自身），
+    # 需同时按 Windows 语义校验；strip(".") 负责挡住 "." / ".."。
+    if (
+        Path(batch_no).name != batch_no
+        or PureWindowsPath(batch_no).name != batch_no
+        or not batch_no.strip(".")
+    ):
+        raise HTTPException(status_code=400, detail="批次名含有非法路径字符")
     if process_type not in ("AUTO", "S1P", "S2P", "BOTH"):
         raise HTTPException(
             status_code=400, detail="process_type 必须是 AUTO / S1P / S2P / BOTH 之一"
