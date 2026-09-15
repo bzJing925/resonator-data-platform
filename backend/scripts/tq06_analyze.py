@@ -30,6 +30,10 @@ f2_pred = 1/Σ(t_i/v_i)（声学厚度预测的偶模支路，实证偏移 +2~+8
 
 用法：
     uv run --no-sync python scripts/tq06_analyze.py
+    uv run --no-sync python scripts/tq06_analyze.py --subset-mode highq
+        # 高 Q 子集变体（WP-A 续）：S11 & pf=0 & |fs2−sim|≤60 MHz 门内 qs 降序前 n；
+        # 归属沿用 dfs 结论 A(130,100)，产物 calibration_tq06_highq.json /
+        # tq06_curves_highq.npz，报告追加 §5（不覆盖 dfs 口径产物）
 """
 
 from __future__ import annotations
@@ -373,6 +377,37 @@ def select_subset(
         cand.append((abs(fs - sim_fs_ghz), r["file"], i))
     cand.sort()
     return [i for _d, _f, i in cand[:n]]
+
+
+def select_subset_highq(
+    rows: list[dict],
+    sim_fs_ghz: float,
+    gate_mhz: float = 60.0,
+    n: int = 10,
+    port: str | None = "S11",
+) -> list[int]:
+    """高 Q 变体：|fs2 − sim_fs2| ≤ gate_mhz 门内按 qs 降序取前 n 个 valid 行。
+
+    剔除 pf=True（``_PF_`` 质量加载态文件）；port=None 不限端口。
+    排序键 (−qs, file)：确定性 tie-break（文件名升序）。返回原 rows 索引。
+    """
+    cand = []
+    for i, r in enumerate(rows):
+        if not r.get("valid", False):
+            continue
+        if port is not None and r.get("port") != port:
+            continue
+        if r.get("pf", False):
+            continue
+        fs = float(r["fs_ghz"])
+        qs = float(r["qs"])
+        if not (np.isfinite(fs) and np.isfinite(qs)):
+            continue
+        if abs(fs - sim_fs_ghz) * 1.0e3 > gate_mhz:
+            continue
+        cand.append((-qs, r["file"], i))
+    cand.sort()
+    return [i for _q, _f, i in cand[:n]]
 
 
 # ============================================================
@@ -759,12 +794,222 @@ def _fmt(x: float, nd: int = 4) -> str:
     return "nan" if not np.isfinite(x) else f"{x:.{nd}f}"
 
 
+def _res_table(title: str, res: dict) -> list[str]:
+    """7 参数残差 markdown 表（目标/仿真/Δ/相对 %）。"""
+    lines = [
+        f"#### {title}",
+        "",
+        "| 参数 | 目标(子集中位) | 仿真值 | Δ | 相对 % |",
+        "|---|---|---|---|---|",
+    ]
+    for key in PARAM_KEYS:
+        r = res[key]
+        lines.append(
+            f"| {key} | {r['target']:.6f} | {r['sim']:.6f} "
+            f"| {r['abs_diff']:+.6f} | {r['rel_pct']:+.2f} |"
+        )
+    lines.append("")
+    return lines
+
+
+def _load_baseline_calibration(path: str | Path) -> dict | None:
+    """读取原子集（dfs 口径）校准 json 的对比字段；文件缺失返回 None。"""
+    p = Path(path)
+    if not p.exists():
+        return None
+    doc = json.loads(p.read_text(encoding="utf-8"))
+    floor = doc["k2_reachability"][-1]
+    return {
+        "json": p.name,
+        "target7": doc["target7"],
+        "theta": doc["theta"],
+        "cost": doc["cost"],
+        "alpha_after": doc["materials_after"]["alpha"],
+        "k2_floor": {
+            "s_e33": floor["s_e33"],
+            "k2eff_pct": floor["k2eff_pct"],
+            "fs_ghz": floor["fs_ghz"],
+            "gap_pct_pt": floor["k2eff_pct"] - doc["target7"]["k2eff_pct"],
+        },
+    }
+
+
+def _highq_report_section(
+    *,
+    gate_mhz: float,
+    n_gate: int,
+    verdict: dict,
+    subset_rows: list[dict],
+    target: np.ndarray,
+    fit: FitResult,
+    res_before: dict,
+    res_after: dict,
+    strict_doc: dict | None,
+    k2_scan: list[dict],
+    mat_after: PiezoMaterial,
+    alpha_after: float,
+    alscn: PiezoMaterial,
+    alpha_cal: float,
+    baseline: dict | None,
+    one_liner: str,
+    elapsed_s: float,
+) -> str:
+    """高 Q 子集重校准的报告追加节（§5），结构与 §3–§4 对齐并给出子集间对比。"""
+    k2_floor = k2_scan[-1]
+    gap_new = k2_floor["k2eff_pct"] - float(target[2])
+    lines: list[str] = [
+        "---",
+        "",
+        "## 5. 高 Q 子集重校准（WP-A 续）",
+        "",
+        "用户指令：「TQ 的数据挑点好的，Q 值高的」——校准子集由「与仿真最接近」（§3）"
+        "改为「仿真接近 + 高 Q」。本节由 `scripts/tq06_analyze.py --subset-mode highq` "
+        f"生成并追加（{datetime.now(UTC).isoformat()}，commit {_git_commit_sha()}，"
+        f"耗时 {elapsed_s:.1f} s）；θ/界/多起点/权重口径与 §4 完全一致。",
+        "",
+        "### 5.1 新子集规则",
+        "",
+        "1. 仅 S11（S22 有端口不对称系统性偏移，沿用 §3 结论排除）；",
+        "2. 仅 pf=0（剔除文件名含 `_PF_` 的 2 个质量加载态文件）；",
+        f"3. 仿真接近门：|fs2 − {verdict['fs_ghz']:.3f} GHz| ≤ {gate_mhz:.0f} MHz"
+        "（门中心 = 网格最优名义几何 A(130,100) 的仿真 fs2）；",
+        f"4. 门内 {n_gate} 个候选按 qs（相位斜率 Qs，生产口径）降序取前 {len(subset_rows)}。",
+        "",
+        "### 5.2 成员清单与子集中位目标",
+        "",
+        "| 文件 | fs2 (GHz) | Δfs2 vs 门中心 (MHz) | fp2 (GHz) | k²eff (%) | Qs | Qp |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for r in subset_rows:
+        lines.append(
+            f"| {r['file']} | {r['fs_ghz']:.4f} | {1e3 * (r['fs_ghz'] - verdict['fs_ghz']):+.1f} "
+            f"| {r['fp_ghz']:.4f} | {r['k2eff_pct']:.2f} | {r['qs']:.0f} | {r['qp']:.0f} |"
+        )
+    lines += [
+        "",
+        f"子集中位目标：fs={target[0]:.4f} GHz, fp={target[1]:.4f} GHz, "
+        f"k²eff={target[2]:.2f}%, Qs={target[3]:.1f}, Qp={target[4]:.1f}, "
+        f"Qs_bode={target[5]:.1f}, Qp_bode={target[6]:.1f}",
+        "",
+        "### 5.3 校准结果",
+        "",
+        f"拟合：cost={fit.cost:.3f}，nfev={fit.nfev}，success={fit.success}，"
+        f"start_idx={fit.start_idx}。",
+        "",
+        "| 量 | 校准值 | WP3 基准 | 相对 |",
+        "|---|---|---|---|",
+        f"| c33 (Pa) | {mat_after.c33:.6e} | {alscn.c33:.6e} | {(fit.theta[0] - 1) * 100:+.2f}% |",
+        f"| e33 (C/m²) | {mat_after.e33:.6f} | {alscn.e33:.6f} "
+        f"| {(fit.theta[1] - 1) * 100:+.2f}% |",
+        f"| eps (F/m) | {mat_after.eps:.6e} | {alscn.eps:.6e} | {(fit.theta[2] - 1) * 100:+.2f}% |",
+        f"| alpha | {alpha_after:.5f} | {alpha_cal:.5f} | {(fit.theta[3] - 1) * 100:+.2f}% |",
+        f"| t_mo_bot (nm) | {fit.theta[4]:.1f} | 130（4–7 GHz 批次） | — |",
+        f"| t_mo_top (nm) | {fit.theta[5]:.1f} | 130（4–7 GHz 批次） | — |",
+        f"| rho (kg/m³) | {mat_after.rho:.2f} | {alscn.rho:.2f} | 固定 |",
+        "",
+        "### 5.4 校准前后残差（目标 = 高 Q 子集中位）",
+        "",
+    ]
+    lines += _res_table("校准前（A(130,100) 名义几何 + WP3 材料）", res_before)
+    lines += _res_table("校准后", res_after)
+    if strict_doc is not None:
+        lines += [
+            "### 5.5 敏感性对照：全部材料 ±5% 严格界",
+            "",
+            f"cost={strict_doc['cost']:.3f}；θ="
+            + ", ".join(f"{v:.4f}" for v in strict_doc["theta"]),
+            "",
+        ]
+        lines += _res_table("严格界校准后", strict_doc["residuals"])
+    lines += [
+        "### 5.6 k²eff 可达性扫描（拟合 θ 上只动 s_e33，其余分量冻结）",
+        "",
+        "| s_e33 | fs2 (GHz) | fp2 (GHz) | k²eff (%) |",
+        "|---|---|---|---|",
+    ]
+    for row in k2_scan:
+        lines.append(
+            f"| {row['s_e33']:.2f} | {_fmt(row['fs_ghz'])} | {_fmt(row['fp_ghz'])} "
+            f"| {_fmt(row['k2eff_pct'], 2)} |"
+        )
+    lines += [
+        "",
+        f"**结构性缺口（如实报告，未硬拟合）**：高 Q 子集 k²eff 中位 {target[2]:.2f}% "
+        f"低于 fs 匹配几何下 1D Mason 的可达值——s_e33 降到论证界下限 "
+        f"{k2_floor['s_e33']:.2f} 时 k²eff 仍为 {k2_floor['k2eff_pct']:.2f}%"
+        f"（fs2={k2_floor['fs_ghz']:.4f} GHz），缺口 {gap_new:+.2f} pct-pt。"
+        "横向损耗/有限尺寸对实测 k²eff 的削减超出纯活塞 1D 口径，与 §4 结论一致；"
+        "高 Q 子集 k²eff 更低，缺口相应变大（见 §5.7 对比）。",
+        "",
+    ]
+    if baseline is not None:
+        bt = baseline["target7"]
+        bth = baseline["theta"]
+        bk2 = baseline["k2_floor"]
+        lines += [
+            "### 5.7 与原子集（|Δfs2| top-10，§3–§4）对比",
+            "",
+            "| 量 | 原子集 | 高 Q 子集 |",
+            "|---|---|---|",
+            f"| 目标 fs2 (GHz) | {bt['fs_ghz']:.4f} | {target[0]:.4f} |",
+            f"| 目标 fp2 (GHz) | {bt['fp_ghz']:.4f} | {target[1]:.4f} |",
+            f"| 目标 k²eff (%) | {bt['k2eff_pct']:.2f} | {target[2]:.2f} |",
+            f"| 目标 Qs / Qp | {bt['qs']:.1f} / {bt['qp']:.1f} | "
+            f"{target[3]:.1f} / {target[4]:.1f} |",
+            f"| 目标 Qp/Qs | {bt['qp'] / bt['qs']:.2f} | {target[4] / target[3]:.2f} |",
+            f"| 收敛 s_e33 | {bth[1]:.4f} | {fit.theta[1]:.4f} |",
+            f"| 收敛 alpha | {baseline['alpha_after']:.5f} | {alpha_after:.5f} |",
+            f"| 收敛电极 bot/top (nm) | {bth[4]:.1f} / {bth[5]:.1f} | "
+            f"{fit.theta[4]:.1f} / {fit.theta[5]:.1f} |",
+            f"| 校准 cost | {baseline['cost']:.1f} | {fit.cost:.1f} |",
+            f"| k²eff 缺口（s_e33={bk2['s_e33']:.2f} 下界，pct-pt） "
+            f"| {bk2['gap_pct_pt']:+.2f} | {gap_new:+.2f} |",
+            "",
+            "alpha 自由度压力：Qs 目标 "
+            f"{bt['qs']:.1f} → {target[3]:.1f}（{(target[3] / bt['qs'] - 1) * 100:+.0f}%），"
+            f"收敛 alpha {baseline['alpha_after']:.5f} → {alpha_after:.5f}"
+            f"（s_alpha={fit.theta[3]:.3f}，界 [0.45, 3.6]）；"
+            f"Qp/Qs 目标比 {bt['qp'] / bt['qs']:.2f} → {target[4] / target[3]:.2f}，"
+            "更接近 Mason 单损耗参数的结构性约束 Qp/Qs≈1.0。",
+            "",
+        ]
+    else:
+        lines += [
+            "### 5.7 与原子集对比",
+            "",
+            "（`calibration_tq06.json` 不在产物目录，跳过对比；先跑默认 dfs 口径再跑 highq。）",
+            "",
+        ]
+    lines += [
+        "### 论文一句话数字（高 Q 子集）",
+        "",
+        one_liner,
+        "",
+        "### 复现（本节）",
+        "",
+        "```bash",
+        "cd backend",
+        "uv run --no-sync python scripts/tq06_analyze.py --subset-mode highq",
+        "```",
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--tq06-dir", type=str, default=str(TQ06_DIR_DEFAULT), help="TQ06 s1p 目录")
     ap.add_argument("--cal-json", type=str, default=str(CAL_JSON_DEFAULT), help="WP3 校准材料 json")
     ap.add_argument("--outdir", type=str, default=str(OUTDIR_DEFAULT), help="产物目录")
     ap.add_argument("--subset-n", type=int, default=10, help="校准子集大小（默认 10）")
+    ap.add_argument(
+        "--subset-mode",
+        choices=("dfs", "highq"),
+        default="dfs",
+        help="子集规则：dfs=|Δfs2| 最小前 n（默认，原口径）；"
+        "highq=仿真接近门内 qs 降序前 n（剔除 _PF_，产物带 _highq 后缀，报告追加 §5）",
+    )
+    ap.add_argument("--gate-mhz", type=float, default=60.0, help="highq 模式仿真接近门半宽（MHz）")
     ap.add_argument("--n-starts", type=int, default=8, help="拟合多起点数（含名义起点）")
     ap.add_argument("--seed", type=int, default=SEED_DEFAULT, help="LHS 种子")
     ap.add_argument("--max-nfev", type=int, default=600, help="单起点最大函数评估数")
@@ -779,6 +1024,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
+    highq = args.subset_mode == "highq"
     t_start = time.time()
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -806,115 +1052,171 @@ def main(argv: list[str] | None = None) -> int:
         f"k2eff={stats_s11['k2eff_pct']['median']:.2f}%"
     )
 
-    # 明细表产物
-    detail_keys = [
-        "file",
-        "port",
-        "eg",
-        "fl",
-        "pf",
-        "ag",
-        "mark",
-        "coord",
-        "n_pts",
-        "f_min_ghz",
-        "f_max_ghz",
-        *PARAM_KEYS,
-        "fs1_ghz",
-        "fp1_ghz",
-        "k2eff_te1_pct",
-        "te1_band_range_db",
-        "valid",
-        "reason",
-    ]
-    with (outdir / "tq06_extraction.csv").open("w", newline="", encoding="utf-8") as fh:
-        w = csv.DictWriter(fh, fieldnames=detail_keys)
-        w.writeheader()
-        for r in rows:
-            w.writerow({k: r.get(k) for k in detail_keys})
-    (outdir / "tq06_extraction.json").write_text(
-        json.dumps(
-            {
-                "note": "TQ06 38 文件生产口径 TE2 提取明细（prodlabels 宽窗 (10,20] GHz）",
-                "generated_at": datetime.now(UTC).isoformat(),
-                "rows": [{k: r.get(k) for k in detail_keys} for r in rows],
-                "stats_all": stats_all,
-                "stats_s11": stats_s11,
-                "stats_s22": stats_s22,
-                "excluded": [{"file": r["file"], "reason": r.get("reason", "?")} for r in excluded],
-            },
-            indent=2,
-            ensure_ascii=False,
+    # 明细表产物（highq 变体沿用 dfs 运行产物，不改写）
+    if not highq:
+        detail_keys = [
+            "file",
+            "port",
+            "eg",
+            "fl",
+            "pf",
+            "ag",
+            "mark",
+            "coord",
+            "n_pts",
+            "f_min_ghz",
+            "f_max_ghz",
+            *PARAM_KEYS,
+            "fs1_ghz",
+            "fp1_ghz",
+            "k2eff_te1_pct",
+            "te1_band_range_db",
+            "valid",
+            "reason",
+        ]
+        with (outdir / "tq06_extraction.csv").open("w", newline="", encoding="utf-8") as fh:
+            w = csv.DictWriter(fh, fieldnames=detail_keys)
+            w.writeheader()
+            for r in rows:
+                w.writerow({k: r.get(k) for k in detail_keys})
+        (outdir / "tq06_extraction.json").write_text(
+            json.dumps(
+                {
+                    "note": "TQ06 38 文件生产口径 TE2 提取明细（prodlabels 宽窗 (10,20] GHz）",
+                    "generated_at": datetime.now(UTC).isoformat(),
+                    "rows": [{k: r.get(k) for k in detail_keys} for r in rows],
+                    "stats_all": stats_all,
+                    "stats_s11": stats_s11,
+                    "stats_s22": stats_s22,
+                    "excluded": [
+                        {"file": r["file"], "reason": r.get("reason", "?")} for r in excluded
+                    ],
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
         )
-        + "\n",
-        encoding="utf-8",
-    )
 
     # ---- 2. 归属判定网格 ----
-    mo_pairs = [(b, t) for b in MO_GRID_NM for t in MO_GRID_NM]
-    grid = attribution_grid(freq_sim, mo_pairs, alscn=alscn, alpha=alpha_cal)
-    tgt_fs = stats_s11["fs_ghz"]["median"]
-    tgt_fp = stats_s11["fp_ghz"]["median"]
-    tgt_k2 = stats_s11["k2eff_pct"]["median"]
-    for g in grid:
-        g["dfs2_mhz"] = (g["fs_ghz"] - tgt_fs) * 1e3 if g["valid"] else float("nan")
-        g["dfp2_mhz"] = (g["fp_ghz"] - tgt_fp) * 1e3 if g["valid"] else float("nan")
-        g["dk2eff"] = g["k2eff_pct"] - tgt_k2 if g["valid"] else float("nan")
-        g["abs_dfs2_mhz"] = abs(g["dfs2_mhz"])
-    grid_valid = [g for g in grid if g["valid"]]
-    if not grid_valid:
-        print("[WP-A] 归属网格全部无效，不写产物")
-        return 2
-    verdict = min(
-        grid_valid,
-        key=lambda g: (g["abs_dfs2_mhz"], g["t_mo_bot_nm"] + g["t_mo_top_nm"]),
-    )
-    print(
-        f"[WP-A] 归属网格最优：{verdict['attribution']}(mo_b={verdict['t_mo_bot_nm']:g}, "
-        f"mo_t={verdict['t_mo_top_nm']:g}) fs2={verdict['fs_ghz']:.4f} "
-        f"Δfs2={verdict['dfs2_mhz']:+.1f} MHz k2={verdict['k2eff_pct']:.2f}"
-    )
-    (outdir / "attribution_grid.json").write_text(
-        json.dumps(
-            {
-                "note": "两归属 × 电极对网格（自适应 TE2 窗）；目标 = 实测 S11 中位；"
-                "A(mo_b,mo_t) 与 B(mo_t,mo_b) 镜像简并（数值上逐点一致）",
-                "target_s11_median": {"fs_ghz": tgt_fs, "fp_ghz": tgt_fp, "k2eff_pct": tgt_k2},
-                "grid": grid,
-                "verdict": verdict,
-            },
-            indent=2,
-            ensure_ascii=False,
+    if highq:
+        # 高 Q 变体：归属结论沿用 dfs 运行的网格最优名义几何 A(130,100)（镜像简并
+        # 论证不变），只做一次参考仿真取门中心 fs2；不重跑网格、不改写
+        # attribution_grid.json。labels_before 即该参考仿真（名义 θ + WP3 材料）。
+        labels_before = simulate_te2_labels(
+            "A", 130.0, 100.0, alscn=alscn, alpha=alpha_cal, freq=freq_sim
         )
-        + "\n",
-        encoding="utf-8",
-    )
+        verdict = {
+            "attribution": "A",
+            "t_mo_bot_nm": 130.0,
+            "t_mo_top_nm": 100.0,
+            "valid": bool(labels_before["valid"]),
+            "fs_ghz": float(labels_before["fs_ghz"]),
+            "fp_ghz": float(labels_before["fp_ghz"]),
+            "k2eff_pct": float(labels_before["k2eff_pct"]),
+            "qs": float(labels_before["qs"]),
+            "qp": float(labels_before["qp"]),
+        }
+        print(
+            f"[WP-A] 高 Q 变体：参考几何 A(130,100) fs2={verdict['fs_ghz']:.4f} GHz "
+            f"fp2={verdict['fp_ghz']:.4f} GHz k2={verdict['k2eff_pct']:.2f}%（门中心）"
+        )
+        if not verdict["valid"]:
+            print("[WP-A] 参考几何仿真无效，不写产物")
+            return 2
+    else:
+        mo_pairs = [(b, t) for b in MO_GRID_NM for t in MO_GRID_NM]
+        grid = attribution_grid(freq_sim, mo_pairs, alscn=alscn, alpha=alpha_cal)
+        tgt_fs = stats_s11["fs_ghz"]["median"]
+        tgt_fp = stats_s11["fp_ghz"]["median"]
+        tgt_k2 = stats_s11["k2eff_pct"]["median"]
+        for g in grid:
+            g["dfs2_mhz"] = (g["fs_ghz"] - tgt_fs) * 1e3 if g["valid"] else float("nan")
+            g["dfp2_mhz"] = (g["fp_ghz"] - tgt_fp) * 1e3 if g["valid"] else float("nan")
+            g["dk2eff"] = g["k2eff_pct"] - tgt_k2 if g["valid"] else float("nan")
+            g["abs_dfs2_mhz"] = abs(g["dfs2_mhz"])
+        grid_valid = [g for g in grid if g["valid"]]
+        if not grid_valid:
+            print("[WP-A] 归属网格全部无效，不写产物")
+            return 2
+        verdict = min(
+            grid_valid,
+            key=lambda g: (g["abs_dfs2_mhz"], g["t_mo_bot_nm"] + g["t_mo_top_nm"]),
+        )
+        print(
+            f"[WP-A] 归属网格最优：{verdict['attribution']}(mo_b={verdict['t_mo_bot_nm']:g}, "
+            f"mo_t={verdict['t_mo_top_nm']:g}) fs2={verdict['fs_ghz']:.4f} "
+            f"Δfs2={verdict['dfs2_mhz']:+.1f} MHz k2={verdict['k2eff_pct']:.2f}"
+        )
+        (outdir / "attribution_grid.json").write_text(
+            json.dumps(
+                {
+                    "note": "两归属 × 电极对网格（自适应 TE2 窗）；目标 = 实测 S11 中位；"
+                    "A(mo_b,mo_t) 与 B(mo_t,mo_b) 镜像简并（数值上逐点一致）",
+                    "target_s11_median": {
+                        "fs_ghz": tgt_fs,
+                        "fp_ghz": tgt_fp,
+                        "k2eff_pct": tgt_k2,
+                    },
+                    "grid": grid,
+                    "verdict": verdict,
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
 
     # ---- 3. 子集挑选与有界 LS 校准 ----
-    subset_idx = select_subset(rows, verdict["fs_ghz"], n=args.subset_n, port="S11")
+    n_gate = 0
+    if highq:
+        gate_idx = select_subset_highq(
+            rows, verdict["fs_ghz"], gate_mhz=args.gate_mhz, n=len(rows), port="S11"
+        )
+        n_gate = len(gate_idx)
+        subset_idx = gate_idx[: args.subset_n]
+    else:
+        subset_idx = select_subset(rows, verdict["fs_ghz"], n=args.subset_n, port="S11")
     subset_rows = [rows[i] for i in subset_idx]
+    if not subset_rows:
+        print("[WP-A] 子集为空（无候选），不写校准产物")
+        return 2
     target = np.array(
         [np.median([float(r[k]) for r in subset_rows]) for k in PARAM_KEYS], dtype=np.float64
     )
-    print(f"[WP-A] 子集 {len(subset_rows)} 个（|Δfs2| 最小，S11）：")
-    for r in subset_rows:
+    if highq:
         print(
-            f"    {r['file'][:62]:64s} fs2={r['fs_ghz']:.4f} "
-            f"Δ={1e3 * (r['fs_ghz'] - verdict['fs_ghz']):+6.1f} MHz"
+            f"[WP-A] 高 Q 子集 {len(subset_rows)}/{n_gate}（门 ±{args.gate_mhz:.0f} MHz 内 "
+            "qs 降序，S11，pf=0）："
         )
+        for r in subset_rows:
+            print(
+                f"    {r['file'][:62]:64s} fs2={r['fs_ghz']:.4f} "
+                f"Δ={1e3 * (r['fs_ghz'] - verdict['fs_ghz']):+6.1f} MHz qs={r['qs']:.1f}"
+            )
+    else:
+        print(f"[WP-A] 子集 {len(subset_rows)} 个（|Δfs2| 最小，S11）：")
+        for r in subset_rows:
+            print(
+                f"    {r['file'][:62]:64s} fs2={r['fs_ghz']:.4f} "
+                f"Δ={1e3 * (r['fs_ghz'] - verdict['fs_ghz']):+6.1f} MHz"
+            )
     print(
         f"[WP-A] 子集中位目标：fs={target[0]:.4f} fp={target[1]:.4f} k2={target[2]:.2f} "
         f"qs={target[3]:.1f} qp={target[4]:.1f}"
     )
 
-    labels_before = simulate_te2_labels(
-        verdict["attribution"],
-        verdict["t_mo_bot_nm"],
-        verdict["t_mo_top_nm"],
-        alscn=alscn,
-        alpha=alpha_cal,
-        freq=freq_sim,
-    )
+    if not highq:
+        labels_before = simulate_te2_labels(
+            verdict["attribution"],
+            verdict["t_mo_bot_nm"],
+            verdict["t_mo_top_nm"],
+            alscn=alscn,
+            alpha=alpha_cal,
+            freq=freq_sim,
+        )
     lo, hi = theta_bounds()
     nominal = nominal_theta(verdict["t_mo_bot_nm"], verdict["t_mo_top_nm"])
     starts = make_starts(args.n_starts, args.seed, lo, hi, nominal)
@@ -1012,6 +1314,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     te1_db_before = band_range_db(freq_sim, mason_before)
     te1_db_after = band_range_db(freq_sim, mason_after)
+    te1_ranges = [r["te1_band_range_db"] for r in rows if np.isfinite(r["te1_band_range_db"])]
+    te1_found = sum(1 for r in rows if np.isfinite(float(r.get("fs1_ghz", float("nan")))))
     meta = {
         "task": "WP-A TQ06 14GHz P3F bilayer attribution + calibration",
         "generated_at": datetime.now(UTC).isoformat(),
@@ -1028,8 +1332,19 @@ def main(argv: list[str] | None = None) -> int:
         "sim_grid": "3-22 GHz @2 MHz",
         "eval_area_um2": EVAL_AREA_UM2,
     }
+    if highq:
+        meta["subset_mode"] = "highq"
+        meta["subset_rule"] = (
+            "S11 & pf=0 & |fs2−sim_fs2|≤gate 门内按 qs（相位斜率 Qs，生产口径）降序前 n"
+        )
+        meta["gate_mhz"] = float(args.gate_mhz)
+        meta["n_gate_candidates"] = n_gate
+        meta["baseline_json"] = "calibration_tq06.json"
+        curves_name = "tq06_curves_highq.npz"
+    else:
+        curves_name = "tq06_curves.npz"
     write_curves_npz(
-        outdir / "tq06_curves.npz", freq_sim / 1e9, mason_before, mason_after, meas_curves, meta
+        outdir / curves_name, freq_sim / 1e9, mason_before, mason_after, meas_curves, meta
     )
 
     # ---- 5. 报告 ----
@@ -1047,21 +1362,92 @@ def main(argv: list[str] | None = None) -> int:
         f"{res_before['k2eff_pct']['abs_diff']:+.2f} pct-pt）。"
     )
 
-    def _res_table(title: str, res: dict) -> list[str]:
-        lines = [
-            f"#### {title}",
-            "",
-            "| 参数 | 目标(子集中位) | 仿真值 | Δ | 相对 % |",
-            "|---|---|---|---|---|",
-        ]
-        for key in PARAM_KEYS:
-            r = res[key]
-            lines.append(
-                f"| {key} | {r['target']:.6f} | {r['sim']:.6f} "
-                f"| {r['abs_diff']:+.6f} | {r['rel_pct']:+.2f} |"
+    if highq:
+        # 高 Q 变体：报告追加 §5 + 独立 json（不覆盖 dfs 口径产物）
+        baseline = _load_baseline_calibration(outdir / "calibration_tq06.json")
+        section = _highq_report_section(
+            gate_mhz=args.gate_mhz,
+            n_gate=n_gate,
+            verdict=verdict,
+            subset_rows=subset_rows,
+            target=target,
+            fit=fit,
+            res_before=res_before,
+            res_after=res_after,
+            strict_doc=strict_doc,
+            k2_scan=k2_scan,
+            mat_after=mat_after,
+            alpha_after=alpha_after,
+            alscn=alscn,
+            alpha_cal=alpha_cal,
+            baseline=baseline,
+            one_liner=one_liner,
+            elapsed_s=time.time() - t_start,
+        )
+        report_path = outdir / "calibration_report_tq06.md"
+        prev = report_path.read_text(encoding="utf-8") if report_path.exists() else ""
+        report_path.write_text(prev.rstrip() + "\n\n" + section, encoding="utf-8")
+        (outdir / "calibration_tq06_highq.json").write_text(
+            json.dumps(
+                {
+                    "status": "ok",
+                    "commit_sha": _git_commit_sha(),
+                    "generated_at": datetime.now(UTC).isoformat(),
+                    "target": "TQ06 high-Q subset median (sim-close gate + qs top-n S11, pf=0)",
+                    "subset_rule": {
+                        "port": "S11",
+                        "pf": 0,
+                        "gate_mhz": float(args.gate_mhz),
+                        "gate_center_ghz": verdict["fs_ghz"],
+                        "gate_center_source": "网格最优名义几何 A(130,100) 仿真 fs2"
+                        "（沿用 dfs 归属判定结论）",
+                        "order": "qs 降序（相位斜率 Qs，生产口径）",
+                        "n": len(subset_rows),
+                        "n_gate_candidates": n_gate,
+                    },
+                    "subset_files": [r["file"] for r in subset_rows],
+                    "verdict": verdict,
+                    "mirror_degeneracy": "A(mo_b,mo_t) ≡ B(mo_t,mo_b)（数值验证 rtol 1e-9）",
+                    "theta_names": list(THETA_NAMES),
+                    "theta": [float(v) for v in fit.theta],
+                    "bounds": {"lo": lo.tolist(), "hi": hi.tolist()},
+                    "materials_after": {
+                        "alscn": {
+                            "c33": mat_after.c33,
+                            "e33": mat_after.e33,
+                            "eps": mat_after.eps,
+                            "rho": mat_after.rho,
+                        },
+                        "alpha": alpha_after,
+                        "t_mo_bot_nm": float(fit.theta[4]),
+                        "t_mo_top_nm": float(fit.theta[5]),
+                        "aln": "ALN1（冻结）",
+                    },
+                    "cost": fit.cost,
+                    "nfev": fit.nfev,
+                    "target7": {k: float(v) for k, v in zip(PARAM_KEYS, target, strict=True)},
+                    "residuals_before": res_before,
+                    "residuals_after": res_after,
+                    "strict_variant": strict_doc,
+                    "k2_reachability": k2_scan,
+                    "te1_band_range_db": {
+                        "measured_median": float(np.median(te1_ranges)),
+                        "pure_capacitive_slope": float(20 * np.log10(8 / 3)),
+                        "mason_before": te1_db_before,
+                        "mason_after": te1_db_after,
+                    },
+                    "baseline_dfs": baseline,
+                    "one_liner": one_liner,
+                },
+                indent=2,
+                ensure_ascii=False,
             )
-        lines.append("")
-        return lines
+            + "\n",
+            encoding="utf-8",
+        )
+        print(f"[WP-A] 高 Q 产物已写入 {outdir}（耗时 {time.time() - t_start:.1f} s）")
+        print(one_liner)
+        return 0
 
     lines: list[str] = [
         "# WP-A TQ06 14 GHz P3F 双层归属判定与校准报告",
@@ -1103,8 +1489,6 @@ def main(argv: list[str] | None = None) -> int:
             f"[{_fmt(fs['q25'])}, {_fmt(fs['q75'])}] | {_fmt(fp['median'])} | "
             f"{_fmt(k2['median'], 2)} | [{_fmt(k2['q25'], 2)}, {_fmt(k2['q75'], 2)}] |"
         )
-    te1_ranges = [r["te1_band_range_db"] for r in rows if np.isfinite(r["te1_band_range_db"])]
-    te1_found = sum(1 for r in rows if np.isfinite(float(r.get("fs1_ghz", float("nan")))))
     lines += [
         "",
         f"TE1 抑制诊断：38 文件中 TE1 对检出 {te1_found} 个（[3,8) GHz 窗）；"

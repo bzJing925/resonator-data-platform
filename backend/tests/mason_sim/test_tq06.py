@@ -254,6 +254,101 @@ def test_select_subset_top_n_by_fs_residual() -> None:
 
 
 # ============================================================
+# 高 Q 子集选择（WP-A 续：仿真接近门内按 qs 降序）
+# ============================================================
+def _hq_row(
+    name: str,
+    fs: float,
+    qs: float,
+    *,
+    valid: bool = True,
+    port: str = "S11",
+    pf: bool = False,
+) -> dict:
+    return {
+        "file": name,
+        "port": port,
+        "valid": valid,
+        "pf": pf,
+        "fs_ghz": fs,
+        "fp_ghz": fs + 0.15,
+        "k2eff_pct": 2.5,
+        "qs": qs,
+        "qp": 200.0,
+        "qs_bodeq": 150.0,
+        "qp_bodeq": 190.0,
+    }
+
+
+def test_select_subset_highq_filters_gate_port_pf() -> None:
+    """门控：|fs2 − sim| ≤ 60 MHz（含端点）+ S11 + pf=0 + valid + qs 有限。"""
+    rows = [
+        _hq_row("in_high", 14.20, 300.0),
+        _hq_row("in_lowq", 14.20, 50.0),
+        # 下端点：|14.14−14.20|×1e3 = 59.999… MHz（float 方向向下）→ 含端点入集
+        _hq_row("edge_in", 14.14, 100.0),
+        _hq_row("edge_out", 14.261, 400.0),  # 门外 1 MHz，Q 再高也不收
+        _hq_row("pf_excluded", 14.20, 500.0, pf=True),  # _PF_ 质量加载态剔除
+        _hq_row("s22_excluded", 14.20, 500.0, port="S22"),  # 端口不对称偏移，沿用排除
+        _hq_row("invalid_excluded", 14.20, 500.0, valid=False),
+        _hq_row("nan_qs", 14.20, float("nan")),
+    ]
+    idx = tq.select_subset_highq(rows, 14.20, gate_mhz=60.0, n=10, port="S11")
+    assert [rows[i]["file"] for i in idx] == ["in_high", "edge_in", "in_lowq"]
+
+
+def test_select_subset_highq_qs_desc_and_tiebreak() -> None:
+    """排序：qs 降序；同 qs 按文件名升序确定性 tie-break；n 截断。"""
+    rows = [
+        _hq_row("b_tie", 14.20, 200.0),
+        _hq_row("a_tie", 14.21, 200.0),
+        _hq_row("top", 14.22, 300.0),
+        _hq_row("low", 14.23, 100.0),
+    ]
+    idx = tq.select_subset_highq(rows, 14.20, gate_mhz=60.0, n=3, port="S11")
+    assert [rows[i]["file"] for i in idx] == ["top", "a_tie", "b_tie"]
+    # port=None 时纳入 S22（沿用 select_subset 的端口语义）
+    rows_s22 = rows + [_hq_row("s22_hi", 14.20, 250.0, port="S22")]
+    idx_all = tq.select_subset_highq(rows_s22, 14.20, gate_mhz=60.0, n=3, port=None)
+    assert [rows_s22[i]["file"] for i in idx_all] == ["top", "s22_hi", "a_tie"]
+
+
+EXPECTED_HIGHQ_FILES = [  # qs 降序：241.2/224.3/222.3/221.2/204.9/178.1/173.4/156.7/155.9/132.8
+    "1_EG1.5_FL1_A_X1Y-1N14_Fail_S11.s1p",
+    "1_EG0.75_FL2_No AG_C_X0Y-2N19_Fail_S11.s1p",
+    "1_EG0.75_FL2_No AG_C_X1Y-1N14_Fail_S11.s1p",
+    "1_EG0_FL1_A_X0Y-2N19_Fail_S11.s1p",
+    "1_EG0_FL1.5_B_X2Y-1N13_Fail_S11.s1p",
+    "1_EG0.75_FL2_CB_C_X1Y-1N14_Fail_S11.s1p",
+    "1_EG0.75_FL1_No AG_A_X1Y0N11_Fail_S11.s1p",
+    "1_EG0.75_FL1_No AG_E_X-1Y-1N16_Fail_S11.s1p",
+    "1_EG0.75_FL2_No AG_B_X0Y-1N15_Fail_S11.s1p",
+    "1_EG0.75_FL2_CB_B_X-1Y0N9_Fail_S11.s1p",
+]
+
+
+@pytest.mark.skipif(not tq.TQ06_DIR_DEFAULT.exists(), reason="TQ06 数据目录不在本机")
+def test_select_subset_highq_real_data_membership_and_target() -> None:
+    """真数据：A(130,100) 基准 fs2=14.252 GHz 门内 qs 降序前 10 + 子集中位目标。"""
+    rows = [tq.extract_measured(p) for p in sorted(tq.TQ06_DIR_DEFAULT.glob("*.s1p"))]
+    idx = tq.select_subset_highq(rows, 14.252, gate_mhz=60.0, n=10, port="S11")
+    sub = [rows[i] for i in idx]
+    assert [r["file"] for r in sub] == EXPECTED_HIGHQ_FILES
+    # 全部成员确实在 ±60 MHz 门内、S11、pf=0
+    for r in sub:
+        assert r["port"] == "S11" and not r["pf"]
+        assert abs(r["fs_ghz"] - 14.252) * 1e3 <= 60.0
+    target = {k: float(np.median([float(r[k]) for r in sub])) for k in PARAM_KEYS}
+    assert target["fs_ghz"] == pytest.approx(14.2516, abs=1e-4)
+    assert target["fp_ghz"] == pytest.approx(14.39305, abs=1e-4)
+    assert target["k2eff_pct"] == pytest.approx(2.49884, abs=1e-4)
+    assert target["qs"] == pytest.approx(191.517, abs=1e-3)
+    assert target["qp"] == pytest.approx(222.736, abs=1e-3)
+    assert target["qs_bodeq"] == pytest.approx(177.578, abs=1e-3)
+    assert target["qp_bodeq"] == pytest.approx(198.123, abs=1e-3)
+
+
+# ============================================================
 # 残差向量与有界 LS 可恢复性
 # ============================================================
 def test_residual_vector_penalty_and_values() -> None:

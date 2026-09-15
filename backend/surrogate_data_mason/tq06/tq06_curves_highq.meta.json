@@ -1,0 +1,74 @@
+{
+  "task": "WP-A TQ06 14GHz P3F bilayer attribution + calibration",
+  "generated_at": "2026-09-15T07:51:36.506971+00:00",
+  "commit_sha": "513032da7004acd9242b27d712c7eb5529d1a955",
+  "verdict": "A",
+  "verdict_note": "归属 A = 底 AlN(170)/顶 AlScN(190)，reverse=(+1,−1)；A(mo_b,mo_t) 与 B(mo_t,mo_b) 镜像简并，绝对归属需工艺记录/XRD 判定",
+  "electrode_nm": {
+    "mo_bot": 90.029970983944,
+    "mo_top": 152.00482372313041
+  },
+  "subset_files": [
+    "1_EG1.5_FL1_A_X1Y-1N14_Fail_S11.s1p",
+    "1_EG0.75_FL2_No AG_C_X0Y-2N19_Fail_S11.s1p",
+    "1_EG0.75_FL2_No AG_C_X1Y-1N14_Fail_S11.s1p",
+    "1_EG0_FL1_A_X0Y-2N19_Fail_S11.s1p",
+    "1_EG0_FL1.5_B_X2Y-1N13_Fail_S11.s1p",
+    "1_EG0.75_FL2_CB_C_X1Y-1N14_Fail_S11.s1p",
+    "1_EG0.75_FL1_No AG_A_X1Y0N11_Fail_S11.s1p",
+    "1_EG0.75_FL1_No AG_E_X-1Y-1N16_Fail_S11.s1p",
+    "1_EG0.75_FL2_No AG_B_X0Y-1N15_Fail_S11.s1p",
+    "1_EG0.75_FL2_CB_B_X-1Y0N9_Fail_S11.s1p"
+  ],
+  "subset_target_median": {
+    "fs_ghz": 14.2516,
+    "fp_ghz": 14.393049999999999,
+    "k2eff_pct": 2.4988364737432027,
+    "qs": 191.51661667183026,
+    "qp": 222.73603318021162,
+    "qs_bodeq": 177.5777115571081,
+    "qp_bodeq": 198.12325887009533
+  },
+  "labels_before": {
+    "fs_ghz": 14.252,
+    "fp_ghz": 14.576,
+    "k2eff_pct": 5.362704400041525,
+    "qs": 316.7562432629351,
+    "qp": 326.8451139911973,
+    "qs_bodeq": 317.48975245214484,
+    "qp_bodeq": 327.42203160406666
+  },
+  "labels_after": {
+    "fs_ghz": 14.22,
+    "fp_ghz": 14.426,
+    "k2eff_pct": 3.473079424336146,
+    "qs": 184.60691783378482,
+    "qp": 191.78688768159626,
+    "qs_bodeq": 184.0136414488974,
+    "qp_bodeq": 181.98686431920606
+  },
+  "te1_band_range_db": {
+    "mason_before": 14.603061044720352,
+    "mason_after": 10.594841736333901
+  },
+  "sim_grid": "3-22 GHz @2 MHz",
+  "eval_area_um2": 2000.0,
+  "subset_mode": "highq",
+  "subset_rule": "S11 & pf=0 & |fs2−sim_fs2|≤gate 门内按 qs（相位斜率 Qs，生产口径）降序前 n",
+  "gate_mhz": 60.0,
+  "n_gate_candidates": 18,
+  "baseline_json": "calibration_tq06.json",
+  "meas_names": [
+    "1_EG1.5_FL1_A_X1Y-1N14_Fail_S11.s1p",
+    "1_EG0.75_FL2_No AG_C_X0Y-2N19_Fail_S11.s1p",
+    "1_EG0.75_FL2_No AG_C_X1Y-1N14_Fail_S11.s1p",
+    "1_EG0_FL1_A_X0Y-2N19_Fail_S11.s1p",
+    "1_EG0_FL1.5_B_X2Y-1N13_Fail_S11.s1p",
+    "1_EG0.75_FL2_CB_C_X1Y-1N14_Fail_S11.s1p",
+    "1_EG0.75_FL1_No AG_A_X1Y0N11_Fail_S11.s1p",
+    "1_EG0.75_FL1_No AG_E_X-1Y-1N16_Fail_S11.s1p",
+    "1_EG0.75_FL2_No AG_B_X0Y-1N15_Fail_S11.s1p",
+    "1_EG0.75_FL2_CB_B_X-1Y0N9_Fail_S11.s1p"
+  ],
+  "npz": "tq06_curves_highq.npz"
+}
