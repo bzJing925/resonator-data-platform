@@ -295,6 +295,8 @@ cat /tmp/devices_only.sql | podman exec -i aln-postgres psql -U aln aln
 
 `/data3/aln/uploads/`（原始 zip）和 `/data3/aln/exports/`（导出临时文件）**不需要备份**，定期清理即可（§5.7）。
 
+内网服务器部署时，建议用 Windows 任务计划程序把 pg_dump 与 DATA_ROOT 文件备份做成每日任务；桌面版只是缓存，服务器是唯一事实来源。
+
 ---
 
 ## 4. 监控与告警

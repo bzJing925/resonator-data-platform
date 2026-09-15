@@ -291,3 +291,25 @@ docker compose -f deploy\docker-compose.yml restart nginx
 也可以你这边 `npm run build` 完后，把 `frontend\dist\` 一起打包发给同事（省掉同事装 Node.js）。
 
 绝对**不要**把 `.env` 发给同事——里面有密码。让他自己 `Copy-Item .env.example .env` 改。
+
+---
+
+## 附录：作为内网服务器长期运行
+
+把这台机器当作课题组内网服务器（多人浏览器访问 + 桌面版同步目标）时，在上面 5 步之外再做这几件事：
+
+1. **固定 IP**：在路由器给本机 MAC 绑定固定 IP（或设静态 IP），桌面版"服务器地址"配置依赖它不变。
+2. **开机自启**：Docker Desktop → Settings → General 勾选 "Start Docker Desktop when you sign in"；compose 各服务已带 `restart: unless-stopped`，登录后自动恢复。建议给这台机器配一个自动登录的专用账户。
+3. **防火墙放行**：首次启动 Docker 后 Windows 防火墙若提示，允许 8080 端口入站（ nginx ）；或 PowerShell 管理员执行：
+   ```powershell
+   New-NetFirewallRule -DisplayName "ALN-Data-8080" -Direction Inbound -LocalPort 8080 -Protocol TCP -Action Allow
+   ```
+4. **完全离线（不能联网）的机器**：在能联网的机器上构建镜像后导出，U 盘拷入导入：
+   ```powershell
+   # 能联网的机器（构建完成后）
+   docker save -o aln-images.tar deploy-api deploy-worker postgres:15-alpine redis:7-alpine deploy-nginx
+   # 离线服务器
+   docker load -i aln-images.tar
+   ```
+   前端 `dist/` 同样在外部机器 `npm run build` 后拷贝。
+5. **磁盘**：`.env` 的 `DATA_ROOT` 指向大容量数据盘（如 `D:\aln-data`）；原始 snp 集中保存在此，桌面版回传后也汇聚到这里。
