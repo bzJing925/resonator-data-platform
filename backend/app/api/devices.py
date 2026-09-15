@@ -68,6 +68,58 @@ def _resolve_sparam_path(rel_or_abs: str, batch_no: str | None = None) -> Path:
     return base / p
 
 
+def resolve_device_sparam_path(device: Device) -> Path:
+    """器件 snp 的绝对路径（batch_no 子目录 + 相对路径拼接）。"""
+    batch_no = device.batch.batch_no if device.batch else None
+    return _resolve_sparam_path(device.s_param_path or "", batch_no=batch_no)
+
+
+def build_sparam_response(device: Device, device_id: int, param: str) -> dict[str, Any]:
+    """skrf 标准路径：读 snp → 计算曲线 → 响应 dict。文件缺失抛 HTTPException(404)。"""
+    if not device.s_param_path:
+        raise HTTPException(status_code=404, detail="该器件没有 S 参数文件")
+    path = resolve_device_sparam_path(device)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"S 参数文件不存在: {path}")
+    try:
+        net = _load_network(str(path))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"读取 S 参数失败: {exc!s}") from exc
+    try:
+        curve = compute_sparam_curve(net, param)  # type: ignore[arg-type]
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    response: dict[str, Any] = {
+        "device_id": device_id,
+        "param": param,
+        "file_path": device.s_param_path,
+        "source": "skrf",
+    }
+    response.update(curve)
+    return response
+
+
+def build_bodeq_response(device: Device, device_id: int) -> dict[str, Any]:
+    if not device.s_param_path:
+        raise HTTPException(status_code=404, detail="该器件没有 S 参数文件")
+    path = resolve_device_sparam_path(device)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"S 参数文件不存在: {path}")
+    try:
+        result = _calc_bodeq_cached(str(path))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"BodeQ 计算失败: {exc!s}") from exc
+    return {
+        "device_id": device_id,
+        **result,
+        "fs_ghz": device.fs_ghz,
+        "fp_ghz": device.fp_ghz,
+        "fbode_ghz": device.fbode_ghz,
+    }
+
+
 @router.get("/{device_id}/sparam")
 def device_sparam(
     device_id: int,
@@ -100,32 +152,7 @@ def device_sparam(
         # fallback: 继续走 skrf 路径
 
     # --- skrf 标准路径 ---
-    if not device.s_param_path:
-        raise HTTPException(status_code=404, detail="该器件没有 S 参数文件")
-
-    batch_no = device.batch.batch_no if device.batch else None
-    path = _resolve_sparam_path(device.s_param_path, batch_no=batch_no)
-    if not path.exists():
-        raise HTTPException(status_code=404, detail=f"S 参数文件不存在: {path}")
-
-    try:
-        net = _load_network(str(path))
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"读取 S 参数失败: {exc!s}") from exc
-
-    try:
-        curve = compute_sparam_curve(net, param)  # type: ignore[arg-type]
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    response: dict[str, Any] = {
-        "device_id": device_id,
-        "param": param,
-        "file_path": device.s_param_path,
-        "source": "skrf",
-    }
-    response.update(curve)
-    return response
+    return build_sparam_response(device, device_id, param)
 
 
 @router.get("/{device_id}/bodeq")
@@ -134,28 +161,7 @@ def device_bodeq(device_id: int, db: DbSession) -> dict[str, Any]:
     device = db.get(Device, device_id)
     if device is None:
         raise HTTPException(status_code=404, detail=f"器件 {device_id} 不存在")
-    if not device.s_param_path:
-        raise HTTPException(status_code=404, detail="该器件没有 S 参数文件")
-
-    batch_no = device.batch.batch_no if device.batch else None
-    path = _resolve_sparam_path(device.s_param_path, batch_no=batch_no)
-    if not path.exists():
-        raise HTTPException(status_code=404, detail=f"S 参数文件不存在: {path}")
-
-    try:
-        result = _calc_bodeq_cached(str(path))
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"BodeQ 计算失败: {exc!s}") from exc
-
-    return {
-        "device_id": device_id,
-        **result,
-        "fs_ghz": device.fs_ghz,
-        "fp_ghz": device.fp_ghz,
-        "fbode_ghz": device.fbode_ghz,
-    }
+    return build_bodeq_response(device, device_id)
 
 
 @router.get("/{device_id}/sparam-sparse")
