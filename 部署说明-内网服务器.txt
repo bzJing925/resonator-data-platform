@@ -1,0 +1,66 @@
+内网 Windows 服务器部署说明（谐振器测试数据平台）
+=====================================================
+
+本压缩包包含在内网服务器上运行数据平台的全部内容，服务器无需联网。
+
+包内容
+------
+  aln-images.tar          5 个 Docker 镜像（api / worker / postgres / redis / nginx）
+  deploy\                 compose 编排与 nginx 配置
+  frontend\dist\          前端静态文件（已构建，服务器不需要 Node.js）
+  bootstrap.ps1           一键启动脚本（up / down / reset / status / url）
+  .env.example            环境变量模板
+  docs\deployment-windows.md  详细部署文档（含内网服务器长期运行附录）
+
+
+第一步：准备服务器（仅首次）
+----------------------------
+1. Windows 10/11，建议 16GB+ 内存、数据盘剩余空间充足。
+2. 安装 Docker Desktop for Windows（安装程序需自行另外拷贝，约 500MB；
+   安装时勾选 "Use WSL 2 based engine"。若提示 WSL2 内核过旧，
+   另拷 wsl_update_x64.msi 安装）。装完启动，等右下角图标变 Running。
+3. 以管理员身份打开 PowerShell，执行一次（允许本地脚本）：
+     Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+
+
+第二步：导入镜像（仅首次，约 5-15 分钟）
+----------------------------------------
+把本压缩包解压到英文路径，例如 D:\aln-server，然后在该目录打开 PowerShell：
+     docker load -i aln-images.tar
+     docker images          # 应看到 deploy-api、deploy-worker、postgres、redis、nginx
+
+
+第三步：配置 .env（仅首次）
+---------------------------
+     Copy-Item .env.example .env
+用记事本编辑 .env，必须改两项：
+  1. POSTGRES_PASSWORD —— 改成强密码（16 位以上，避免 &、$、引号）
+  2. DATA_ROOT —— 改成数据盘路径，例如  DATA_ROOT=D:/aln-data
+     （原始 snp、数据库、导出文件全部落在这里；用正斜杠 /）
+
+
+第四步：启动
+------------
+     .\bootstrap.ps1 up
+首次启动约 1-2 分钟（等 postgres 初始化 + 健康检查通过）。
+验证：
+     .\bootstrap.ps1 status
+本机浏览器打开  http://localhost:8080
+同内网同事访问  http://<服务器IP>:8080
+
+
+日常使用
+--------
+  .\bootstrap.ps1 down     停止（数据保留）
+  .\bootstrap.ps1 up       再次启动
+  .\bootstrap.ps1 status   查看容器状态
+  开机自启等长期运行事项：见 docs\deployment-windows.md 末尾
+  「附录：作为内网服务器长期运行」（固定 IP / 开机自启 / 防火墙）。
+
+
+笔记本桌面版同步
+----------------
+笔记本装好桌面版后，打开「批次」页的「内网服务器同步」面板：
+  服务器地址：http://<服务器IP>:8080
+  用户名：填自己的名字（用于记录上传人）
+保存后即可「从服务器同步」表格数据、在线看曲线、回传本地上传的批次。

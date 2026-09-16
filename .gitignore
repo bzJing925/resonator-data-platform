@@ -102,3 +102,6 @@ batch2_vs_reference/
 /L_air = L_bot-6\[um\]/
 /D1_D2_*
 /副本SICM_AlN_DT.xlsx
+
+# 服务器部署包产物
+dist-server-pack/
