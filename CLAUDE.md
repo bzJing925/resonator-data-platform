@@ -14,14 +14,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Worktree routing
 
-This repository has domain-specific git worktrees under `/Users/jingbozuo/Projects`. For future code changes, choose the worktree that matches the task before editing. If a task spans multiple domains, use the worktree for the primary area being changed; ask the user only when the primary area is ambiguous.
+2026-09-21 起域 worktree 已裁撤（ algo/api/deploy/frontend/static-web 五个域分支经树级内容核对，确认已全部并入或落后于 main 后删除）。当前只保留：
 
-- `/Users/jingbozuo/Projects/aln-data-master` (`main`) — integration/default workspace. Use for repo-wide coordination, general documentation, cross-cutting changes that do not fit a domain worktree, and final merge/release checks.
-- `/Users/jingbozuo/Projects/aln-data-backend-algo` (`feat/backend-algo`) — algorithm work: `backend/app/core/`, algorithm constants in `backend/app/config.py`, algorithm tests, and `docs/algorithm-port.md`.
-- `/Users/jingbozuo/Projects/aln-data-backend-api` (`feat/backend-api`) — backend API/data work: FastAPI routes in `backend/app/api/`, schemas, SQLAlchemy models, Alembic migrations, workers/tasks, query/export/upload/device endpoints, and backend API tests.
-- `/Users/jingbozuo/Projects/aln-data-backend-ml` (`feat/backend-ml`) — ML/PINN/sparse reconstruction work: `backend/app/ml/`, related training scripts under `backend/scripts/`, sparse/sparam inference integration, and PINN runbook/changelog docs.
-- `/Users/jingbozuo/Projects/aln-data-frontend` (`feat/frontend`) — frontend work: React/Vite app under `frontend/`, frontend API wrappers, routing, components, pages, hooks, styles, and UI behavior.
-- `/Users/jingbozuo/Projects/aln-data-deploy` (`feat/deploy`) — deployment/ops/packaging work: Docker/Compose, nginx, bootstrap scripts, desktop build/installer files, deployment and operations documentation.
+- `/Users/jingbozuo/00.PROJECTS/ALN-DATA/aln-data-master` (`main`) — 默认且唯一的集成工作区。后端/前端/部署/文档等所有常规改动直接在这里进行。
+- `/Users/jingbozuo/Projects/aln-data-backend-ml` (`feat/backend-ml-surrogate`) — 代理模型 / Mason-sim 活跃工作区：`backend/app/ml/`、训练脚本、IUS 实验脚本与训练产物（gitignored）都在这边。ML/训练链改动在这个 worktree 做。
+- `feat/backend-ml` 分支（无 worktree）— 旧 mason-sim 23 提交存档，勿动。
 
 ## Python environment rules
 
