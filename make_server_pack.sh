@@ -28,12 +28,12 @@ fi
 
 # 2. 后端镜像：api/worker 共用同一 Dockerfile，构建一次打两个 tag。
 #    两个 tag 指向同一镜像 ID，docker save 只存一份层，体积不加倍。
-step "构建后端镜像 deploy-api / deploy-worker（$PLATFORM）"
+step "构建后端镜像 deploy-api / deploy-worker（${PLATFORM}）"
 docker build --platform "$PLATFORM" -t deploy-api "$ROOT/backend"
 docker tag deploy-api deploy-worker
 
 # 3. 基础镜像
-step "拉取基础镜像（$PLATFORM）"
+step "拉取基础镜像（${PLATFORM}）"
 docker pull --platform "$PLATFORM" docker.io/library/postgres:15-alpine
 docker pull --platform "$PLATFORM" docker.io/library/redis:7-alpine
 docker pull --platform "$PLATFORM" docker.io/library/nginx:alpine
