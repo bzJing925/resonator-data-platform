@@ -1,6 +1,6 @@
 import type { WorksheetColumn } from './model/dataset';
 
-export type WorksheetColumnRole = 'row-number' | 'selection' | 'row-id' | 'data';
+type WorksheetColumnRole = 'row-number' | 'selection' | 'row-id' | 'data';
 
 export interface ColumnModelEntry {
   key: string;

@@ -8,7 +8,7 @@ export function selectDatasets(state: WorkspaceState): AnalysisDataset[] {
   });
 }
 
-export function selectDatasetById(state: WorkspaceState, datasetId: DatasetId | null) {
+function selectDatasetById(state: WorkspaceState, datasetId: DatasetId | null) {
   return datasetId ? state.registry.byId[datasetId] || null : null;
 }
 

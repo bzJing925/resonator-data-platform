@@ -13,9 +13,7 @@ import {
   createAnalysisDataset,
   createDatasetRegistry,
   duplicateAnalysisDataset,
-  normalizeAnalysisRows,
   type AnalysisDataset,
-  type AnalysisRow,
   type DatasetId,
   type RowId,
 } from './model/dataset';
@@ -42,14 +40,11 @@ import {
 
 export type {
   AnalysisDataset,
-  AnalysisRow,
   DatasetId,
   RowId,
   ActiveSurface,
   SelectionMode,
-  SelectionState,
 };
-export { normalizeAnalysisRows };
 
 export interface WorkspaceState extends WorkspacePresent {
   history: HistoryState<WorkspacePresent>;

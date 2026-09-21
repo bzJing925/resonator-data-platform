@@ -4,7 +4,7 @@ import { stableTraceUid, type AnalysisChartType, type ChartHierarchy } from './t
 
 const RAW_COLORS = ['#5FA8D3', '#4BD097', '#E8C547', '#9B7EDC', '#E86B5C'];
 const GL_POINT_THRESHOLD = 5000;
-export const RAW_POINT_RENDER_LIMIT = 50_000;
+const RAW_POINT_RENDER_LIMIT = 50_000;
 
 function numericValue(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;

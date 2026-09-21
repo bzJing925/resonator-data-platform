@@ -204,23 +204,3 @@ export function usePageState(key, initialState, options = {}) {
   return [state, setState, resetState];
 }
 
-/**
- * Clear all persisted page state from localStorage and memory.
- * Components will re-render with their initial state.
- */
-export function useClearPageState() {
-  const ctx = useContext(PageStateContext);
-  if (!ctx) {
-    throw new Error('useClearPageState must be used within PageStateProvider');
-  }
-  const { setPageState } = ctx;
-
-  return useCallback(() => {
-    try {
-      localStorage.removeItem(STORAGE_KEY);
-    } catch {
-      // ignore
-    }
-    setPageState(() => ({}));
-  }, [setPageState]);
-}

@@ -1,6 +1,6 @@
 import type { AxiosResponse } from 'axios';
 import api from './client';
-import type { Batch, CurveSeries, Device, FieldMeta, FileEntry, Mapping, MappingEntry, PagedList, ProcessStep, ProcessStepData, ServerSyncStatus, StatsResponse, SurrogatePredictResponse, SurrogateStatus, Task } from '../types';
+import type { Batch, Device, FieldMeta, FileEntry, Mapping, MappingEntry, PagedList, ProcessStep, ProcessStepData, ServerSyncStatus, StatsResponse, SurrogatePredictResponse, SurrogateStatus, Task } from '../types';
 import { IS_STATIC } from '../config';
 import * as staticApi from './static';
 
@@ -31,9 +31,6 @@ export const listBatchFiles = (batchNo: string, includeSnp = false) =>
   api
     .get(`/files?batch_no=${encodeURIComponent(batchNo)}&include_snp=${includeSnp}`)
     .then((r: AxiosResponse<FileEntry[]>) => r.data);
-
-export const computeFile = (body: Record<string, unknown>) =>
-  api.post('/files/compute', body).then((r) => r.data);
 
 export const getFileCurve = (batchNo: string, relpath: string, param = 'z_mag_db', port = 'S11') =>
   api
@@ -74,9 +71,6 @@ export const pushBatchToWeb = (batchNo: string, token: string) =>
 
 export const getServerSyncStatus = () =>
   api.get('/desktop-sync/status').then((r: AxiosResponse<ServerSyncStatus>) => r.data);
-// 规格预留封装（当前面板经 status 获取配置，暂未直接调用）
-export const getServerSyncConfig = () =>
-  api.get('/desktop-sync/config').then((r) => r.data as { server_url: string | null; username: string | null });
 export const saveServerSyncConfig = (serverUrl: string, username: string) =>
   api.put('/desktop-sync/config', { server_url: serverUrl, username }).then((r) => r.data);
 export const pullFromServer = () =>
@@ -151,11 +145,6 @@ export const downloadFileTreeNodesZip = (batchNo: string, nodeIds: (number | str
     { responseType: 'blob' }
   );
 
-export const downloadBatchZip = (batchNo: string) =>
-  api.get(`/batches/${encodeURIComponent(batchNo)}/download-zip`, {
-    responseType: 'blob',
-  });
-
 export const downloadFilesZip = (batchNo: string, relpaths: string[] = []) =>
   api.post(
     '/files/download-zip',
@@ -169,13 +158,6 @@ export const downloadDeviceS1p = (id: number | string) =>
   });
 
 const httpExportCsv = (body: Record<string, unknown>) => api.post('/export/csv', body, { responseType: 'blob' });
-export const exportNnCsv = (body: Record<string, unknown>, timeoutMs: number = 0) =>
-  api.post('/export/nn-csv', body, { responseType: 'blob', timeout: timeoutMs });
-export const exportXlsx = (body: Record<string, unknown>) => api.post('/export/xlsx', body).then((r) => r.data);
-export const downloadExport = (id: number | string) => api.get(`/exports/${id}`, { responseType: 'blob' });
-
-export type { CurveSeries };
-
 const httpGetSurrogateStatus = () =>
   api.get('/surrogate/status').then((r: AxiosResponse<SurrogateStatus>) => r.data);
 const httpPredictSurrogate = (params: { eg: number; fl: number; area: number; pf: number; ag: number }) =>
@@ -199,7 +181,7 @@ export const listMappingEntries = (IS_STATIC ? staticApi.listMappingEntries : ht
 export const queryDevices = (IS_STATIC ? staticApi.queryDevices : httpQueryDevices) as typeof httpQueryDevices;
 export const queryAggregate = (IS_STATIC ? staticApi.queryAggregate : httpQueryAggregate) as typeof httpQueryAggregate;
 export const getQueryFields = (IS_STATIC ? staticApi.getQueryFields : httpGetQueryFields) as typeof httpGetQueryFields;
-export const getQueryDistinct = (IS_STATIC ? staticApi.getQueryDistinct : httpGetQueryDistinct) as typeof httpGetQueryDistinct;
+const getQueryDistinct = (IS_STATIC ? staticApi.getQueryDistinct : httpGetQueryDistinct) as typeof httpGetQueryDistinct;
 // Alias commonly used by UI components
 export const distinctValues = (field: string, limit = 500) => getQueryDistinct(field, limit);
 export const exportCsv = (IS_STATIC ? staticApi.exportCsv : httpExportCsv) as unknown as typeof httpExportCsv;

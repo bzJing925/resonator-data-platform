@@ -91,32 +91,31 @@ def _consume_sse(
     """同步打开 SSE 连接，把事件计数到 counters 里。"""
     url = f"{API_BASE}/api/tasks/{task_id}/stream"
     # trust_env=False 避免被 ALL_PROXY=socks5 干扰
-    with httpx.Client(timeout=None, trust_env=False) as c:
-        with c.stream("GET", url) as r:
-            event_name: str | None = None
-            data_buf: list[str] = []
-            for line in r.iter_lines():
-                if stop_event.is_set():
-                    return
-                # 流式 SSE：空行表示一条事件结束
-                if line == "":
-                    if event_name and data_buf:
-                        raw = "\n".join(data_buf)
-                        try:
-                            payload = json.loads(raw)
-                        except json.JSONDecodeError:
-                            payload = {"_raw": raw}
-                        counters[event_name] = counters.get(event_name, 0) + 1
-                        last_payload[event_name] = payload
-                        if event_name in ("done", "error"):
-                            return
-                    event_name = None
-                    data_buf = []
-                    continue
-                if line.startswith("event:"):
-                    event_name = line.split(":", 1)[1].strip()
-                elif line.startswith("data:"):
-                    data_buf.append(line.split(":", 1)[1].lstrip())
+    with httpx.Client(timeout=None, trust_env=False) as c, c.stream("GET", url) as r:
+        event_name: str | None = None
+        data_buf: list[str] = []
+        for line in r.iter_lines():
+            if stop_event.is_set():
+                return
+            # 流式 SSE：空行表示一条事件结束
+            if line == "":
+                if event_name and data_buf:
+                    raw = "\n".join(data_buf)
+                    try:
+                        payload = json.loads(raw)
+                    except json.JSONDecodeError:
+                        payload = {"_raw": raw}
+                    counters[event_name] = counters.get(event_name, 0) + 1
+                    last_payload[event_name] = payload
+                    if event_name in ("done", "error"):
+                        return
+                event_name = None
+                data_buf = []
+                continue
+            if line.startswith("event:"):
+                event_name = line.split(":", 1)[1].strip()
+            elif line.startswith("data:"):
+                data_buf.append(line.split(":", 1)[1].lstrip())
                 # 其他行（id:, retry:, 注释 :）忽略
 
 

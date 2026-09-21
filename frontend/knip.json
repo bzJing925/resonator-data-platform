@@ -1,0 +1,19 @@
+{
+  "entry": [
+    "index.html",
+    "electron/main.ts",
+    "electron/preload.ts",
+    "electron/updater.ts",
+    "electron/updater-loader.cjs",
+    "e2e/analysis/benchmark.ts",
+    "e2e/analysis/harness.tsx",
+    "scripts/*.js",
+    "e2e/**/*.spec.ts"
+  ],
+  "project": [
+    "src/**/*.{ts,tsx,js,jsx}",
+    "electron/**/*.{ts,cts,cjs}",
+    "e2e/**/*.{ts,tsx}",
+    "scripts/**/*.js"
+  ]
+}

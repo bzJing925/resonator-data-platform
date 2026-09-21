@@ -1,7 +1,7 @@
 import type { ChartField } from '../../../types';
 import type { ChartHierarchy } from './types';
 
-export const MISSING_BUCKET = '∅';
+const MISSING_BUCKET = '∅';
 
 function displayBucket(value: unknown) {
   if (value === null || value === undefined || value === '') return MISSING_BUCKET;
@@ -27,7 +27,7 @@ function valueKey(value: number | string) {
   return JSON.stringify([typeof value, value]);
 }
 
-export function hierarchyKey(xValues: unknown[], zValue?: unknown) {
+function hierarchyKey(xValues: unknown[], zValue?: unknown) {
   const displayedX = xValues.map(displayBucket);
   const displayedZ = zValue === undefined ? undefined : displayBucket(zValue);
   return JSON.stringify({

@@ -2,7 +2,7 @@ import React, { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { buildColumnModel, columnGridTemplate, columnModelWidth } from './columnModel';
 import type { AnalysisDataset } from './workspace';
 
-export const WORKSHEET_ROW_HEIGHT = 28;
+const WORKSHEET_ROW_HEIGHT = 28;
 const HEADER_HEIGHT = 28;
 const OVERSCAN = 8;
 

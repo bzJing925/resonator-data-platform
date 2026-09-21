@@ -41,11 +41,9 @@ def _write_arrow_gz(df, path: Path) -> None:
     import pyarrow as pa
 
     table = pa.Table.from_pandas(df, preserve_index=False)
-    with open(path, "wb") as raw:
-        with gzip.GzipFile(filename="", mode="wb", fileobj=raw,
-                           compresslevel=6, mtime=0) as sink:
-            with pa.ipc.new_file(sink, table.schema) as w:
-                w.write_table(table)
+    with open(path, "wb") as raw, gzip.GzipFile(filename="", mode="wb", fileobj=raw,
+                       compresslevel=6, mtime=0) as sink, pa.ipc.new_file(sink, table.schema) as w:
+        w.write_table(table)
 
 
 def _load_json(path: Path):

@@ -68,10 +68,9 @@ def copy_insert_devices(db: Session, rows: list[dict[str, Any]]) -> None:
     cols_sql = ", ".join(DEVICE_COPY_COLUMNS)
     copy_sql = f"COPY devices ({cols_sql}) FROM STDIN"
 
-    with raw_conn.cursor() as cur:
-        with cur.copy(copy_sql) as copy:
-            for r in rows:
-                copy.write_row(tuple(r.get(c) for c in DEVICE_COPY_COLUMNS))
+    with raw_conn.cursor() as cur, cur.copy(copy_sql) as copy:
+        for r in rows:
+            copy.write_row(tuple(r.get(c) for c in DEVICE_COPY_COLUMNS))
 
     db.commit()
 

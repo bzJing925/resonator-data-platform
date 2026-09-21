@@ -32,6 +32,33 @@ This repository has domain-specific git worktrees under `/Users/jingbozuo/Projec
 - Use `uv run <command>` to run Python, pytest, scripts, and tools.
 - Python version: `>=3.12`. The root `pyproject.toml` is minimal; backend dependencies live in `backend/pyproject.toml`.
 
+## 编码原则（Ponytail：懒惰的高级开发）
+
+懒惰 = 高效，不是马虎。最好的代码是没写的代码。写任何代码前，在第一个站得住的梯级停下：
+
+1. 这个功能真的需要吗？（YAGNI）
+2. 代码库里已有实现吗？——复用现有 helper/util/模式，不要重写
+3. 标准库能搞定吗？用标准库
+4. 平台原生能力能覆盖吗？用它
+5. 已安装的依赖能解决吗？用它
+6. 一行能写完吗？就写一行
+7. 以上都不行：写能工作的最少代码
+
+梯子是在理解问题**之后**爬的，不是代替理解：先读任务和它触及的代码，端到端 trace 真实流程，再爬梯子。
+
+修 bug = 修根因，不是修症状：bug 报告描述的是症状。grep 你改的函数的**所有调用方**，在共享函数里修一次——一处 guard 比每个调用方各打一补丁的 diff 更小；只修工单里那条路径，兄弟调用方照样坏。
+
+规则：
+
+- 不写没人要求的抽象；不加可以避免的新依赖；不写没人要的样板代码
+- 删除优先于新增；无聊优先于取巧；文件越少越好
+- 最短可工作的 diff 获胜——但只在理解问题之后。在错误位置做最小改动不是懒，是第二个 bug
+- 质疑复杂需求："你真的需要 X，还是 Y 就够了？"
+- 两个标准库方案体量相当时，选边界情况正确的那个——懒是代码更少，不是算法更脆
+- 有意简化且砍了真实能力上限的（全局锁、O(n²) 扫描、朴素启发式），用 `ponytail:` 注释标明上限和升级路径
+
+**不偷懒的地方**：理解问题（读完任务、trace 完流程再选梯级）、信任边界的输入校验、防止数据丢失的错误处理、安全、可访问性、任何显式要求的东西。非平凡逻辑必须留下一个可运行的检查（一个 assert 自验/demo 或一个小测试文件；不要框架、不要 fixture）；平凡的一行代码不需要测试。
+
 ## Common commands
 
 ### Full stack (from repo root)
@@ -92,9 +119,16 @@ Integration tests (marked with `integration`) are skipped by default because the
 uv run ruff check .
 uv run ruff check . --fix
 uv run ruff format .
+uv run ruff check --select SIM .   # 代码简化规则（非默认启用，32 处存量待清理）
+uv run vulture                      # 死代码检测（配置在 backend/pyproject.toml [tool.vulture]，当前基线为零）
 ```
 
 Ruff is configured in `backend/pyproject.toml` (line length 100, target Python 3.12, rules E/F/W/I/N/B/UP). There is no mypy or black setup.
+
+```bash
+# Frontend (from frontend/)
+npm run knip    # 未使用文件/导出/依赖检测（配置在 frontend/knip.json）
+```
 
 ### Desktop build
 
@@ -183,46 +217,37 @@ Browser (React + Vite) ──HTTP/SSE──▶ Nginx ──┬──▶ FastAPI 
 - `docs/deployment.md` / `docs/deployment-windows.md` — Linux/macOS and Windows deployment guides.
 - `docs/PINN-RUNBOOK.md` / `docs/PINN-CHANGELOG.md` — PINN / sparse-reconstruction training and inference.
 
-<!-- superpowers-zh:begin (do not edit between these markers) -->
-# Superpowers-ZH 中文增强版
+<!-- superpowers-zh:begin -->
+# 项目 Skills 清单
 
-本项目已安装 superpowers-zh 技能框架（20 个 skills）。
+本项目在 `.claude/skills/` 安装了以下 skills。**规则：不自动调用任何 skill**——仅在用户显式输入 `/<skill-name>` 或明确要求时，才通过 Skill 工具加载。
 
-## 核心规则
+## 流程类
 
-1. **收到任务时，先检查是否有匹配的 skill** — 哪怕只有 1% 的可能性也要检查
-2. **设计先于编码** — 收到功能需求时，先用 brainstorming skill 做需求分析
-3. **测试先于实现** — 写代码前先写测试（TDD）
-4. **验证先于完成** — 声称完成前必须运行验证命令
+- **brainstorming** — 创造性工作前的需求/设计探索
+- **writing-plans** — 多步骤任务的实现计划编写
+- **executing-plans** — 在独立会话中执行书面计划（带审查检查点）
+- **subagent-driven-development** — 在当前会话中执行含独立任务的计划
+- **dispatching-parallel-agents** — 2 个以上独立任务的并行分发
+- **test-driven-development** — 先写测试再实现（TDD）
+- **systematic-debugging** — bug / 测试失败的纪律化诊断流程
+- **verification-before-completion** — 声称完成前运行验证命令
+- **requesting-code-review** — 完成后/合并前请求审查
+- **receiving-code-review** — 收到审查反馈后的处理流程
+- **finishing-a-development-branch** — 分支收尾（合并/PR/清理）
+- **using-git-worktrees** — 隔离工作区开发
+- **using-superpowers** — 技能查找与使用规则
+- **writing-skills** — 创建/编辑/验证 skill
 
-## 可用 Skills
+## 中文参考类
 
-Skills 位于 `.claude/skills/` 目录，每个 skill 有独立的 `SKILL.md` 文件。
+- **chinese-code-review** — 中文 review 话术模板与分级标注
+- **chinese-commit-conventions** — Conventional Commits 中文适配与工具链配置
+- **chinese-documentation** — 中文排版约定（中英文空格/标点/术语）
+- **chinese-git-workflow** — Gitee/Coding/极狐 GitLab/CNB 平台接入差异
 
-- **brainstorming**: 在任何创造性工作之前必须使用此技能——创建功能、构建组件、添加功能或修改行为。在实现之前先探索用户意图、需求和设计。
-- **chinese-code-review**: 中文 review 沟通参考——话术模板、分级标注（必须修复/建议修改/仅供参考）、国内团队常见反模式应对。仅在用户显式 /chinese-code-review 时调用，不要根据上下文自动触发。
-- **chinese-commit-conventions**: 中文 commit 与 changelog 配置参考——Conventional Commits 中文适配、commitlint/husky/commitizen 中文模板、conventional-changelog 中文配置。仅在用户显式 /chinese-commit-conventions 时调用，不要根据上下文自动触发。
-- **chinese-documentation**: 中文文档排版参考——中英文空格、全半角标点、术语保留、链接格式、中文文案排版指北约定。仅在用户显式 /chinese-documentation 时调用，不要根据上下文自动触发。
-- **chinese-git-workflow**: 国内 Git 平台配置参考——Gitee、Coding.net、极狐 GitLab、CNB 的 SSH/HTTPS/凭据/CI 接入差异与镜像同步配置。仅在用户显式 /chinese-git-workflow 时调用，不要根据上下文自动触发。
-- **dispatching-parallel-agents**: 当面对 2 个以上可以独立进行、无共享状态或顺序依赖的任务时使用
-- **executing-plans**: 当你有一份书面实现计划需要在单独的会话中执行，并设有审查检查点时使用
-- **finishing-a-development-branch**: 当实现完成、所有测试通过、需要决定如何集成工作时使用——通过提供合并、PR 或清理等结构化选项来引导开发工作的收尾
-- **mcp-builder**: MCP 服务器构建方法论 — 系统化构建生产级 MCP 工具，让 AI 助手连接外部能力
-- **receiving-code-review**: 收到代码审查反馈后、实施建议之前使用，尤其当反馈不明确或技术上有疑问时——需要技术严谨性和验证，而非敷衍附和或盲目执行
-- **requesting-code-review**: 完成任务、实现重要功能或合并前使用，用于验证工作成果是否符合要求
-- **subagent-driven-development**: 当在当前会话中执行包含独立任务的实现计划时使用
-- **systematic-debugging**: 遇到任何 bug、测试失败或异常行为时使用，在提出修复方案之前执行
-- **test-driven-development**: 在实现任何功能或修复 bug 时使用，在编写实现代码之前
-- **using-git-worktrees**: 当需要开始与当前工作区隔离的功能开发，或在执行实现计划之前使用——通过原生工具或 git worktree 回退机制确保隔离工作区存在
-- **using-superpowers**: 在开始任何对话时使用——确立如何查找和使用技能，要求在任何响应（包括澄清性问题）之前调用 Skill 工具
-- **verification-before-completion**: 在宣称工作完成、已修复或测试通过之前使用，在提交或创建 PR 之前——必须运行验证命令并确认输出后才能声称成功；始终用证据支撑断言
-- **workflow-runner**: 在 Claude Code / OpenClaw / Cursor 中直接运行 agency-orchestrator YAML 工作流——无需 API key，使用当前会话的 LLM 作为执行引擎。当用户提供 .yaml 工作流文件或要求多角色协作完成任务时触发。
-- **writing-plans**: 当你有规格说明或需求用于多步骤任务时使用，在动手写代码之前
-- **writing-skills**: 当创建新技能、编辑现有技能或在部署前验证技能是否有效时使用
+## 专项类
 
-## 如何使用
-
-当任务匹配某个 skill 时，使用 `Skill` 工具加载对应 skill 并严格遵循其流程。绝不要用 Read 工具读取 SKILL.md 文件。
-
-如果你认为哪怕只有 1% 的可能性某个 skill 适用于你正在做的事情，你必须调用该 skill 检查。
+- **mcp-builder** — 生产级 MCP 服务器构建方法论
+- **workflow-runner** — 直接运行 agency-orchestrator YAML 工作流
 <!-- superpowers-zh:end -->

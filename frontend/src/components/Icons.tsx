@@ -256,4 +256,3 @@ const I: IconDict = {
 };
 
 export default I;
-export type { IconProps };

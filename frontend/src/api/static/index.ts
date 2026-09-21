@@ -103,10 +103,6 @@ async function runQuery(sql: string): Promise<any[]> {
   return t.toArray().map((r) => normalizeRow(r.toJSON()));
 }
 
-const WRITE_DISABLED = () => {
-  throw new Error('静态网页版为只读快照，不支持该操作');
-};
-
 // ---- 系统 ----
 export const getHealth = async () => ({ status: 'ok', db: 'static', redis: 'static' });
 export const getStats = () => fetchJson('stats.json');
@@ -203,12 +199,6 @@ export const getBatch = async (batchNo: string) => {
   };
 };
 
-export const deleteBatch = WRITE_DISABLED;
-export const renameBatch = WRITE_DISABLED;
-export const reextractBatch = WRITE_DISABLED;
-export const redeembedBatch = WRITE_DISABLED;
-export const recomputeBatch = WRITE_DISABLED;
-
 // ---- 批次内器件 ----
 export const listBatchDevices = async (
   batchNo: string,
@@ -282,10 +272,6 @@ export const listMappingEntries = async (
   const start = (page - 1) * size;
   return { items: entries.slice(start, start + size), total: entries.length, page, size };
 };
-export const createMapping = WRITE_DISABLED;
-export const deleteMapping = WRITE_DISABLED;
-export const uploadBatch = WRITE_DISABLED;
-
 // ---- 查询 ----
 export const getQueryFields = () => fetchJson('fields.json');
 
@@ -298,7 +284,6 @@ export const getQueryDistinct = async (field: string, limit = 500) => {
   );
   return { values: rows.slice(0, limit).map((r) => r.v), truncated: rows.length > limit };
 };
-export const distinctValues = (field: string, limit = 500) => getQueryDistinct(field, limit);
 
 export interface QueryBody {
   filters?: Record<string, any>;

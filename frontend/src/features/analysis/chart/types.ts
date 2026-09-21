@@ -14,7 +14,7 @@ export interface ChartSceneArgs {
   width?: number | null;
 }
 
-export interface ChartSlot {
+interface ChartSlot {
   index: number;
   xValues: Array<number | string>;
   label: string;
@@ -34,12 +34,6 @@ export interface ChartHierarchy {
     start: number;
     end: number;
   }>;
-}
-
-export interface SceneTraceMeta {
-  analysisLayer: 'raw-points' | 'distribution' | 'summary';
-  traceKey: string;
-  metric: string;
 }
 
 export interface ChartScene {

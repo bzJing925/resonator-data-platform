@@ -225,9 +225,8 @@ class DutProcessor:
         """Gzip a file and remove the original. Return the .gz path."""
         gz_path = src.with_suffix(src.suffix + ".gz")
         try:
-            with open(src, "rb") as f_in:
-                with gzip.open(gz_path, "wb") as f_out:
-                    shutil.copyfileobj(f_in, f_out)
+            with open(src, "rb") as f_in, gzip.open(gz_path, "wb") as f_out:
+                shutil.copyfileobj(f_in, f_out)
             src.unlink()
             return gz_path
         except Exception as exc:

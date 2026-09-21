@@ -1,11 +1,10 @@
 """快照导出测试：小 sqlite → arrow.gz/json 契约。"""
 
+import gzip
 import json
 import sqlite3
 import sys
 from pathlib import Path
-
-import gzip
 
 import numpy as np
 import pyarrow as pa
@@ -14,6 +13,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 from export_web_snapshot import export_all  # noqa: E402
 from export_web_surrogate_data import export_surrogate_webdata  # noqa: E402
+
 
 def _read_arrow_gz(path: Path):
     with gzip.open(path, "rb") as f:
@@ -51,7 +51,8 @@ def mini_db(tmp_path):
         f"CREATE TABLE devices ({', '.join(c + ' TEXT' for c in DEVICE_COLS.split(','))})"
     )
     conn.execute(
-        "INSERT INTO batches VALUES (1, '#T', 1, NULL, NULL, 0, NULL, NULL, '2026-01-01', '', 2, NULL)"
+        "INSERT INTO batches VALUES (1, '#T', 1, NULL, NULL, 0, NULL, NULL,"
+        " '2026-01-01', '', 2, NULL)"
     )
     conn.execute("INSERT INTO mappings VALUES (1, 'M1', NULL, 1, '')")
     conn.execute(

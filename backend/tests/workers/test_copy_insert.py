@@ -72,7 +72,7 @@ def test_copy_columns_match_device_table() -> None:
     assert "id" in device_cols
     assert device_cols[0] == "id"
     non_id_cols = device_cols[1:]
-    assert DEVICE_COPY_COLUMNS == non_id_cols
+    assert non_id_cols == DEVICE_COPY_COLUMNS
 
 
 def test_copy_columns_no_id() -> None:

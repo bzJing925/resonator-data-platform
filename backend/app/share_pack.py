@@ -42,13 +42,7 @@ ProgressCb = Callable[[str, int, int, str], None]  # (stage, current, total, msg
 # 参数表格（xlsx / xls / csv）直传：表头别名 → devices 列
 # ---------------------------------------------------------------------------
 
-# 必填表头（用户提示文案里的最小集合）
-XLSX_REQUIRED = [
-    "original_filename", "display_name", "EG", "FL", "AG", "PF", "Area(um2)",
-    "fs(GHz)", "fp(GHz)", "Zs(Ω)", "Zp(Ω)", "Qs", "Qp", "Qs_BodeQ", "Qp_BodeQ",
-    "k2eff(%)",
-]
-# coord 与 X+Y 二选一
+# 必填表头（用户提示文案里的最小集合，见 XLSX_HINT）
 XLSX_HINT = (
     "表格的表头至少包含：original_filename、display_name、coord（或X和Y）、"
     "EG、FL、AG、PF、Area(um2)、fs(GHz)、fp(GHz)、Zs(Ω)、Zp(Ω)、Qs、Qp、"

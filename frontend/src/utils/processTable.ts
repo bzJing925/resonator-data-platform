@@ -1,7 +1,7 @@
 import type { ProcessFieldMeta } from '../types';
 
 export type Row = Record<string, string | number | null>;
-export interface FilterCond {
+interface FilterCond {
   min?: string;
   max?: string;
   text?: string;

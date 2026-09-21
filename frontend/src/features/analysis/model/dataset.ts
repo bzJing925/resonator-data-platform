@@ -1,7 +1,7 @@
 export type DatasetId = string;
 export type RowId = string;
 
-export interface AnalysisRow extends Record<string, unknown> {
+interface AnalysisRow extends Record<string, unknown> {
   rowId: RowId;
   /** Compatibility alias while Charts and Worksheet migrate to rowId. */
   __rowId: RowId;
@@ -31,7 +31,7 @@ export interface AnalysisDataset {
   revision: number;
 }
 
-export interface AnalysisChartPage {
+interface AnalysisChartPage {
   id: string;
   name: string;
   kind: 'chart';
@@ -56,7 +56,7 @@ function sourceField(rows: Record<string, unknown>[], aliases: string[]) {
     Object.prototype.hasOwnProperty.call(row, alias))) || null;
 }
 
-export function inferAnalysisFieldMap(rows: Record<string, unknown>[]): AnalysisFieldMap {
+function inferAnalysisFieldMap(rows: Record<string, unknown>[]): AnalysisFieldMap {
   return {
     structureType: sourceField(rows, STRUCTURE_TYPE_ALIASES),
     areaReality: sourceField(rows, AREA_REALITY_ALIASES),
@@ -85,7 +85,7 @@ function stableRowId(row: Record<string, unknown>, datasetId: DatasetId, index: 
   return `${datasetId}:row:${index}`;
 }
 
-export function normalizeAnalysisRows(
+function normalizeAnalysisRows(
   rows: Record<string, unknown>[],
   datasetId: DatasetId,
   fieldMap = inferAnalysisFieldMap(rows),

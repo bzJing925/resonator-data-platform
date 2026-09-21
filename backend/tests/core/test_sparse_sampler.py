@@ -104,10 +104,25 @@ def test_fixed_rule_sample_denser_near_fs_fp() -> None:
 
 
 def test_sparse_sampler_does_not_import_torch() -> None:
-    """训练数据导出路径不能引入 torch（torch 不是核心依赖）。"""
-    import app.core.sparse_sampler  # noqa: F401
+    """训练数据导出路径不能引入 torch（torch 不是核心依赖）。
 
-    assert "torch" not in sys.modules
+    子进程隔离验证：全量套件中其他测试会先把 torch 装进 sys.modules，
+    直接断言全局 sys.modules 是顺序依赖的误判源。
+    """
+    import subprocess
+
+    backend_root = Path(__file__).resolve().parents[2]
+    r = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; import app.core.sparse_sampler; "
+            "sys.exit(1 if 'torch' in sys.modules else 0)",
+        ],
+        cwd=backend_root,
+        capture_output=True,
+    )
+    assert r.returncode == 0, r.stderr.decode()
 
 
 def test_read_z_mag_db_missing_file_raises(tmp_path: Path) -> None:

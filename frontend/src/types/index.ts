@@ -163,16 +163,6 @@ export interface FileEntry {
   computed?: boolean;
 }
 
-export interface CurveSeries {
-  x: number[];
-  y: number[];
-  name: string;
-  color?: string;
-  width?: number;
-  opacity?: number;
-  mode?: string;
-  dash?: string;
-}
 
 export interface ChartField {
   name: string;
