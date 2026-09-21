@@ -18,7 +18,14 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-import zipfile_deflate64  # noqa: F401  注册 Deflate64 压缩支持
+try:
+    import zipfile_deflate64  # noqa: F401  注册 Deflate64 压缩支持
+except ImportError:  # 该包为纯源码分发，无编译器的环境（Windows 原生部署）可缺失
+    import logging
+
+    logging.getLogger("aln").warning(
+        "zipfile_deflate64 未安装：Deflate64 压缩的 zip 无法解压（罕见格式，标准 zip 不受影响）"
+    )
 from celery import Task
 
 from app.config import get_settings
