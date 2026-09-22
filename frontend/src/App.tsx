@@ -3,6 +3,7 @@ import { Routes, Route, useLocation, Navigate } from 'react-router-dom';
 import Sidebar from './components/Sidebar';
 import ErrorBoundary from './components/ErrorBoundary';
 import FloatingUploadProgress from './components/FloatingUploadProgress';
+import ServerAutoSync from './components/ServerAutoSync';
 import I from './components/Icons';
 import Dashboard from './pages/Dashboard';
 import { getHealth } from './api/endpoints';
@@ -117,6 +118,7 @@ export default function App() {
             <Titlebar health={health} />
             <Sidebar />
             <div className="main">
+              <ServerAutoSync />
               <ErrorBoundary>
                 <Suspense fallback={<PageLoader />}>
                   <Routes>
