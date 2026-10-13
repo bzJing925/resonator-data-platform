@@ -1,0 +1,76 @@
+diff --git a/backend/app/services/replica_service.py b/backend/app/services/replica_service.py
+--- a/backend/app/services/replica_service.py
++++ b/backend/app/services/replica_service.py
+@@ -139,0 +140,14 @@
++
++
++def _delete_unretained_devices(db: Session, batch_id: int, retained: list[int]) -> None:
++    """Delete stale rows without binding every retained ID in one SQL statement."""
++    retained_ids = set(retained)
++    stale_ids = [device_id for device_id in db.scalars(
++        select(Device.id).where(Device.batch_id == batch_id)
++    ) if device_id not in retained_ids]
++    # Stay below SQLite's legacy 999-variable limit, including the batch predicate.
++    for offset in range(0, len(stale_ids), 500):
++        db.execute(delete(Device).where(
++            Device.batch_id == batch_id,
++            Device.id.in_(stale_ids[offset:offset + 500]),
++        ))
+@@ -207 +221 @@
+-    db.execute(delete(Device).where(Device.batch_id == batch.id, Device.id.notin_(retain)))
++    _delete_unretained_devices(db, batch.id, retain)
+@@ -224 +238 @@
+-    db.execute(delete(Device).where(Device.batch_id == batch.id, Device.id.notin_(keep)))
++    _delete_unretained_devices(db, batch.id, keep)
+diff --git a/backend/tests/services/test_replication_v2.py b/backend/tests/services/test_replication_v2.py
+--- a/backend/tests/services/test_replication_v2.py
++++ b/backend/tests/services/test_replication_v2.py
+@@ -95,0 +96,48 @@
++def test_large_replica_update_avoids_sqlite_variable_limit():
++    import sqlite3
++    from uuid import uuid4
++
++    from app.services.source_identity import assign_batch_identity
++
++    with session() as desktop:
++        batch, first = seed(desktop)
++        assign_batch_identity(desktop, batch)
++        first.source_device_key = str(uuid4())
++        desktop.bulk_insert_mappings(Device, [
++            {'batch_id': batch.id, 'original_filename': f'{i}.s1p',
++             's_param_path': f'{i}.s1p', 's_param_port': 'S11',
++             'source_device_key': str(uuid4()), 'fs_ghz': 4.0}
++            for i in range(1204)
++        ])
++        batch.device_count = 1205
++        desktop.commit()
++        packet = svc.export_batch(desktop, batch.id)
++        packet['devices'] = packet['devices'][:1200]
++        packet['batch']['device_count'] = 1200
++        packet['devices'][0]['fs_ghz'] = 5.0
++        packet['remote_id'] = 9999
++        packet['server_id'] = str(uuid4())
++        retained = {row['source_device_key']: row['id'] for row in packet['devices']}
++        desktop.rollback()
++        raw = desktop.connection().connection.driver_connection
++        previous_limit = raw.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 999)
++        try:
++            svc.import_batch(desktop, packet, existing=batch)
++            rows = desktop.scalars(select(Device).where(Device.batch_id == batch.id)).all()
++            assert len(rows) == 1200
++            assert {row.source_device_key: row.id for row in rows} == retained
++            assert desktop.get(Device, first.id).fs_ghz == 5.0
++            # Repeat after device_ids has been persisted; both deletion passes stay bounded.
++            svc.import_batch(desktop, packet)
++            assert len(desktop.scalars(select(Device)).all()) == 1200
++            packet['devices'] = packet['devices'][:100]
++            packet['batch']['device_count'] = 100
++            svc.import_batch(desktop, packet)
++            rows = desktop.scalars(select(Device)).all()
++            assert {row.source_device_key: row.id for row in rows} == {
++                row['source_device_key']: row['id'] for row in packet['devices']
++            }
++        finally:
++            raw.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, previous_limit)
++
++
