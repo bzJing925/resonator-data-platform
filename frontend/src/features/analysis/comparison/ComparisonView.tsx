@@ -11,13 +11,13 @@ import { loadComparisonCohorts, summarizeCohort } from './comparisonData';
 import { comparisonColorDomain, comparisonWaferCells, differenceRows, groupMemberRows } from './comparisonScene';
 
 export default function ComparisonView({ fields = [] }: { fields?: { name: string; unit?: string }[] }) {
-  const { state, project, datasets, loadQueryRows, renameDataset, selectRows, updateSpec, deleteSelection, undo } = useAnalysisWorkspace();
+  const { state, datasets, loadQueryRows, renameDataset, selectRows, updateSpec, deleteSelection, undo } = useAnalysisWorkspace();
   const comparison = state.spec.comparison;
   const [accepted, setAccepted] = useState<{ spec: AnalysisComparison; ids: [string, string]; units: Record<string, string>; key: string; rule: QualityRuleV1 | null } | null>(null);
   const [metric, setMetric] = useState(''), [error, setError] = useState(''), [busy, setBusy] = useState(false), [range, setRange] = useState('');
   const sequence = useRef(new RequestSequence());
   const key = JSON.stringify([comparison, state.spec.quality_rule]);
-  useEffect(() => { sequence.current.invalidate(); setBusy(false); }, [key, project.head?.projectId]);
+  useEffect(() => { sequence.current.invalidate(); setBusy(false); }, [key]);
   if (!comparison) return null;
   const calculate = async () => {
     const request = sequence.current.begin(); setBusy(true); setError('');

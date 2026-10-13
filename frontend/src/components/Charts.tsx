@@ -342,7 +342,7 @@ export function LineChart({ x, y, xLabel, yLabel, name, color, markers = [], ser
  *  unique value per cell, the caller should aggregate upstream and
  *  pass aggregated=true.
  * ------------------------------------------------------------------ */
-export function buildWaferSpec({ rows, valueField, valueLabel, facetField, facets, aggregated = false, colorDomain = undefined as [number, number] | null | undefined }) {
+function buildWaferSpec({ rows, valueField, valueLabel, facetField, facets, aggregated = false, colorDomain = undefined as [number, number] | null | undefined }) {
     const allXs = rows.map((r) => r['x']).filter(Number.isFinite);
     const allYs = rows.map((r) => r['y']).filter(Number.isFinite);
     const xMin = allXs.length ? allXs.reduce((a, b) => Math.min(a, b), Infinity) - 1 : -1;

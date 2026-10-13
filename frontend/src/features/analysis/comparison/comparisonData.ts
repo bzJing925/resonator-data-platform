@@ -1,6 +1,6 @@
 import type { AnalysisComparison, QualityRuleV1, ResultManifest } from '../../../types/platformContracts';
 import type { AnalysisDataset } from '../model/dataset';
-import { parseManifest } from '../project/projectCodec';
+import { parseManifest } from '../model/specCodec';
 import { unverifiedManifest } from '../result/resultManifest';
 import { attachSourceRefs, sourceTuple } from '../model/provenance';
 import { IS_STATIC } from '../../../config';

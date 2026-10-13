@@ -3,7 +3,6 @@
  *  GitHub Pages 无 COOP/COEP → SharedArrayBuffer 不可用 → 强制单线程 wasm。
  *  测试可注入 _loaders 覆盖数据加载（vitest node 环境从磁盘读）。 */
 
-import { describeModel, type ModelDescription } from '../features/analysis/report/modelDescription';
 import { deterministicSamplePositions } from './sampling';
 import { baselineLookup } from './baseline';
 import { cubicSplineInterpolate } from './spline';
@@ -100,7 +99,7 @@ function getData(): Promise<WebData> {
 }
 
 export interface OnnxPredictResult {
-  metadata: ModelDescription;
+  metadata: unknown;
   params: Record<string, number>;
   freq_ghz: number[];
   z_db: number[];
@@ -172,7 +171,7 @@ export async function surrogatePredictOnnx(
     params[c] = paramsArr[i];
   });
   return {
-    metadata: describeModel(d.metadata, { eg, fl, ag, area, pf }),
+    metadata: d.metadata,
     params,
     freq_ghz: d.freq,
     z_db: zDb,

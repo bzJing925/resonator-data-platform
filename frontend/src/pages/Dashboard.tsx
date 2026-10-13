@@ -1,7 +1,6 @@
 import React, { memo, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { IS_STATIC } from '../config';
-import useRecentProjects from '../project/useRecentProjects';
 import AttentionList from '../sync/AttentionList';
 import I from '../components/Icons';
 import { getStats, listTasks } from '../api/endpoints';
@@ -102,7 +101,6 @@ export default function Dashboard() {
   const [tasks, setTasks] = useState<Task[] | null>(null);
   const [taskError, setTaskError] = useState('');
   const [refresh, setRefresh] = useState(0);
-  const recent = useRecentProjects(refresh);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -185,7 +183,6 @@ export default function Dashboard() {
           />
         </div>
 
-        <section aria-label="最近项目"><h2>最近项目</h2>{recent.error && <p role="alert">项目列表未提供：{recent.error}</p>}{recent.heads === null ? <p>项目列表加载中/未知</p> : recent.heads.length ? <ul>{recent.heads.map((head) => <li key={head.projectId}><Link to={`/explore?projectId=${encodeURIComponent(head.projectId)}`}>{head.name} · {head.lastOpenedAt}</Link></li>)}</ul> : <p>尚无已保存项目</p>}</section>
         <AttentionList refresh={refresh} />
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 10, marginBottom: 14 }}>
           <Tile label="批次总数" value={fmtN(stats?.batches)} unit="" />

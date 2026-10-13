@@ -202,14 +202,12 @@ describe('analysis workspace reducer', () => {
 });
 
 
-it('keeps current analysis configuration and notes through row undo', () => {
+it('keeps current analysis configuration through row undo', () => {
   let state = loadedState();
   state = workspaceReducer(state, { type: 'execute', command: { type: 'updateRows', datasetId: 'd1',
     updates: [{ rowId: 'd1:device:10', changes: { qs: 300 } }] } });
   state = workspaceReducer(state, { type: 'updateSpec', spec: { ...state.spec, chart: { ...state.spec.chart, type: 'box' } } });
-  state = workspaceReducer(state, { type: 'updateNotes', notes: '保留备注' });
   const undone = workspaceReducer(state, { type: 'undo' });
   expect(undone.registry.byId.d1.rows[0].qs).toBe(100);
   expect(undone.spec.chart.type).toBe('box');
-  expect(undone.notes).toBe('保留备注');
 });

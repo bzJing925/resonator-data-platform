@@ -4,8 +4,6 @@ import { AnalysisWorkspaceProvider, useAnalysisWorkspace } from '../../src/featu
 import { queryDevices, inspectComparisonConditions } from '../../src/api/endpoints';
 import { getCapabilities } from '../../src/api/capabilities';
 import { loadComparisonCohorts } from '../../src/features/analysis/comparison/comparisonData';
-import ProjectSaveBadge from '../../src/features/analysis/project/ProjectSaveBadge';
-import ReportDialog from '../../src/features/analysis/report/ReportDialog';
 import ExportDialog from '../../src/export/ExportDialog';
 import api from '../../src/api/client';
 import { IS_STATIC } from '../../src/config';
@@ -37,9 +35,9 @@ function Harness() {
     },
   } }); }, [workspace]);
   const dataset = workspace.datasets[0];
-  return <main><ProjectSaveBadge project={workspace.project} />
+  return <main>
     <output data-testid="rows">{dataset?.rows.length ?? 0}</output><output data-testid="first-value">{String(dataset?.rows[0]?.qs ?? '')}</output>
-    <ReportDialog /><button onClick={() => setExporting(true)}>完整导出</button>
+    <button onClick={() => setExporting(true)}>完整导出</button>
     {exporting && dataset && <ExportDialog dataset={dataset} onClose={() => setExporting(false)} />}
   </main>;
 }

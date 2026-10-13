@@ -1,7 +1,4 @@
-import type { JsonValue } from './model/provenance';
-import { migrateLegacyExplore, parseAnalysisSpec, restoreWorkspace } from './project/projectCodec';
-import { MIGRATED_PROJECT, useProjectAutosave } from './project/useProjectAutosave';
-import type { ProjectVersionWithRows } from './project/projectTypes';
+import { migrateLegacyExplore, parseAnalysisSpec } from './model/specCodec';
 import type { AnalysisSpec, ResultManifest } from '../../types/platformContracts';
 import React, { createContext, useCallback, useContext, useMemo, useReducer } from 'react';
 import {
@@ -53,14 +50,11 @@ export type {
 
 export interface WorkspaceState extends WorkspacePresent {
   spec: AnalysisSpec;
-  notes: string;
   readOnly: boolean;
-  projectExtras?: Record<string, JsonValue>;
   history: HistoryState<WorkspacePresent>;
 }
 
 export const INITIAL_WORKSPACE_STATE: WorkspaceState = {
-  notes: '',
   readOnly: false,
   spec: migrateLegacyExplore({ xFields: ['eg'], yFields: ['qs'], limit: 50000 }),
   registry: createDatasetRegistry(),
@@ -71,25 +65,19 @@ export const INITIAL_WORKSPACE_STATE: WorkspaceState = {
 };
 
 export type WorkspaceAction =
-  | { type: 'restoreProject'; project: ProjectVersionWithRows; restored?: WorkspaceState }
-  | { type: 'updateNotes'; notes: string }
   | { type: 'updateSpec'; spec: AnalysisSpec | ((current: AnalysisSpec) => AnalysisSpec) }
   | { type: 'execute'; command: AnalysisCommand }
   | { type: 'undo' }
   | { type: 'redo' };
 
 function workspacePresent(state: WorkspaceState): WorkspacePresent {
-  const { history: _history, spec: _spec, notes: _notes, projectExtras: _extras, readOnly: _readOnly, ...present } = state;
+  const { history: _history, spec: _spec, readOnly: _readOnly, ...present } = state;
   return present;
 }
 
 export function workspaceReducer(state: WorkspaceState, action: WorkspaceAction): WorkspaceState {
-  if (action.type === 'restoreProject') return action.restored ?? { ...restoreWorkspace(action.project),
-    spec: parseAnalysisSpec(action.project.version.spec) };
-  if (state.readOnly && (action.type === 'updateNotes' || action.type === 'updateSpec'
-    || action.type === 'undo' || action.type === 'redo'
+  if (state.readOnly && (action.type === 'updateSpec' || action.type === 'undo' || action.type === 'redo'
     || (action.type === 'execute' && isUndoableCommand(action.command)))) return state;
-  if (action.type === 'updateNotes') return { ...state, notes: action.notes };
   if (action.type === 'updateSpec') return { ...state, spec: parseAnalysisSpec(typeof action.spec === 'function' ? action.spec(state.spec) : action.spec) };
   if (action.type === 'execute') {
     const before = workspacePresent(state);
@@ -98,23 +86,21 @@ export function workspaceReducer(state: WorkspaceState, action: WorkspaceAction)
     const history = isUndoableCommand(action.command)
       ? pushHistory(state.history, { label: commandLabel(action.command), before, after })
       : state.history;
-    return { ...after, spec: after.spec ?? state.spec, notes: state.notes, readOnly: state.readOnly, projectExtras: state.projectExtras, history };
+    return { ...after, spec: after.spec ?? state.spec, readOnly: state.readOnly, history };
   }
   const before = workspacePresent(state);
   if (action.type === 'undo') {
     const result = undoHistory(before, state.history);
-    return result.present === before ? state : { ...result.present, spec: result.present.spec ?? state.spec, notes: state.notes, readOnly: state.readOnly, projectExtras: state.projectExtras, history: result.history };
+    return result.present === before ? state : { ...result.present, spec: result.present.spec ?? state.spec, readOnly: state.readOnly, history: result.history };
   }
   const result = redoHistory(before, state.history);
-  return result.present === before ? state : { ...result.present, spec: result.present.spec ?? state.spec, notes: state.notes, readOnly: state.readOnly, projectExtras: state.projectExtras, history: result.history };
+  return result.present === before ? state : { ...result.present, spec: result.present.spec ?? state.spec, readOnly: state.readOnly, history: result.history };
 }
 
 let datasetSequence = 1;
 
 interface WorkspaceApi {
   state: WorkspaceState;
-  project: ReturnType<typeof useProjectAutosave>;
-  updateNotes: (notes: string) => void;
   updateSpec: (spec: AnalysisSpec | ((current: AnalysisSpec) => AnalysisSpec)) => void;
   datasets: AnalysisDataset[];
   chartDataset: AnalysisDataset | null;
@@ -166,20 +152,11 @@ function nextDatasetIdentity() {
 export function AnalysisWorkspaceProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(workspaceReducer, INITIAL_WORKSPACE_STATE, (initial) => {
     try {
-      if (localStorage.getItem(MIGRATED_PROJECT) !== '1') {
-        const legacy = JSON.parse(localStorage.getItem('aln_page_state_v1') ?? '{}');
-        if (legacy?.explore) return { ...initial, spec: migrateLegacyExplore(legacy.explore) };
-      }
+      const legacy = JSON.parse(localStorage.getItem('aln_page_state_v1') ?? '{}');
+      if (legacy?.explore) return { ...initial, spec: migrateLegacyExplore(legacy.explore) };
     } catch { /* Invalid or unavailable legacy preferences do not block a new session. */ }
     return initial;
   });
-  const restore = useCallback((loaded: ProjectVersionWithRows) => {
-    const restored = { ...restoreWorkspace(loaded), spec: loaded.version.spec };
-    dispatch({ type: 'restoreProject', project: loaded, restored });
-    return restored;
-  }, []);
-  const project = useProjectAutosave(state, restore);
-  const updateNotes = useCallback((notes: string) => dispatch({ type: 'updateNotes', notes }), []);
   const updateSpec = useCallback((next: AnalysisSpec | ((current: AnalysisSpec) => AnalysisSpec)) => {
     dispatch({ type: 'updateSpec', spec: next });
   }, []);
@@ -287,9 +264,7 @@ export function AnalysisWorkspaceProvider({ children }: { children: React.ReactN
 
   const api = useMemo<WorkspaceApi>(() => ({
     state,
-    project,
     updateSpec,
-    updateNotes,
     datasets,
     chartDataset,
     chartDatasetId,
@@ -314,14 +289,13 @@ export function AnalysisWorkspaceProvider({ children }: { children: React.ReactN
     undo,
     redo,
   }), [
-    state, project, updateSpec, updateNotes, datasets, chartDataset, chartDatasetId, activeDataset, loadQueryRows,
+    state, updateSpec, datasets, chartDataset, chartDatasetId, activeDataset, loadQueryRows,
     addDataset, closeDataset, duplicateDataset, renameDataset, setActiveTab, setChartDataset,
     selectRows, updateRows, editCell, deleteRows, deleteSelection, updatePointStyle,
     undo, redo,
   ]);
 
-  return <WorkspaceContext.Provider value={api}>{project.loading
-    ? <div role="status">正在恢复分析项目…</div> : children}</WorkspaceContext.Provider>;
+  return <WorkspaceContext.Provider value={api}>{children}</WorkspaceContext.Provider>;
 }
 
 export function useAnalysisWorkspace() {

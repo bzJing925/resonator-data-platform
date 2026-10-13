@@ -1,6 +1,5 @@
 import ExportDialog from '../export/ExportDialog';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
 import I from '../components/Icons';
 import { UnifiedChartGrid, WaferMap } from '../components/Charts';
 import useFields, { displayLabel } from '../hooks/useFields';
@@ -8,13 +7,10 @@ import { queryDevices, queryAggregate } from '../api/endpoints';
 import DeviceModal from '../components/DeviceModal';
 import FilterPanel from '../components/FilterPanel';
 import { selectedRowsForDataset } from '../features/analysis/model/selection';
-import ReportDialog from '../features/analysis/report/ReportDialog';
 import ComparisonView from '../features/analysis/comparison/ComparisonView';
 import ComparisonSetup from '../features/analysis/comparison/ComparisonSetup';
 import DataScopeBanner from '../features/analysis/result/DataScopeBanner';
 import { RequestSequence, validateQueryResult } from '../features/analysis/result/resultManifest';
-import ProjectMenu from '../features/analysis/project/ProjectMenu';
-import ProjectSaveBadge from '../features/analysis/project/ProjectSaveBadge';
 import WorksheetGrid from '../features/analysis/WorksheetGrid';
 import WorkspaceTabs from '../features/analysis/WorkspaceTabs';
 import PointStyleInspector from '../features/analysis/PointStyleInspector';
@@ -218,7 +214,6 @@ export default function Explore() {
   const { data: fields, loading: fLoading, error: fErr } = useFields();
   const {
     state: workspaceState,
-    project,
     updateSpec,
     datasets,
     chartDataset,
@@ -244,22 +239,6 @@ export default function Explore() {
     redo,
   } = useAnalysisWorkspace();
 
-  const [searchParams] = useSearchParams();
-  const requestedProject = searchParams.get('projectId');
-  const attemptedProject = useRef<string | null>(null);
-  const [openProjectError, setOpenProjectError] = useState('');
-  useEffect(() => {
-    if (!requestedProject || project.loading || requestedProject === project.head?.projectId || attemptedProject.current === requestedProject) return;
-    attemptedProject.current = requestedProject;
-    let alive = true;
-    void (async () => {
-      try {
-        if (!workspaceState.readOnly && project.status !== 'saved') await project.saveNow();
-        if (alive) await project.reload(requestedProject);
-      } catch (failure) { if (alive) setOpenProjectError(`项目未打开，当前工作区保留：${String(failure)}`); }
-    })();
-    return () => { alive = false; };
-  }, [requestedProject, project.loading]);
   const { spec } = workspaceState;
   const rawState = useMemo(() => exploreConfig(spec), [spec]);
   const setRawState = useCallback((update) => updateSpec((current) => {
@@ -317,7 +296,6 @@ export default function Explore() {
   const [error, setError] = useState(null);
   const [activeDevice, setActiveDevice] = useState(null);
   const [showExport, setShowExport] = useState(false);
-  const [exporting, setExporting] = useState(false);
   const [showFilters, setShowFilters] = useState(true);
   const [showInspector, setShowInspector] = useState(true);
   const [fullscreen, setFullscreen] = useState(false);
@@ -412,7 +390,7 @@ export default function Explore() {
     requestSequence.current.invalidate();
     setLoading(false);
     return () => requestSequence.current.invalidate();
-  }, [filters, limit, chartType, xFields, yFields, zField, zMode, waferZ, waferFacet, project.head?.projectId]);
+  }, [filters, limit, chartType, xFields, yFields, zField, zMode, waferZ, waferFacet]);
   const run = async () => {
     const request = requestSequence.current.begin();
     const current = () => requestSequence.current.current(request);
@@ -545,23 +523,6 @@ export default function Explore() {
         ? '查询期间来源版本变化，请重新查询；上一工作表保留。' : e.response?.data?.detail?.message ?? e.message);
     } finally {
       if (current()) setLoading(false);
-    }
-  };
-
-  const onExportCsv = async () => {
-    if (!chartDataset) return;
-    setExporting(true);
-    setError(null);
-    try {
-      const blob = new Blob([serializeWorksheetCsv(chartDataset.rows)], {
-        type: 'text/csv;charset=utf-8',
-      });
-      const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-      downloadBlob(blob, `${chartDataset.name}_${ts}.csv`);
-    } catch (e) {
-      setError(e.message || '导出失败');
-    } finally {
-      setExporting(false);
     }
   };
 
@@ -746,7 +707,6 @@ export default function Explore() {
 
   return (
     <>
-      <ProjectSaveBadge project={project} />
       <div className="toolbar analysis-toolbar">
         <div className="group">
           {CHART_TYPES.map((c) => {
@@ -800,14 +760,6 @@ export default function Explore() {
           >
             <I.trash size={13} /> {selection.rowIds.size || ''}
           </button>
-          <button
-            className="btn"
-            onClick={() => runAnalysisCommand('copySelection', activeCommandSurface)}
-            disabled={selection.rowIds.size === 0}
-            title="复制所选数据 (Ctrl/Cmd+C)"
-          >
-            复制
-          </button>
           {!isWafer && (
             <button
               className={`btn${showDataPoints ? ' active' : ''}`}
@@ -823,19 +775,21 @@ export default function Explore() {
           <button
             className="btn"
             onClick={() => setShowExport(true)}
-            disabled={exporting || !chartDataset}
+            disabled={!chartDataset}
             title="导出当前图表引用的数据表（包含本地编辑和删除）"
+            aria-label="导出数据"
           >
-            <I.download size={13} /> {exporting ? '导出中…' : '导出数据'}
+            <I.download size={13} />
           </button>
           {showExport && chartDataset && <ExportDialog dataset={chartDataset} onClose={() => setShowExport(false)} />}
           <button
             className="btn primary"
             onClick={run}
             disabled={loading || fLoading || (!isWafer && xFields.length === 0)}
-            title={!isWafer && xFields.length === 0 ? '请先选择 X 字段' : undefined}
+            title={!isWafer && xFields.length === 0 ? '请先选择 X 字段' : '运行查询'}
+            aria-label="运行查询"
           >
-            <I.refresh size={13} /> {loading ? '查询中...' : '运行查询'}
+            <I.play size={13} />
           </button>
         </div>
       </div>
@@ -904,7 +858,6 @@ export default function Explore() {
                   字段加载失败：{fErr.message}
                 </div>
               )}
-              {openProjectError && <p role="alert">{openProjectError}</p>}
               <details className="comparison-settings"><summary>批次比较</summary><ComparisonSetup fields={fields?.all ?? null} /></details>
               <ComparisonView fields={fields?.all ?? []} />
       {error && (
@@ -1051,10 +1004,6 @@ export default function Explore() {
             })}
             onReset={() => runAnalysisCommand('autorange', 'chart')}
           />}
-          <div className="section analysis-project-tools">
-            <ProjectMenu fields={fields?.all ?? null} />
-            <ReportDialog />
-          </div>
           {inspectorDataset && !isWafer && (
             <PointStyleInspector
               dataset={inspectorDataset}

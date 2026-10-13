@@ -1,5 +1,5 @@
 import type { QuerySpec, ResultManifest } from '../../../types/platformContracts';
-import { parseManifest } from '../project/projectCodec';
+import { parseManifest } from '../model/specCodec';
 import { attachSourceRefs } from '../model/provenance';
 
 export function unverifiedManifest(spec: QuerySpec, returned: number, total: number | null = null, truncated = false): ResultManifest {

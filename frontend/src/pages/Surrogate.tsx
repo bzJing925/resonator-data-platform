@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { describeModel, modelDescriptionText } from '../features/analysis/report/modelDescription';
 import I from '../components/Icons';
 import { LineChart } from '../components/Charts';
 import { getSurrogateStatus, predictSurrogate } from '../api/endpoints';
@@ -115,7 +114,6 @@ export default function Surrogate() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: '10px 14px', gap: 10 }}>
-      <p role="status">{modelDescriptionText(describeModel(data?.metadata ?? status?.metadata, { eg, fl, ag, area, pf }))}</p>
       <div className="toolbar" style={{ display: 'flex', gap: 18, alignItems: 'flex-end', flexWrap: 'wrap' }}>
         <div>
           <div style={labelStyle}>EG（{eg.toFixed(2)}）</div>

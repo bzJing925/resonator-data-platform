@@ -3,9 +3,8 @@ import { spawn } from 'node:child_process';
 import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { launchHarness } from './electron';
-for (const target of ['browser', 'static', 'electron'] as const) test(`${target}: actual query/edit/project reload/complete comparison/export/offline report/capabilities`, async ({ page, browser }, info) => {
+for (const target of ['browser', 'static', 'electron'] as const) test(`${target}: actual query/edit/complete comparison/export/capabilities`, async ({ page }, info) => {
   test.setTimeout(90000);
   const root = await mkdtemp(join(tmpdir(), 'aln-platform-flow-'));
   let preview: ReturnType<typeof spawn> | undefined, app: Awaited<ReturnType<typeof launchHarness>> | undefined;
@@ -22,10 +21,9 @@ for (const target of ['browser', 'static', 'electron'] as const) test(`${target}
     await page.waitForFunction(() => 'platformFlow' in window);
     const queried = await page.evaluate(() => (window as any).platformFlow.query());
     expect(queried.manifest).toMatchObject({ returned: 2, truncated: true, total_relation: 'exact', consistency: 'verified' });
-    await expect(page.getByTestId('rows')).toHaveText('2'); await expect(page.getByTestId('project-save-status')).toContainText('已保存');
+    await expect(page.getByTestId('rows')).toHaveText('2');
     await page.evaluate(() => { const h = (window as any).platformFlow.workspace, d = h.datasets[0]; h.editCell(d.id, d.rows[0].rowId, 'qs', 999); });
-    await expect(page.getByTestId('first-value')).toHaveText('999'); await expect(page.getByTestId('project-save-status')).toContainText('已保存');
-    await page.reload(); await expect(page.getByTestId('first-value')).toHaveText('999');
+    await expect(page.getByTestId('first-value')).toHaveText('999');
     const compared = await page.evaluate(() => (window as any).platformFlow.compare());
     expect(compared.result.cohorts.a.manifest.truncated).toBe(false); expect(compared.result.cohorts.b.manifest.truncated).toBe(false);
     expect(compared.result.cohorts.a.rows.length).toBeGreaterThan(0); expect(compared.result.cohorts.b.rows.length).toBeGreaterThan(0);
@@ -44,12 +42,7 @@ for (const target of ['browser', 'static', 'electron'] as const) test(`${target}
     await download(page, target === 'static' ? '下载完整 CSV' : '下载 data.csv', join(root, 'complete.csv'));
     expect(await readFile(join(root, 'complete.csv'), 'utf8')).not.toContain('999');
     await page.getByRole('button', { name: '关闭', exact: true }).click();
-    await page.getByRole('button', { name: '生成HTML报告' }).click(); const reportStart = Date.now();
-    await download(page, '下载离线HTML', join(root, 'report.html'));
-    await info.attach(`${target}-flow.json`, { body: JSON.stringify({ caps, query: queried.manifest, comparison: compared.comparison, reportGenerationMs: Date.now() - reportStart, apiRequests: requests.length }), contentType: 'application/json' });
-    const offline = await browser.newContext({ offline: true }), offlinePage = await offline.newPage();
-    await offlinePage.goto(pathToFileURL(join(root, 'report.html')).href); await expect(offlinePage.locator('figure img')).toHaveCount(1);
-    expect(await offlinePage.locator('figure img').evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0)).toBe(true);
-    await offline.close(); if (target === 'static') expect(requests).toEqual([]);
+    await info.attach(`${target}-flow.json`, { body: JSON.stringify({ caps, query: queried.manifest, comparison: compared.comparison, apiRequests: requests.length }), contentType: 'application/json' });
+    if (target === 'static') expect(requests).toEqual([]);
   } finally { if (app) await app.electronApp.close(); preview?.kill('SIGTERM'); }
 });

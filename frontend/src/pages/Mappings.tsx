@@ -122,7 +122,7 @@ export default function Mappings() {
     <>
       <div className="toolbar">
         <span className="crumb">
-          谐振器 <span style={{ color: 'var(--fg-4)' }}>›</span> <b>对照表</b>
+          <b>对照表</b>
         </span>
         <div className="spacer" />
         {!IS_STATIC && (

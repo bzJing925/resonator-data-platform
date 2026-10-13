@@ -60,7 +60,7 @@ test('real upload page leaves bounds automatic, keeps warning gate and folds tec
   await page.screenshot({ path: '../upload-dark.png', fullPage: true });
 });
 
-test('settings and project/report controls use dark theme; comparison does not fill empty chart', async ({ page }) => {
+test('settings controls use dark theme; comparison does not fill empty chart', async ({ page }) => {
   await mockServer(page);
   await page.goto('/settings');
   await expect(page.getByRole('heading', { name: '设置', exact: true })).toBeVisible();
@@ -69,8 +69,4 @@ test('settings and project/report controls use dark theme; comparison does not f
   await page.goto('/explore');
   await expect(page.locator('.comparison-settings')).toBeVisible();
   await expect(page.getByRole('combobox', { name: '比较范围' })).toBeHidden();
-  await page.getByTestId('project-menu').click();
-  await expect(page.getByRole('dialog', { name: '分析项目' })).toBeVisible();
-  await expectDarkControls(page, '[role="dialog"] button, [role="dialog"] input:not([type="file"]), [role="dialog"] select');
-  await page.screenshot({ path: '../project-dark.png', fullPage: true });
 });

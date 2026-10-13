@@ -1,6 +1,6 @@
 import type { AnalysisComparison, AnalysisComparisonEndpoint, QuerySpec, SourceRef } from '../../../types/platformContracts';
 import { validateSourceRefs, sourceTuple } from '../model/provenance';
-import { parseQuerySpec } from '../project/projectCodec';
+import { parseQuerySpec } from '../model/specCodec';
 export const COMPARISON_METRICS = ['fs_ghz', 'fp_ghz', 'qs', 'qp', 'k2eff_pct', 'zs_ohm', 'zp_ohm'];
 export type Shape = [number | string | null, number | string | null, number | string | null, string | null];
 export interface ProcessingConditions {

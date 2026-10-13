@@ -1,8 +1,8 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { createAnalysisDataset } from '../model/dataset';
+import { migrateLegacyExplore } from '../model/specCodec';
 import { sourceA, sourceB } from '../__fixtures__/platformFixtures';
-import { emptyProject } from '../project/projectBackup';
 import { unverifiedManifest } from '../result/resultManifest';
 const mocks = vi.hoisted(() => ({ inspect: vi.fn(), update: vi.fn(), workspace: {} }));
 vi.mock('../../../api/endpoints', () => ({ inspectComparisonConditions: mocks.inspect }));
@@ -11,7 +11,7 @@ import ComparisonSetup from './ComparisonSetup';
 const fields = [{ name: 'qs', unit: '1' }];
 beforeEach(() => {
   mocks.inspect.mockReset(); mocks.update.mockReset();
-  const spec = emptyProject().version.spec;
+  const spec = migrateLegacyExplore({});
   const datasets = [sourceA, sourceB].map((source, index) => {
     const manifest = { ...unverifiedManifest({ filters: {}, fields: ['qs'], order_by: null }, 1, 1),
       source_refs: [{ ...source, source_device_key: null }], consistency: 'verified' as const };
@@ -41,7 +41,7 @@ it('snapshot selection validates fields/units and records explicit workspace sco
   fireEvent.click(screen.getByText('使用工作区快照规格'));
   await waitFor(() => expect(mocks.update).toHaveBeenCalledTimes(1));
   expect(mocks.inspect).not.toHaveBeenCalled();
-  const result = mocks.update.mock.calls[0][0](emptyProject().version.spec);
+  const result = mocks.update.mock.calls[0][0](migrateLegacyExplore({}));
   expect(result.comparison.scope).toBe('workspace_snapshot');
   expect(result.comparison.a).toMatchObject({ dataset_id: 'd0', source: null });
 });

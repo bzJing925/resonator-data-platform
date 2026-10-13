@@ -137,7 +137,7 @@ export default function Batches() {
       {deleting && <DeletionImpactDialog batchNo={deleting} onClose={() => setDeleting(null)} onChanged={() => { setDeleting(null); load(); }} />}
       <div className="toolbar">
         <span className="crumb">
-          谐振器 <span style={{ color: 'var(--fg-4)' }}>›</span> <b>批次管理</b>
+          <b>批次管理</b>
         </span>
         <div className="divider" />
         <div className="row-flex" style={{ gap: 6 }}>

@@ -136,7 +136,7 @@ export default function Upload() {
     <>
       <div className="toolbar">
         <span className="crumb">
-          谐振器 <span style={{ color: 'var(--fg-4)' }}>›</span> <b>上传新批次</b>
+          <b>上传新批次</b>
         </span>
         <div className="spacer" />
         {mappings.length === 0 && (
