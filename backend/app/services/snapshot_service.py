@@ -12,10 +12,12 @@ from collections import defaultdict
 from collections.abc import Iterable
 
 import pyarrow as pa
-from sqlalchemy import BigInteger, Boolean, Float, Integer, SmallInteger, String, select
+from sqlalchemy import BigInteger, Boolean, Float, Integer, SmallInteger, String, select, text
 from sqlalchemy.orm import Session, selectinload
 
 from app.models import Batch, Device, Mapping, MappingEntry
+from app.services.batch_scope import active_batch_clause
+from app.services.source_identity import batch_source_ref, set_replica_revision, validate_uuid
 
 _DEVICE_COLUMNS = {column.name for column in Device.__table__.columns}
 _SHARED_DEVICE_COLUMNS = sorted(_DEVICE_COLUMNS - {"id", "batch_id", "s_param_path"})
@@ -88,8 +90,12 @@ def build_snapshot(db: Session, known_batch_nos: set[str]) -> dict:
     devices 走 Core 流式查询分块写入 Arrow IPC（固定 schema），首次全量
     同步不会把 ORM 实例/pylist/Arrow 三份副本同时留在内存。
     """
+    if db.bind.dialect.name == "sqlite":
+        raw = db.connection().connection.driver_connection
+        if not raw.in_transaction:
+            db.execute(text("BEGIN"))
     batch_stmt = (
-        select(Batch)
+        select(Batch).where(active_batch_clause())
         .options(selectinload(Batch.mapping).selectinload(Mapping.entries))
         .order_by(Batch.id)
     )
@@ -99,7 +105,13 @@ def build_snapshot(db: Session, known_batch_nos: set[str]) -> dict:
 
     mappings_payload: dict[int, dict] = {}
     batches_payload: list[dict] = []
+    source_refs = []
+    verified = True
     for batch in batches:
+        source_ref = batch_source_ref(db, batch)
+        if source_ref is not None:
+            source_refs.append(source_ref)
+        verified = verified and source_ref is not None and source_ref["source_revision"] is not None
         batches_payload.append(
             {
                 "batch_no": batch.batch_no,
@@ -112,6 +124,9 @@ def build_snapshot(db: Session, known_batch_nos: set[str]) -> dict:
                 "source": batch.source,
                 "device_count": batch.device_count,
                 "uploaded_by": batch.uploaded_by,
+                "origin_id": batch.origin_id,
+                "source_batch_id": batch.source_batch_id,
+                "source_revision": source_ref["source_revision"] if source_ref else None,
             }
         )
         if batch.mapping_id not in mappings_payload and batch.mapping is not None:
@@ -121,6 +136,7 @@ def build_snapshot(db: Session, known_batch_nos: set[str]) -> dict:
     device_stmt = (
         select(*device_columns, Batch.batch_no)
         .join(Batch, Device.batch_id == Batch.id)
+        .where(active_batch_clause())
         .order_by(Batch.id, Device.id)
         .execution_options(yield_per=_DEVICE_CHUNK)
     )
@@ -133,6 +149,7 @@ def build_snapshot(db: Session, known_batch_nos: set[str]) -> dict:
     writer = None
     chunk: list[dict] = []
     for row in db.execute(device_stmt):
+        verified = verified and row._mapping["source_device_key"] is not None
         chunk.append(dict(row._mapping))
         if len(chunk) >= _DEVICE_CHUNK:
             writer = _write_chunk(writer, sink, schema, chunk)
@@ -147,6 +164,8 @@ def build_snapshot(db: Session, known_batch_nos: set[str]) -> dict:
         "batches": batches_payload,
         "mappings": list(mappings_payload.values()),
         "devices_arrow_gz_b64": arrow_b64,
+        "manifest": {"schema_version": 1, "source_refs": source_refs,
+                     "consistency": "verified" if verified else "unverified"},
     }
 
 
@@ -231,6 +250,9 @@ def import_snapshot(
             source=source,
             device_count=int(remote.get("device_count") or 0),
             uploaded_by=str(remote.get("uploaded_by") or f"{source}-sync"),
+            origin_id=validate_uuid(remote["origin_id"]) if remote.get("origin_id") else None,
+            source_batch_id=(validate_uuid(remote["source_batch_id"])
+                             if remote.get("source_batch_id") else None),
         )
         db.add(batch)
         db.flush()
@@ -248,6 +270,8 @@ def import_snapshot(
             if key in _DEVICE_COLUMNS and key not in {"id", "batch_id", "s_param_path"}
         }
         values["batch_id"] = batch_id
+        if values.get("source_device_key") is not None:
+            validate_uuid(values["source_device_key"])
         values["original_filename"] = str(values.get("original_filename") or f"{source}-{index}")
         values["s_param_port"] = "S22" if values.get("s_param_port") == "S22" else "S11"
         if values.get("pf") is not None:
@@ -256,6 +280,11 @@ def import_snapshot(
         rows_by_batch[str(remote.get("batch_no"))].append(values)
     for rows in rows_by_batch.values():
         db.bulk_insert_mappings(Device, rows)
+    db.flush()
+    for remote in batches:
+        batch_id = batch_ids.get(str(remote.get("batch_no") or ""))
+        if batch_id is not None:
+            set_replica_revision(db, batch_id, remote.get("source_revision"))
     db.commit()
     return {
         "mappings_added": added_mappings,

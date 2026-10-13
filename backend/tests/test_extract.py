@@ -499,3 +499,26 @@ def test_calc_bodeq_masks_narrow_spike_contaminating_qs_bodeq() -> None:
     out = calc_bodeq(s * np.exp(1j * spike), freq, fs_idx, fp_idx)
     assert abs(out["qs_bodeq"] - ref["qs_bodeq"]) / ref["qs_bodeq"] < 0.15
     assert abs(out["bodeq_fitted"] - ref["bodeq_fitted"]) / ref["bodeq_fitted"] < 0.15
+
+
+def test_extract_marks_mapping_unmatched_devices(tmp_path) -> None:
+    """未命中对照表的器件：matched=False，mapping 字段留空但参数照常提取。"""
+    from app.core.mapping import parse_description
+    from tests.fixtures.platform_cases import _algorithm_samples
+
+    samples = _algorithm_samples(tmp_path)
+    p = tmp_path / "17_E6-1_X0Y0.s1p"
+    p.write_bytes(samples["dut_s1p"])
+
+    row = extract_resonator_params(p, mapping={}, s_param_relpath=p.name)
+    assert row.matched is False
+    assert row.eg is None and row.area_um2 is None
+    assert row.fs_ghz is not None
+
+    row2 = extract_resonator_params(
+        p,
+        mapping={"E6-1": parse_description("E6-1", "DUT EG0 FL0 700&5500")},
+        s_param_relpath=p.name,
+    )
+    assert row2.matched is True
+    assert row2.area_um2 is not None

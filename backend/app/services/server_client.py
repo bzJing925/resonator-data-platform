@@ -19,6 +19,10 @@ from app.config import get_settings
 class ServerError(RuntimeError):
     """服务器不可达或返回错误。"""
 
+    def __init__(self, message, *, status_code=None):
+        super().__init__(message)
+        self.status_code = status_code
+
 
 @dataclass
 class ServerConfig:
@@ -73,7 +77,14 @@ class ServerClient:
             base_url=f"{config.server_url}/api",
             timeout=httpx.Timeout(60.0, read=300.0),
             transport=transport,
+            trust_env=False,
         )
+
+    def request_json(self, method: str, path: str, **kwargs) -> dict:
+        try:
+            return self._check(self._http.request(method, path, **kwargs)).json()
+        except httpx.HTTPError as exc:
+            raise ServerError(f"无法连接服务器: {exc}") from exc
 
     def close(self) -> None:
         self._http.close()
@@ -86,7 +97,8 @@ class ServerClient:
 
     def _check(self, response: httpx.Response) -> httpx.Response:
         if response.status_code >= 400:
-            raise ServerError(f"服务器返回 {response.status_code}: {response.text[:300]}")
+            raise ServerError(f"服务器返回 {response.status_code}: {response.text[:300]}",
+                              status_code=response.status_code)
         return response
 
     def reachable(self) -> bool:
@@ -115,11 +127,17 @@ class ServerClient:
     def push_batch(self, zip_path: Path, meta: dict[str, str]) -> dict[str, Any]:
         try:
             with zip_path.open("rb") as fh:
+                data = dict(meta)
+                files = {"file": (zip_path.name, fh, "application/zip")}
+                if "source_inputs" in data:
+                    files["source_inputs"] = ("source-inputs.json",
+                                              data.pop("source_inputs").encode(),
+                                              "application/json")
                 return self._check(
                     self._http.post(
                         "/sync/push-batch",
-                        files={"file": (zip_path.name, fh, "application/zip")},
-                        data=meta,
+                        files=files,
+                        data=data,
                         timeout=httpx.Timeout(60.0, write=3600.0, read=600.0),
                     )
                 ).json()

@@ -1,0 +1,21 @@
+import { expect, test } from '@playwright/test';
+import { readFile, mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
+test('actual native full CSV/XLSX and local edit have separate contents', async ({ page }) => {
+  await page.goto('http://127.0.0.1:5173/e2e/analysis/export-flow.html');
+  const source = await (await page.request.post('http://127.0.0.1:5173/api/query/devices', { data: { filters: {}, fields: ['qs'], limit: 1 } })).json();
+  const expectedRows = source.manifest.matched_total; expect(expectedRows).toBeGreaterThanOrEqual(3); expect(source.manifest.total_relation).toBe('exact');
+  const workspace = page.waitForEvent('download'); await page.getByRole('button', { name: '下载当前工作区 CSV' }).click();
+  const downloaded = await workspace, text = await readFile((await downloaded.path())!, 'utf8'); expect(text).toContain('999');
+  await page.getByLabel('全部筛选结果（固定版本源数据）').check();
+  await page.getByRole('button', { name: '创建完整源导出' }).dblclick();
+  const csv = page.waitForEvent('download'); await page.getByRole('button', { name: '下载 data.csv', exact: true }).click();
+  const csvFile = await csv, csvText = await readFile((await csvFile.path())!, 'utf8');
+  expect(csvText).not.toContain('999'); expect(csvText.trim().split(/\r?\n/)).toHaveLength(expectedRows + 1);
+  await page.reload(); await page.getByLabel('全部筛选结果（固定版本源数据）').check(); await page.getByRole('combobox').selectOption('xlsx'); await page.getByRole('button', { name: '创建完整源导出' }).click();
+  const xlsx = page.waitForEvent('download'); await page.getByRole('button', { name: /下载 .*xlsx/ }).click();
+  const xlsxFile = await xlsx, dir = await mkdtemp(join(tmpdir(), 'aln-g04-export-')), file = join(dir, 'data.xlsx'); await xlsxFile.saveAs(file);
+  const actual = execFileSync('uv', ['run', '--project', '/Users/jingbozuo/00.PROJECTS/ALN-DATA/aln-data-master/backend', 'python', '-c', 'import sys,json,openpyxl;w=openpyxl.load_workbook(sys.argv[1],read_only=True,data_only=True);print(json.dumps([[s.title,sum(1 for _ in s.iter_rows())] for s in w]))', file], { encoding: 'utf8' }); expect(JSON.parse(actual).filter(([name]: [string, number]) => name.startsWith('data_')).reduce((sum: number, [, rows]: [string, number]) => sum + rows - 1, 0)).toBe(expectedRows);
+});

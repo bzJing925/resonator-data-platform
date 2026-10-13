@@ -29,21 +29,28 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api import (
     batches,
+    comparison,
     desktop_sync,
     devices,
     export,
+    export_jobs,
     files,
     mappings,
     process,
     query,
+    replication,
+    replication_v3,
     surrogate,
     sync,
     system,
     tasks,
+    trash,
     upload,
     web_sync,
 )
 from app.config import get_settings
+from app.services.artifact_readers import ArtifactReaderMiddleware
+from app.services.remote_access import proxy_request
 
 settings = get_settings()
 logging.basicConfig(level=settings.LOG_LEVEL)
@@ -71,6 +78,27 @@ async def lifespan(app: FastAPI):
         from app.workers.local_queue import start_local_worker, stop_local_worker
 
         init_desktop_environment()
+        if settings.ALN_SERVER_MODE:
+            from app.db import SessionLocal
+            from app.services.replica_service import identity
+            with SessionLocal() as db:
+                app.state.replication_server_id = identity(db)
+        from app.workers.local_worker import recover_interrupted_tasks
+
+        recover_interrupted_tasks()
+
+    from app.db import SessionLocal, engine
+    from app.services.replica_service import init_replication
+    from app.services.source_identity import backfill_source_refs
+
+    if not settings.is_desktop:
+        init_replication(engine)
+    with SessionLocal() as db:
+        backfill_source_refs(db)
+        db.commit()
+    from app.services.export_job_service import recover_exports
+    recover_exports(engine)
+    if settings.is_desktop:
         worker_thread = start_local_worker()
 
     watcher_task = None
@@ -78,8 +106,25 @@ async def lifespan(app: FastAPI):
         from app.watch.watcher import watch_uploads
 
         watcher_task = asyncio.create_task(watch_uploads())
+    cleanup_task = None
+    if settings.is_desktop:
+        from app.services.artifact_lifecycle import purge_due
+
+        async def maintain_artifacts():
+            while True:
+                try:
+                    await asyncio.to_thread(purge_due, engine)
+                except Exception:
+                    log.exception("文件维护失败，将在下一周期重试")
+                await asyncio.sleep(settings.CLEANUP_INTERVAL_SECONDS)
+
+        cleanup_task = asyncio.create_task(maintain_artifacts())
     prewarm_task = asyncio.create_task(_prewarm_surrogate())
     yield
+    if cleanup_task is not None:
+        cleanup_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await cleanup_task
     prewarm_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await prewarm_task
@@ -109,6 +154,9 @@ async def log_requests(request: Request, call_next):
     """记录请求耗时与状态码；>500ms 标 warn。"""
     start = time.perf_counter()
     response = await call_next(request)
+    server_id = getattr(app.state, "replication_server_id", None)
+    if server_id:
+        response.headers["X-ALN-Server-ID"] = server_id
     elapsed = (time.perf_counter() - start) * 1000
     level = logging.WARNING if elapsed > 500 else logging.INFO
     log.log(
@@ -122,7 +170,10 @@ async def log_requests(request: Request, call_next):
     return response
 
 
+
+app.middleware("http")(proxy_request)
 app.add_middleware(GZipMiddleware, minimum_size=1024)
+app.add_middleware(ArtifactReaderMiddleware)
 
 # 静态文件目录：优先使用项目根目录 frontend/dist；打包后回退到可执行文件目录
 ROOT_CANDIDATES = [
@@ -161,15 +212,20 @@ app.include_router(system.router, prefix="/api")
 app.include_router(upload.router, prefix="/api")
 app.include_router(tasks.router, prefix="/api")
 app.include_router(batches.router, prefix="/api")
+app.include_router(trash.router, prefix="/api")
 app.include_router(mappings.router, prefix="/api")
 app.include_router(query.router, prefix="/api")
+app.include_router(comparison.router, prefix="/api")
 app.include_router(devices.router, prefix="/api")
 app.include_router(files.router, prefix="/api")
+app.include_router(export_jobs.router, prefix="/api")
 app.include_router(export.router, prefix="/api")
 app.include_router(process.router, prefix="/api")
 app.include_router(surrogate.router, prefix="/api")
 app.include_router(web_sync.router, prefix="/api")
 app.include_router(sync.router, prefix="/api")
+app.include_router(replication.router, prefix="/api")
+app.include_router(replication_v3.router, prefix="/api")
 app.include_router(desktop_sync.router, prefix="/api")
 
 # 静态文件服务 + SPA fallback

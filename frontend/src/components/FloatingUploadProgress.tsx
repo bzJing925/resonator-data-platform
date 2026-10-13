@@ -1,5 +1,7 @@
 import React, { useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import I from './Icons';
+import { taskLabel } from '../tasks/taskStatus';
 import useSSE from '../hooks/useSSE';
 import { useUploadProgress } from '../contexts/UploadProgressContext';
 
@@ -41,7 +43,7 @@ function TaskItem({ task }: TaskItemProps) {
     }
   }, [sse.event, sse.done, sse.status, sse.progress, sse.stage, sse.stageProgress, sse.message, sse.error]);
 
-  const isError = task.status === 'error' || sse.status === 'error';
+  const isError = ['error', 'failed'].includes(task.status ?? '') || sse.status === 'failed';
   const isSuccess = task.status === 'success' || sse.status === 'success';
 
   const stageLabel =
@@ -59,7 +61,7 @@ function TaskItem({ task }: TaskItemProps) {
             className={`badge ${isSuccess ? 'done' : isError ? 'err' : 'run'}`}
             style={{ fontSize: 10 }}
           >
-            {isSuccess ? '成功' : isError ? '失败' : stageLabel || '运行中'}
+            {taskLabel(task.status ?? sse.status)}
           </span>
           <button
             className="btn ghost sm"
@@ -122,6 +124,7 @@ function TaskItem({ task }: TaskItemProps) {
         </div>
       )}
 
+      <Link to={`/tasks/${task.task_id}`}>任务详情与停止/重试</Link>
       {task.message && (
         <div className="mono dim" style={{ fontSize: 10, marginTop: 3, color: isError ? 'var(--fail)' : undefined }}>
           {task.message}
@@ -135,6 +138,7 @@ interface UploadTask {
   task_id: string | number;
   done?: boolean;
   addedAt?: number;
+  group_id?: string;
 }
 
 export default function FloatingUploadProgress() {
@@ -188,6 +192,10 @@ export default function FloatingUploadProgress() {
         </button>
       </div>
       <div style={{ overflow: 'auto' }}>
+        {[...new Set(tasks.map((task: UploadTask) => task.group_id).filter(Boolean))].map((groupId: string) => {
+          const group = tasks.filter((task: UploadTask) => task.group_id === groupId);
+          return <p key={groupId} style={{ padding: '0 10px', fontSize: 12 }}><Link to={`/upload?groupId=${encodeURIComponent(groupId)}`}>上传组详情</Link> · {group.filter((task: UploadTask) => task.done).length}/{group.length} 已结束</p>;
+        })}
         {tasks.map((t: UploadTask) => (
           <TaskItem key={t.task_id} task={t as TaskItemProps['task']} />
         ))}

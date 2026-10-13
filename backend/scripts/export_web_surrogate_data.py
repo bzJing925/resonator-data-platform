@@ -36,6 +36,23 @@ def export_surrogate_webdata(surrogate_dir: Path, out_dir: Path) -> tuple[list[s
             "z_std",
         )
     }
+    from app.services.model_metadata import describe
+    metadata = describe(surrogate_dir, surrogate_dir.parent / 'checkpoints_surrogate',
+                        surrogate_dir.parent / 'eval_out')
+    onnx_metadata = out_dir / 'model_metadata.json'
+    if onnx_metadata.is_file():
+        from app.schemas.model_metadata import ModelMetadata
+        try:
+            published = ModelMetadata.model_validate_json(onnx_metadata.read_text())
+            if published.source_model_digest == metadata.model_digest:
+                metadata = published
+            else:
+                metadata.source_model_digest, metadata.model_digest = metadata.model_digest, None
+        except ValueError:
+            metadata.source_model_digest, metadata.model_digest = metadata.model_digest, None
+    else:
+        metadata.source_model_digest, metadata.model_digest = metadata.model_digest, None
+    surr_meta['metadata'] = metadata.model_dump(mode='json')
     (out_dir / "surr_meta.json").write_text(json.dumps(surr_meta), encoding="utf-8")
 
     import pandas as pd

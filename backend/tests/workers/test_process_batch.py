@@ -5,16 +5,19 @@
 
 from __future__ import annotations
 
-import shutil
+import sys
+import zipfile
 from pathlib import Path
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import select
+from sqlalchemy.orm import sessionmaker
 
-from app.db import SessionLocal, engine
+from app.db import SessionLocal
 from app.models import Batch, Device, Mapping, UploadTask
 from app.workers import celery_app
 from app.workers.process_batch import process_batch_task
+from tests.fixtures.platform_db import DATABASES, platform_database
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -27,39 +30,54 @@ def _eager_mode():
     celery_app.conf.task_eager_propagates = False
 
 
-@pytest.fixture
-def clean_db():
-    """每个测试跑前清理 devices/batches/upload_tasks/mappings。"""
-    with engine.begin() as conn:
-        conn.execute(
-            text(
-                "TRUNCATE devices, batches, upload_tasks, mapping_entries, mappings "
-                "RESTART IDENTITY CASCADE"
-            )
-        )
-    yield
+@pytest.fixture(params=DATABASES)
+def clean_db(request, tmp_path, monkeypatch):
+    """Dedicated SQLite file / PG schema; never truncate a configured database."""
+    from app import db as database
+    from app.workers import compute_batch, extract_batch
+
+    with platform_database(request.param, tmp_path) as (db, batch):
+        mapping = db.get(Mapping, batch.mapping_id)
+        db.delete(batch)
+        db.delete(mapping)
+        db.commit()
+        factory = sessionmaker(bind=db.bind)
+        for module in (sys.modules[__name__], database, compute_batch, extract_batch):
+            monkeypatch.setattr(module, "SessionLocal", factory)
+        monkeypatch.setattr(database, "engine", db.bind)
+        yield
 
 
 @pytest.fixture
-def staged_files(tmp_path: Path, sample_zip: Path, sample_mapping: Path, monkeypatch):
-    """把 fixtures zip / mapping 复制到隔离的 DATA_ROOT，并 monkeypatch settings。"""
+def staged_files(tmp_path: Path, monkeypatch):
+    """Generated algorithm fixture in tmp; does not replace absent customer acceptance."""
+    import pandas as pd
+
+    from tests.fixtures.platform_cases import _algorithm_samples
+
     data_root = tmp_path / "aln-data"
     (data_root / "uploads").mkdir(parents=True)
     (data_root / "files").mkdir(parents=True)
     (data_root / "mappings").mkdir(parents=True)
 
-    # 拷贝 zip
     staged_zip = data_root / "uploads" / "T8901P.01.zip"
-    shutil.copy(sample_zip, staged_zip)
-    # 拷贝 mapping
+    samples = _algorithm_samples(tmp_path)
+    with zipfile.ZipFile(staged_zip, "w") as archive:
+        for index in range(20):
+            archive.writestr(f"{index}_E6-1_X{index}Y0.s1p", samples["dut_s1p"])
     staged_mapping = data_root / "mappings" / "mapping_ELB003.xlsx"
-    shutil.copy(sample_mapping, staged_mapping)
+    pd.DataFrame({0: ["E6-1"], 1: ["EG0 FL0 700&5500"]}).to_excel(
+        staged_mapping,
+        index=False,
+        header=False,
+    )
 
     # patch settings
     from app.config import get_settings
 
     settings = get_settings()
     monkeypatch.setattr(settings, "DATA_ROOT", data_root, raising=False)
+    monkeypatch.setattr("app.workers.cancel.SessionLocal", SessionLocal)
     return staged_zip, staged_mapping
 
 
@@ -127,10 +145,41 @@ def test_failure_path_marks_upload_task_failed(clean_db, staged_files):
         db.close()
 
 
-def test_process_batch_full_pipeline(clean_db, staged_files):
+@pytest.mark.parametrize("fallback", [False, True])
+def test_process_batch_full_pipeline(clean_db, staged_files, monkeypatch, fallback):
     """完整跑：插 mapping → 插 pending batch + upload_task → 触发 task → 校验入库。"""
     staged_zip, staged_mapping = staged_files
     batch_no = "T8901P.01"
+    if fallback:
+        from concurrent.futures import Future
+        from types import SimpleNamespace
+
+        class FailingPool:
+            def __init__(self, **kwargs):
+                self.submitted = 0
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def submit(self, fn, args):
+                self.submitted += 1
+                future = Future()
+                if self.submitted == 1:
+                    future.set_result(fn(args))
+                else:
+                    future.set_exception(RuntimeError("pool terminated after first result"))
+                return future
+
+        monkeypatch.setattr("concurrent.futures.ProcessPoolExecutor", FailingPool)
+        monkeypatch.setattr("concurrent.futures.as_completed", lambda futures: iter(futures))
+        monkeypatch.setattr("app.workers.compute_batch._PARALLEL_MIN_FILES", 1)
+        monkeypatch.setattr(
+            "app.workers.compute_batch.get_algorithm_config",
+            lambda: SimpleNamespace(worker_extract_workers=2),
+        )
 
     db = SessionLocal()
     try:
@@ -199,7 +248,7 @@ def test_process_batch_full_pipeline(clean_db, staged_files):
         from sqlalchemy import func
 
         n = db.scalar(select(func.count(Device.id)).where(Device.batch_id == batches[0].id))
-        assert n is not None and n >= 20
+        assert n == 20  # Pool result + fallback must never double count the first device.
 
         # upload_tasks 最终态
         task = db.get(UploadTask, upload_task_id)

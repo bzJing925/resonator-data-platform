@@ -1,0 +1,109 @@
+{
+  "source_ref": {
+    "origin_id": "10000000-0000-4000-8000-000000000001",
+    "source_batch_id": "20000000-0000-4000-8000-000000000002",
+    "source_device_key": null,
+    "source_revision": null
+  },
+  "processing_event": {
+    "schema_version": 1,
+    "task_id": 7,
+    "run_id": "30000000-0000-4000-8000-000000000003",
+    "event_seq": 1,
+    "status": "pending",
+    "stage": "extract",
+    "progress": {"percent": 0},
+    "summary": {}
+  },
+  "analysis_spec": {
+    "schema_version": 1,
+    "query_spec": {"filters": {}, "fields": ["f_mhz", "qs"], "order_by": "id"},
+    "plot_limit": 20000,
+    "chart": {
+      "type": "scatter",
+      "x_fields": ["f_mhz"],
+      "y_fields": [{"name": "qs", "aggregation": "all"}],
+      "z_field": null,
+      "z_mode": "color",
+      "wafer_z": null,
+      "wafer_facet": null,
+      "show_data_points": true
+    },
+    "units": {"f_mhz": "MHz", "qs": ""},
+    "quality_rule": {
+      "id": "qs-min-v1",
+      "version": 1,
+      "label": "最低 Qs",
+      "predicates": [{"field": "qs", "op": "gte", "value": 20, "unit": ""}],
+      "combine": "and"
+    },
+    "comparison": {
+      "scope": "workspace_snapshot",
+      "a": {
+        "source": null,
+        "dataset_id": "dataset-a",
+        "query_spec": {"filters": {}, "fields": ["f_mhz", "qs"], "order_by": "id"}
+      },
+      "b": {
+        "source": null,
+        "dataset_id": "dataset-b",
+        "query_spec": {"filters": {}, "fields": ["f_mhz", "qs"], "order_by": "id"}
+      },
+      "metrics": ["qs"],
+      "group_fields": [],
+      "common_frequency_ghz": null,
+      "condition_policy": "require_equal",
+      "wafer_metric": null,
+      "unified_color_scale": true
+    }
+  },
+  "result_manifest": {
+    "schema_version": 1,
+    "query_spec": {"filters": {}, "fields": ["f_mhz", "qs"], "order_by": "id"},
+    "source_refs": [
+      {
+        "origin_id": "10000000-0000-4000-8000-000000000001",
+        "source_batch_id": "20000000-0000-4000-8000-000000000002",
+        "source_device_key": null,
+        "source_revision": 1
+      }
+    ],
+    "matched_total": 2,
+    "total_relation": "exact",
+    "returned": 2,
+    "truncated": false,
+    "sampling": {"method": "none", "rate": null},
+    "local_edits": 0,
+    "excluded_rows": 0,
+    "generated_at": "2026-10-09T00:00:00Z",
+    "consistency": "verified"
+  },
+  "capabilities": {
+    "schema_version": 1,
+    "mode": "desktop",
+    "database": "sqlite",
+    "protocols": ["aln-v1"],
+    "features": {
+      "upload_precheck": false,
+      "processing_reports": false,
+      "projects": false,
+      "full_export_csv": false,
+      "full_export_xlsx": false,
+      "batch_compare": false,
+      "trash": false,
+      "replication_v3": false,
+      "remote_delete": false,
+      "credential_storage": false
+    },
+    "limits": {"query_rows": 20000}
+  },
+  "sync_status": {
+    "target": "server",
+    "state": "local_only",
+    "confirmed_revision": null,
+    "pending_revision": null,
+    "last_success_at": null,
+    "error_code": null,
+    "retryable": false
+  }
+}

@@ -112,7 +112,7 @@ def test_bulk_insert_calls_orm_below_threshold(monkeypatch: pytest.MonkeyPatch) 
     bulk_insert_devices(db, rows)
     assert copy_called is False
     db.bulk_insert_mappings.assert_called_once_with(Device, rows)
-    db.commit.assert_called_once()
+    db.commit.assert_not_called()
 
 
 # ── 空输入 ───────────────────────────────────────────────────────────────
@@ -141,7 +141,7 @@ def test_copy_fallback_on_exception(monkeypatch: pytest.MonkeyPatch) -> None:
     bulk_insert_devices(db, rows)
     # 降级后调用 ORM
     db.bulk_insert_mappings.assert_called_once_with(Device, rows)
-    db.commit.assert_called_once()
+    db.commit.assert_not_called()
 
 
 # ── copy_insert_devices 直接测试（mock psycopg cursor）──────────────────

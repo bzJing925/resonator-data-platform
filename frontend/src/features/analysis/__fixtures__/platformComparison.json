@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "unit": "1",
+  "simple": {"a": [1, 2, 3, null], "b": [1, 2, 3, null], "valid_n": 3, "missing_n": 1, "mean": 2, "median": 2, "p25": 1.5, "p75": 2.5, "std": 1},
+  "platform": {"a": [10, 20, null, 40], "b": [20, 30, 40, null], "a_mean": 23.333333333333332, "b_mean": 30, "delta": 6.666666666666668, "a_p25": 15, "a_median": 20, "a_p75": 30}
+}

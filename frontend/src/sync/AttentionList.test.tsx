@@ -1,0 +1,22 @@
+import React from 'react';
+import { expect, it, vi } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
+import { sourceA } from '../features/analysis/__fixtures__/platformFixtures';
+const service = vi.hoisted(() => ({ listTasks: vi.fn(), getTask: vi.fn(), getSurrogateStatus: vi.fn(), get: vi.fn() }));
+vi.mock('../api/endpoints', () => ({ listTasks: service.listTasks, getTask: service.getTask, getSurrogateStatus: service.getSurrogateStatus }));
+vi.mock('../api/client', () => ({ default: { get: service.get } }));
+vi.mock('../features/analysis/workspace', () => ({ useAnalysisWorkspace: () => ({ datasets: [{ manifest: { source_refs: [{ ...sourceA, source_device_key: null }] } }] }) }));
+import AttentionList from './AttentionList';
+it('independent failed catalog leaves actual task and quality links; source 404 preserves snapshot', async () => {
+  service.listTasks.mockResolvedValue([{ id: 11, status: 'failed', batch_no: '同名批次' }]);
+  service.getTask.mockResolvedValue({ id: 11, quality_status: 'partial', summary: { published_count: 1, expected_count: 2 } });
+  service.get.mockRejectedValue({ response: { status: 404 } });
+  render(<MemoryRouter><AttentionList /></MemoryRouter>);
+  expect((await screen.findByRole('link', { name: /TASK_FAILED/ })).getAttribute('href')).toBe('/tasks/11');
+  expect((await screen.findByRole('link', { name: /QUALITY_PARTIAL/ })).getAttribute('href')).toBe('/tasks/11');
+  expect(await screen.findByText(/未提供\/加载失败/)).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: /打开源批次/ }));
+  expect(await screen.findByText('源已不存在；项目快照保留')).toBeTruthy();
+  expect(service.get.mock.calls.at(-1)[0]).toBe(`/sources/batches/${sourceA.origin_id}/${sourceA.source_batch_id}/resolve`);
+});

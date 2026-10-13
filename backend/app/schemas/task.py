@@ -24,6 +24,9 @@ class TaskDetail(BaseModel):
     error_msg: str | None
     raw_zip_deleted: bool | None = None
     kind: str | None = None
+    run_id: str | None = None
+    quality_status: str = "unknown"
+    summary: dict = {}
 
 
 class TaskListItem(BaseModel):

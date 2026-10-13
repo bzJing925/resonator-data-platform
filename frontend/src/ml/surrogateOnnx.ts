@@ -3,6 +3,7 @@
  *  GitHub Pages 无 COOP/COEP → SharedArrayBuffer 不可用 → 强制单线程 wasm。
  *  测试可注入 _loaders 覆盖数据加载（vitest node 环境从磁盘读）。 */
 
+import { describeModel, type ModelDescription } from '../features/analysis/report/modelDescription';
 import { deterministicSamplePositions } from './sampling';
 import { baselineLookup } from './baseline';
 import { cubicSplineInterpolate } from './spline';
@@ -35,6 +36,7 @@ export function __setLoadersForTest(l: Loaders | null): void {
 }
 
 interface WebData {
+  metadata: unknown;
   freq: number[];
   k: number;
   xMean: number[];
@@ -74,6 +76,7 @@ async function load(): Promise<WebData> {
     throw new Error('baseline.json 频率网格与 surr_meta 不一致，请重新导出 webdata');
   }
   return {
+    metadata: meta.metadata ?? null,
     freq,
     k: meta.k,
     xMean: meta.x_mean,
@@ -97,6 +100,7 @@ function getData(): Promise<WebData> {
 }
 
 export interface OnnxPredictResult {
+  metadata: ModelDescription;
   params: Record<string, number>;
   freq_ghz: number[];
   z_db: number[];
@@ -168,6 +172,7 @@ export async function surrogatePredictOnnx(
     params[c] = paramsArr[i];
   });
   return {
+    metadata: describeModel(d.metadata, { eg, fl, ag, area, pf }),
     params,
     freq_ghz: d.freq,
     z_db: zDb,

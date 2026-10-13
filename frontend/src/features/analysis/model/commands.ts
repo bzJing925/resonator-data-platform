@@ -1,3 +1,5 @@
+import type { AnalysisSpec } from '../../../types/platformContracts';
+import { jsonCell, type LocalEdit } from './provenance';
 import {
   addDatasetToRegistry,
   buildWorksheetColumns,
@@ -14,6 +16,7 @@ import {
 import {
   createSelectionState,
   removeRowsFromSelection,
+  removeDatasetSelection,
   selectRows,
   type ActiveSurface,
   type SelectionMode,
@@ -42,6 +45,7 @@ export function pointStyleMetricKey(metric: string) {
 }
 
 export interface WorkspacePresent {
+  spec?: AnalysisSpec;
   registry: DatasetRegistry;
   activeTabId: string;
   selection: SelectionState;
@@ -82,7 +86,8 @@ export type AnalysisCommand =
     }
   | { type: 'batch'; label: string; commands: AnalysisCommand[] };
 
-const IDENTITY_FIELDS = new Set(['rowId', '__rowId', 'datasetId']);
+const IDENTITY_FIELDS = new Set(['rowId', '__rowId', 'datasetId', '_source_ref',
+  'origin_id', 'source_batch_id', 'source_device_key', 'source_revision']);
 
 function registryWithChartDataset(registry: DatasetRegistry, datasetId: DatasetId | null) {
   const chartPage = registry.chartPages[CHART_PAGE_ID];
@@ -145,9 +150,24 @@ function executeUpdateRows(present: WorkspacePresent, command: Extract<AnalysisC
     return { ...row, ...changes };
   });
   if (!changed) return present;
+  const newEdits: LocalEdit[] = [];
+  rows.forEach((row, index) => {
+    const before = dataset.rows[index];
+    if (row === before) return;
+    Object.keys(row).forEach((column) => {
+      if (!IDENTITY_FIELDS.has(column) && row[column] !== before[column]) {
+        newEdits.push({ datasetId: dataset.id, rowId: row.rowId, column,
+          before: jsonCell(before[column]), after: jsonCell(row[column]),
+          source: dataset.provenance[row.rowId] ?? null });
+      }
+    });
+  });
   const nextDataset = {
     ...dataset,
     rows,
+    edits: [...dataset.edits, ...newEdits],
+    manifest: dataset.manifest ? { ...dataset.manifest,
+      local_edits: dataset.edits.length + newEdits.length } : null,
     columns: addsColumn ? buildWorksheetColumns(rows, dataset.fieldMap) : dataset.columns,
     revision: dataset.revision + 1,
   };
@@ -165,7 +185,13 @@ function executeDeleteRows(present: WorkspacePresent, command: Extract<AnalysisC
   const removed = new Set(command.rowIds);
   const rows = dataset.rows.filter((row) => !removed.has(row.rowId));
   if (rows.length === dataset.rows.length) return present;
-  const nextDataset = { ...dataset, rows, revision: dataset.revision + 1 };
+  const exclusions = [...dataset.exclusions, ...dataset.rows.filter((row) => removed.has(row.rowId))
+    .map((row) => ({ datasetId: dataset.id, rowId: row.rowId,
+      source: dataset.provenance[row.rowId] ?? null, reason: '用户从工作表排除',
+      originalRow: Object.fromEntries(Object.entries(row).map(([key, value]) => [key, jsonCell(value)])) }))];
+  const nextDataset = { ...dataset, rows, revision: dataset.revision + 1, exclusions,
+    manifest: dataset.manifest ? { ...dataset.manifest, returned: rows.length,
+      excluded_rows: exclusions.length } : null };
   const datasetStyles = present.pointStyles[dataset.id];
   let pointStyles = present.pointStyles;
   if (datasetStyles && [...removed].some((rowId) => datasetStyles[rowId])) {
@@ -177,8 +203,8 @@ function executeDeleteRows(present: WorkspacePresent, command: Extract<AnalysisC
   return {
     ...present,
     registry: updateDatasetInRegistry(present.registry, nextDataset),
-    selection: present.selection.datasetId === dataset.id
-      ? removeRowsFromSelection(present.selection, removed)
+    selection: present.selection.byDataset || present.selection.datasetId === dataset.id
+      ? removeRowsFromSelection(present.selection, removed, dataset.id)
       : present.selection,
     pointStyles,
   };
@@ -229,9 +255,7 @@ function executeCloseDataset(present: WorkspacePresent, command: Extract<Analysi
     ...present,
     registry,
     activeTabId: present.activeTabId === command.datasetId ? CHART_PAGE_ID : present.activeTabId,
-    selection: present.selection.datasetId === command.datasetId
-      ? { ...createSelectionState(), activeSurface: 'chart' }
-      : present.selection,
+    selection: removeDatasetSelection(present.selection, command.datasetId),
     pointStyles,
   };
 }

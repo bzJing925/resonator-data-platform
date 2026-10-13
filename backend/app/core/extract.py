@@ -716,6 +716,7 @@ def extract_resonator_params(
         "x": parsed.x,
         "y": parsed.y,
         "mark": mark,
+        "matched": entry is not None,
         "eg": eg,
         "fl": fl,
         "ag": ag,

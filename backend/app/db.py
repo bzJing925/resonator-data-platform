@@ -6,6 +6,7 @@ from collections.abc import Generator
 from typing import Any
 
 from sqlalchemy import create_engine, event
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import get_settings
@@ -92,7 +93,12 @@ else:
         pool_recycle=_settings.DB_POOL_RECYCLE,
         pool_timeout=_settings.DB_POOL_TIMEOUT,
     )
-    _engine_kwargs["connect_args"] = {"options": "-c client_encoding=utf8"}
+    # Preserve URL options (including a caller's isolated search_path).
+    # connect_args overrides the URL's options instead of merging them.
+    _database_options = make_url(_settings.resolved_database_url).query.get("options", "")
+    _engine_kwargs["connect_args"] = {
+        "options": f"{_database_options} -c client_encoding=utf8".strip()
+    }
 
 engine = create_engine(_settings.resolved_database_url, **_engine_kwargs)
 if _settings.resolved_database_url.startswith("sqlite"):

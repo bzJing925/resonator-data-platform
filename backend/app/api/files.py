@@ -39,6 +39,7 @@ from app.schemas.file import (
     FileTreeReorderRequest,
     SplitS2PRequest,
 )
+from app.services.batch_scope import get_active_batch
 from app.services.batch_stats_service import refresh_mv_batch_stats
 from app.services.compute_service import (
     ComputeServiceError,
@@ -52,6 +53,7 @@ from app.services.file_tree_service import (
 )
 
 logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/files", tags=["files"])
 
 
@@ -129,11 +131,11 @@ def list_batch_files(
     include_snp: Annotated[bool, Query()] = False,
 ) -> list[BatchFileItem]:
     """列出批次解压后的 snp 文件；默认仅 .s1p，include_snp=true 时包含 .s2p/.snp。"""
-    batch = db.scalar(select(Batch).where(Batch.batch_no == batch_no))
+    batch = get_active_batch(db, batch_no)
     if batch is None:
         raise HTTPException(status_code=404, detail=f"批次 {batch_no} 不存在")
 
-    base_dir = batch_files_dir(batch_no)
+    base_dir = batch_files_dir(batch)
     if not base_dir.exists():
         return []
 
@@ -180,11 +182,11 @@ def list_batch_files(
 @router.post("/split-s2p")
 def split_s2p_files(db: DbSession, body: SplitS2PRequest) -> Response:
     """把选中的 .s2p 文件拆成 S11/S22 两个 .s1p 并流式打包返回。"""
-    batch = db.scalar(select(Batch).where(Batch.batch_no == body.batch_no))
+    batch = get_active_batch(db, body.batch_no)
     if batch is None:
         raise HTTPException(status_code=404, detail=f"批次 {body.batch_no} 不存在")
 
-    base_dir = batch_files_dir(body.batch_no)
+    base_dir = batch_files_dir(batch)
     if not base_dir.exists():
         raise HTTPException(status_code=404, detail="批次解压目录不存在")
 
@@ -239,11 +241,11 @@ def split_s2p_files(db: DbSession, body: SplitS2PRequest) -> Response:
 @router.post("/download-zip")
 def download_files_zip(db: DbSession, body: DownloadZipRequest) -> Response:
     """把选中的 snp 文件打包成 zip 流式下载；relpaths 为空时下载该批次全部文件。"""
-    batch = db.scalar(select(Batch).where(Batch.batch_no == body.batch_no))
+    batch = get_active_batch(db, body.batch_no)
     if batch is None:
         raise HTTPException(status_code=404, detail=f"批次 {body.batch_no} 不存在")
 
-    base_dir = batch_files_dir(body.batch_no)
+    base_dir = batch_files_dir(batch)
     if not base_dir.exists():
         raise HTTPException(status_code=404, detail="批次解压目录不存在")
 
@@ -297,11 +299,11 @@ def get_file_curve(
     if param not in PARAM_CHOICES:
         raise HTTPException(status_code=400, detail=f"param 必须是 {','.join(PARAM_CHOICES)} 之一")
 
-    batch = db.scalar(select(Batch).where(Batch.batch_no == batch_no))
+    batch = get_active_batch(db, batch_no)
     if batch is None:
         raise HTTPException(status_code=404, detail=f"批次 {batch_no} 不存在")
 
-    base_dir = batch_files_dir(batch_no)
+    base_dir = batch_files_dir(batch)
     target_path = _find_actual_path(base_dir, relpath)
 
     try:
@@ -329,11 +331,11 @@ def get_file_curve(
 @router.post("/compute", response_model=ComputeFileResponse)
 def compute_single_file(db: DbSession, body: ComputeFileRequest) -> ComputeFileResponse:
     """对指定批次内的单个 .s1p 文件执行指标计算，并写入/更新 devices 表。"""
-    batch = db.scalar(select(Batch).where(Batch.batch_no == body.batch_no))
+    batch = get_active_batch(db, body.batch_no)
     if batch is None:
         raise HTTPException(status_code=404, detail=f"批次 {body.batch_no} 不存在")
 
-    base_dir = batch_files_dir(body.batch_no)
+    base_dir = batch_files_dir(batch)
     target_path = _find_actual_path(base_dir, body.relpath)
 
     try:
@@ -352,6 +354,7 @@ def compute_single_file(db: DbSession, body: ComputeFileRequest) -> ComputeFileR
         raise HTTPException(status_code=422, detail=f"指标计算失败: {exc}") from exc
 
     sync_batch_device_count(db, batch.id)
+    db.commit()
     refresh_mv_batch_stats(db)
 
     metrics = {col: getattr(device, col) for col in DEVICE_COLUMNS if col != "batch_id"}
@@ -369,7 +372,7 @@ def compute_single_file(db: DbSession, body: ComputeFileRequest) -> ComputeFileR
 
 
 def _get_batch_or_404(db: DbSession, batch_no: str) -> Batch:
-    batch = db.scalar(select(Batch).where(Batch.batch_no == batch_no))
+    batch = get_active_batch(db, batch_no)
     if batch is None:
         raise HTTPException(status_code=404, detail=f"批次 {batch_no} 不存在")
     return batch
@@ -462,7 +465,7 @@ def list_file_tree(
 ) -> list[FileNodeItem]:
     """列出虚拟文件树某个父节点下的非删除子节点。首次访问会自动从磁盘初始化树。"""
     batch = _get_batch_or_404(db, batch_no)
-    build_file_tree_from_disk(db, batch)
+    build_file_tree_from_disk(db, batch, commit=True)
 
     if parent_id is None:
         root = get_or_create_root_node(db, batch)
@@ -487,7 +490,7 @@ def list_file_tree(
         .order_by(FileNode.sort_order, FileNode.name)
     ).all()
 
-    base_dir = batch_files_dir(batch_no)
+    base_dir = batch_files_dir(batch)
     device_lookup = _device_lookup_for_batch(db, batch.id)
     return [_node_to_item(c, base_dir, device_lookup) for c in children]
 
@@ -552,7 +555,7 @@ def reorder_file_tree_nodes(db: DbSession, body: FileTreeReorderRequest) -> dict
 def mkdir_file_tree(db: DbSession, body: FileTreeMkdirRequest) -> FileNodeItem:
     """在指定父节点下新建虚拟文件夹。"""
     batch = _get_batch_or_404(db, body.batch_no)
-    build_file_tree_from_disk(db, batch)
+    build_file_tree_from_disk(db, batch, commit=True)
 
     if body.parent_id is None:
         root = get_or_create_root_node(db, batch)
@@ -605,7 +608,7 @@ def mkdir_file_tree(db: DbSession, body: FileTreeMkdirRequest) -> FileNodeItem:
     db.commit()
     db.refresh(folder)
 
-    base_dir = batch_files_dir(batch.batch_no)
+    base_dir = batch_files_dir(batch)
     device_lookup = _device_lookup_for_batch(db, batch.id)
     return _node_to_item(folder, base_dir, device_lookup)
 
@@ -623,7 +626,7 @@ def rename_file_tree_node(db: DbSession, body: FileTreeRenameRequest) -> FileNod
     db.commit()
     db.refresh(node)
 
-    base_dir = batch_files_dir(node.batch.batch_no)
+    base_dir = batch_files_dir(node.batch)
     device_lookup = _device_lookup_for_batch(db, node.batch_id)
     return _node_to_item(node, base_dir, device_lookup)
 
@@ -658,18 +661,18 @@ def delete_file_tree_nodes(db: DbSession, body: FileTreeDeleteRequest) -> dict[s
 def download_file_tree_nodes_zip(db: DbSession, body: DownloadZipByNodesRequest) -> Response:
     """按虚拟节点 ID 打包下载文件；folder/zip 节点会自动展开其下所有 file 节点。"""
     batch = _get_batch_or_404(db, body.batch_no)
-    build_file_tree_from_disk(db, batch)
+    build_file_tree_from_disk(db, batch, commit=True)
 
     relpaths = _collect_file_relpaths_from_nodes(db, batch.id, body.node_ids)
     if not relpaths:
         raise HTTPException(status_code=404, detail="没有可下载的文件")
 
-    return _stream_zip_from_relpaths(batch.batch_no, relpaths)
+    return _stream_zip_from_relpaths(batch, relpaths)
 
 
-def _stream_zip_from_relpaths(batch_no: str, relpaths: list[str]) -> StreamingResponse:
+def _stream_zip_from_relpaths(batch: Batch, relpaths: list[str]) -> StreamingResponse:
     """根据相对路径列表流式打包。"""
-    base_dir = batch_files_dir(batch_no)
+    base_dir = batch_files_dir(batch)
     selected: list[tuple[Path, str]] = []
     for relpath in relpaths:
         target = _find_actual_path(base_dir, relpath)
@@ -685,7 +688,7 @@ def _stream_zip_from_relpaths(batch_no: str, relpaths: list[str]) -> StreamingRe
     for target, arcname in selected:
         zs.add_path(str(target), arcname=arcname, recurse=False)
 
-    filename = f"{batch_no}_files.zip"
+    filename = f"{batch.batch_no}_files.zip"
     return StreamingResponse(
         zs,
         media_type="application/zip",

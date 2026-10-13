@@ -326,6 +326,7 @@ class MappingEntry(Base):
 | zp2_ohm | double precision | NULL | |
 | zs2_ohm | double precision | NULL | |
 | deembedded | boolean | NOT NULL DEFAULT false | 该行是否经过去嵌（与 batches.deembedded 一致，冗余便于跨批次过滤） |
+| matched | boolean | NOT NULL DEFAULT true | 文件名 mark 是否命中对照表；false 入库但不参与分析查询/统计/导出，阻抗曲线仍可查看 |
 | s_param_path | text | | 该器件 S1P 文件相对路径，曲线现读现画用 |
 
 DDL（节选，列已按上表完整列出）：

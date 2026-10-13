@@ -11,8 +11,24 @@ from sqlalchemy import func, select, text
 from app.api.deps import DbSession
 from app.config import get_settings
 from app.models import Batch, Device, Mapping, UploadTask
+from app.services.batch_scope import active_batch_clause
 
 router = APIRouter(tags=["system"])
+
+
+@router.get("/capabilities")
+def capabilities(db: DbSession):
+    from app.services.capabilities import describe
+    return describe(db)
+
+
+@router.get("/batches/{batch_no}/sync-status")
+def sync_status(batch_no: str, db: DbSession):
+    from app.services.batch_scope import get_active_batch
+    from app.services.sync_status import refresh_web, statuses
+    batch = get_active_batch(db, batch_no)
+    refresh_web(db, batch)
+    return statuses(db, batch)
 
 
 @router.get("/health")
@@ -59,8 +75,12 @@ def health(db: DbSession) -> dict:
 def stats(db: DbSession) -> dict:
     settings = get_settings()
 
-    batches = db.scalar(select(func.count()).select_from(Batch)) or 0
-    devices = db.scalar(select(func.count()).select_from(Device)) or 0
+    batches = db.scalar(
+        select(func.count()).select_from(Batch).where(active_batch_clause())
+    ) or 0
+    devices = db.scalar(
+        select(func.count()).select_from(Device).join(Batch).where(active_batch_clause())
+    ) or 0
     mappings = db.scalar(select(func.count()).select_from(Mapping)) or 0
     tasks_pending = (
         db.scalar(

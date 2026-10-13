@@ -29,3 +29,14 @@ describe('analysis selection model', () => {
     expect(cleared.anchorRowId).toBeNull();
   });
 });
+
+it('explicit addAcross selects both cohorts; ordinary add still replaces a different dataset', () => {
+  const first = selectRows(createSelectionState(), { datasetId: 'a', rowIds: ['a1'] });
+  const across = selectRows(first, { datasetId: 'b', rowIds: ['b1'], mode: 'addAcross' });
+  expect(across.byDataset?.a).toEqual(new Set(['a1']));
+  expect(across.byDataset?.b).toEqual(new Set(['b1']));
+  expect(across.rowIds).toEqual(new Set(['a1', 'b1']));
+  const ordinary = selectRows(across, { datasetId: 'a', rowIds: ['a2'], mode: 'add' });
+  expect(ordinary.rowIds).toEqual(new Set(['a2']));
+  expect(ordinary.byDataset).toBeUndefined();
+});

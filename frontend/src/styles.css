@@ -764,6 +764,18 @@ textarea {
   min-width: 38px;
   padding-inline: 7px;
 }
+.analysis-toolbar { overflow: hidden; }
+.analysis-toolbar .group { flex-shrink: 0; }
+.analysis-toolbar-actions { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1; overflow-x: auto; }
+.analysis-toolbar-actions > .btn { flex-shrink: 0; }
+.analysis-workspace .chart-head { flex-wrap: wrap; height: auto; min-height: 36px; padding-block: 6px; }
+.analysis-workspace .chart-head .title { max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.analysis-workspace .chart-head .right { flex-wrap: wrap; }
+.analysis-y-range { margin-top: 8px; }
+.analysis-y-range-inputs { display: flex; align-items: center; gap: 4px; }
+.analysis-y-range-inputs .input { min-width: 0; width: 0; flex: 1; }
+.analysis-y-range-inputs .btn { flex-shrink: 0; }
+.analysis-project-tools { display: flex; flex-wrap: wrap; gap: 6px; }
 .chart-body {
   flex: 1;
   position: relative;
@@ -1998,3 +2010,44 @@ textarea {
   padding: 12px 16px;
   border-top: 1px solid var(--border);
 }
+
+/* Native controls and new workflows share the established dark application theme. */
+:root { color-scheme: dark; }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+input[type="checkbox"], input[type="radio"] { accent-color: var(--primary); }
+.workflow-page { height: 100%; overflow: auto; }
+.workflow-page h1 { margin: 0 0 16px; color: var(--fg-1); font-size: 18px; }
+.workflow-page h2 { margin: 24px 0 10px; font-size: 14px; color: var(--fg-1); }
+.workflow-panel h3 { margin: 0 0 12px; font-size: 13px; color: var(--fg-1); }
+.workflow-panel h4 { margin: 0 0 8px; color: var(--fg-1); }
+.workflow-panel p, .workflow-page p { margin: 8px 0; }
+.workflow-panel .btn, .workflow-page .btn { margin: 4px 6px 4px 0; }
+.workflow-panel label, .workflow-page label { display: inline-flex; align-items: center; gap: 6px; margin: 4px 12px 4px 0; }
+.workflow-panel .group { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.workflow-panel fieldset { border: 1px solid var(--border); border-radius: var(--r-2); margin: 10px 0; }
+.workflow-panel a, .workflow-page a { color: var(--primary); }
+.workflow-entry { padding: 14px 0; border-top: 1px solid var(--border); }
+.technical-details { margin: 8px 0; color: var(--fg-3); }
+.technical-details summary { cursor: pointer; font-size: 12px; }
+.technical-details pre { max-height: 240px; overflow: auto; padding: 10px; background: var(--bg-panel-2); border: 1px solid var(--border); border-radius: var(--r-2); font-size: 11px; color: var(--fg-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.project-save-status { font-size: 11px; color: var(--fg-3); }
+.modal-backdrop { position: fixed; inset: 0; z-index: 1100; background: var(--bg-overlay); display: flex; align-items: center; justify-content: center; }
+.modal-backdrop .modal { max-height: 90vh; overflow: auto; max-width: calc(100vw - 32px); }
+.chart-card.workflow-panel { padding: 16px; }
+.comparison-settings { padding: 8px 12px; border-bottom: 1px solid var(--border); color: var(--fg-3); }
+.comparison-settings > summary { cursor: pointer; font-size: 12px; }
+.comparison-settings .workflow-panel { margin-top: 12px; color: var(--fg-2); }
+.workflow-page { display: flex; flex-direction: column; }
+.workflow-page .toolbar { flex-shrink: 0; }
+.workflow-page .toolbar h1 { margin: 0; font-size: 13px; }
+.workflow-content { padding: 16px 20px; overflow: auto; }
+.workflow-content > h2:first-child { margin-top: 0; }
+.workflow-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.workflow-panel > .btn { align-self: flex-start; }
+
+/* Upload precheck follows the existing dark workflow panel. */
+.precheck-progress { margin: 10px 0 14px; }
+.precheck-progress p { margin: 0 0 8px; overflow-wrap: anywhere; }
+.precheck-progress-track { height: 6px; overflow: hidden; border-radius: 3px; background: var(--border); }
+.precheck-progress-fill { height: 100%; background: var(--primary); transition: width 180ms ease; }
+@media (prefers-reduced-motion: reduce) { .precheck-progress-fill { transition: none; } }

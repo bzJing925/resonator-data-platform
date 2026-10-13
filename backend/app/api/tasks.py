@@ -3,24 +3,26 @@
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 import json
 import logging
 import time
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 import redis.asyncio as aioredis
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sse_starlette.sse import EventSourceResponse
 
 from app.api.deps import DbSession
 from app.config import get_settings
-from app.db import get_db
-from app.models import Batch, UploadTask
+from app.models import Batch, ProcessingItem, ProcessingRun, QualityIssue, UploadTask
 from app.schemas.task import TaskDetail, TaskListItem
-from app.services.cleanup_service import delete_batch_and_files
 from app.workers.celery_app import celery_app
 from app.workers.local_queue import get_local_queue
 
@@ -52,71 +54,223 @@ def get_task(task_id: int, db: DbSession) -> TaskDetail:
         raw_zip_deleted = False
     data = TaskDetail.model_validate(task)
     data.raw_zip_deleted = raw_zip_deleted
+    run = db.scalar(select(ProcessingRun).where(ProcessingRun.task_id == task_id))
+    if run:
+        data.run_id, data.quality_status, data.summary = (
+            run.id,
+            run.quality_status,
+            run.summary_json,
+        )
     return data
+
+
+def _report_run(db, task_id):
+    if db.get(UploadTask, task_id) is None:
+        raise HTTPException(404, detail="任务不存在")
+    return db.scalar(select(ProcessingRun).where(ProcessingRun.task_id == task_id))
+
+
+@router.get("/{task_id}/retry-options")
+def get_retry_options(task_id: int, db: DbSession, offset: int = 0, limit: int = 100):
+    from app.services.processing_retry import retry_items_query
+
+    run = _report_run(db, task_id)
+    revision = None if run is None else run.summary_json.get(
+        "published_source_revision", run.base_source_revision
+    )
+    parent = db.get(ProcessingRun, run.retry_of_run_id) if run and run.retry_of_run_id else None
+    offset, limit = max(0, offset), max(1, min(limit, 500))
+    rows = []
+    if run and revision is not None and run.status in {"success", "failed", "cancelled"}:
+        rows = db.scalars(
+            retry_items_query(run, require_identity=True)
+            .order_by(ProcessingItem.id).offset(offset).limit(limit + 1)
+        ).all()
+    return {
+        "task_id": task_id,
+        "run_id": run.id if run else None,
+        "expected_source_revision": revision,
+        "retry_of_task_id": parent.task_id if parent else None,
+        "items": [{
+            "id": item.id, "unit_kind": item.unit_kind,
+            "source_member": item.source_member, "port": item.port,
+            "status": item.status, "error_code": item.error_code,
+        } for item in rows[:limit]],
+        "next_offset": offset + limit if len(rows) > limit else None,
+    }
+
+
+@router.get("/{task_id}/report")
+def get_task_report(task_id: int, db: DbSession, offset: int = 0, limit: int = 100):
+    run = _report_run(db, task_id)
+    if run is None:
+        return {
+            "run_id": None,
+            "quality_status": "unknown",
+            "summary": {},
+            "issues": [],
+            "next_offset": None,
+        }
+    offset, limit = max(0, offset), max(1, min(limit, 500))
+    rows = db.scalars(
+        select(QualityIssue)
+        .where(QualityIssue.run_id == run.id)
+        .order_by(QualityIssue.created_at, QualityIssue.id)
+        .offset(offset)
+        .limit(limit + 1)
+    ).all()
+    return {
+        "run_id": run.id,
+        "quality_status": run.quality_status,
+        "summary": run.summary_json,
+        "issues": [
+            {
+                "id": r.id,
+                "item_id": r.item_id,
+                "severity": r.severity,
+                "code": r.code,
+                "message": r.message,
+                "details": r.details_json,
+            }
+            for r in rows[:limit]
+        ],
+        "next_offset": offset + limit if len(rows) > limit else None,
+    }
+
+
+@router.get("/{task_id}/issues.csv")
+def download_task_issues(task_id: int, db: DbSession):
+    run = _report_run(db, task_id)
+    run_id = run.id if run else None
+    engine = db.get_bind()
+
+    def chunks():
+        from sqlalchemy.orm import Session
+
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+        writer.writerow(["id", "item_id", "severity", "code", "message", "details"])
+        yield buffer.getvalue()
+        buffer.seek(0)
+        buffer.truncate(0)
+        with Session(engine) as reader:
+            rows = reader.scalars(
+                select(QualityIssue)
+                .where(QualityIssue.run_id == run_id)
+                .order_by(QualityIssue.created_at, QualityIssue.id)
+                .execution_options(yield_per=1000)
+            )
+            for row in rows:
+                # Neutralize spreadsheet formula injection in exported untrusted text.
+                values = [
+                    row.id,
+                    row.item_id or "",
+                    row.severity,
+                    row.code,
+                    row.message,
+                    json.dumps(row.details_json, ensure_ascii=False),
+                ]
+                writer.writerow(
+                    ["'" + v if v.startswith(("=", "+", "-", "@")) else v for v in values]
+                )
+                yield buffer.getvalue()
+                buffer.seek(0)
+                buffer.truncate(0)
+
+    return StreamingResponse(
+        chunks(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="task-{task_id}-issues.csv"'},
+    )
 
 
 @router.post("/{task_id}/cancel", response_model=TaskDetail)
 def cancel_task(task_id: int, db: DbSession) -> TaskDetail:
-    task = db.get(UploadTask, task_id)
-    if task is None:
-        raise HTTPException(status_code=404, detail=f"任务 {task_id} 不存在")
-    if task.status == "cancelled":
-        data = TaskDetail.model_validate(task)
-        # 重处理任务不删文件；upload 任务幂等返回时认为已清理
-        data.raw_zip_deleted = task.kind == "upload"
-        return data
-    if task.status not in ("pending", "running"):
-        raise HTTPException(status_code=409, detail="任务已结束，无法取消")
+    from app.services.processing_cancel import confirm_stopped, request_cancellation
+    from app.services.processing_run import RunConflictError
 
-    task.cancelled_at = datetime.now(UTC)
-    db.commit()
-
-    settings = get_settings()
-    cleanup_ok = True
-    revoke_ok = True
-    files_deleted = False
+    engine = db.get_bind()
+    db.rollback()
     try:
-        if settings.is_desktop:
-            get_local_queue().request_cancel(task_id)
-        elif task.celery_task_id:
-            celery_app.control.revoke(
-                task.celery_task_id, terminate=task.status == "running"
-            )
-    except Exception:
-        logger.exception("取消任务 %s 时撤销 worker 失败", task_id)
-        revoke_ok = False
+        ticket = request_cancellation(engine, task_id)
+    except RunConflictError as exc:
+        raise HTTPException(
+            404 if exc.code == "TASK_MISSING" else 409,
+            detail={"code": exc.code, "message": str(exc), "retryable": False, "context": {}},
+        ) from exc
+    if ticket["status"] != "cancelled":
+        try:
+            if get_settings().is_desktop:
+                removed = get_local_queue().request_cancel(task_id)
+                if removed and (
+                    ticket["dispatch_phase"] == "queued"
+                    or (ticket["run_id"] is None and ticket["prior_status"] == "pending")
+                ):
+                    confirm_stopped(
+                        engine, task_id, run_id=ticket["run_id"], lease_token=ticket["lease_token"]
+                    )
+            else:
+                ids = {
+                    value
+                    for value in ticket["executor_ids"].values()
+                    if isinstance(value, str) and not value.startswith("local-")
+                }
+                if ticket["celery_task_id"]:
+                    ids.add(ticket["celery_task_id"])
+                for executor_id in ids:
+                    celery_app.control.revoke(executor_id, terminate=False)
+        except Exception:
+            from app.services.processing_cancel import record_stop_unconfirmed
 
-    try:
-        # 只有原始上传任务才删除批次与文件；重处理任务取消时不应误删已有数据
-        if task.batch_no and task.kind == "upload":
-            delete_batch_and_files(db, task.batch_no)
-            files_deleted = True
-    except Exception:
-        logger.exception("取消任务 %s 时清理文件失败", task_id)
-        cleanup_ok = False
+            logger.exception("任务 %s 的停止请求投递失败", task_id)
+            record_stop_unconfirmed(engine, task_id)
+    db.expire_all()
+    return get_task(task_id, db)
 
-    task.status = "cancelled"
-    task.stage = "failed"
-    task.stage_progress_pct = 0
-    task.progress_pct = 0
-    if not revoke_ok and not cleanup_ok:
-        task.error_msg = "取消成功，但撤销 worker 和文件清理均失败"
-        task.progress_msg = "已取消，但撤销 worker 和文件清理均失败"
-    elif not revoke_ok:
-        task.error_msg = "取消成功，但撤销 worker 失败"
-        task.progress_msg = "已取消，但撤销 worker 失败"
-    elif not cleanup_ok:
-        task.error_msg = "取消成功，但文件清理失败"
-        task.progress_msg = "已取消，但文件清理失败"
-    else:
-        task.error_msg = None
-        task.progress_msg = "已取消并清理文件"
-    task.finished_at = datetime.now(UTC)
-    db.commit()
 
-    data = TaskDetail.model_validate(task)
-    data.raw_zip_deleted = files_deleted
-    return data
+def _task_snapshot(db, task):
+    run = db.scalar(select(ProcessingRun).where(ProcessingRun.task_id == task.id).with_for_update())
+    payload = {
+        "task_id": task.id,
+        "status": task.status,
+        "stage": task.stage,
+        "progress_pct": task.progress_pct,
+        "stage_progress_pct": task.stage_progress_pct,
+        "progress_msg": task.progress_msg,
+        "batch_no": task.batch_no,
+        "error_msg": task.error_msg,
+        "progress": {
+            "pct": task.progress_pct,
+            "stage_pct": task.stage_progress_pct,
+            "message": task.progress_msg,
+        },
+        "summary": {},
+    }
+    if run:
+        sequence = int(run.summary_json.get("event_seq", 0)) + 1
+        run.summary_json = {**run.summary_json, "event_seq": sequence}
+        payload.update(
+            schema_version=1,
+            run_id=run.id,
+            event_seq=sequence,
+            status=run.status,
+            summary=run.summary_json,
+        )
+        db.commit()
+    return payload
+
+
+def _snapshot_event(task_id):
+    from app.db import SessionLocal
+
+    with SessionLocal() as db:
+        task = db.get(UploadTask, task_id)
+        if task is None:
+            return {"event": "error", "data": json.dumps({"error_msg": "任务不存在"})}, True
+        payload = _task_snapshot(db, task)
+    terminal = payload["status"] in {"success", "failed", "cancelled"}
+    event = ("done" if payload["status"] == "success" else "error") if terminal else "progress"
+    return {"event": event, "data": json.dumps(payload)}, terminal
 
 
 async def _stream_task_events(task_id: int) -> AsyncIterator[dict]:
@@ -125,149 +279,178 @@ async def _stream_task_events(task_id: int) -> AsyncIterator[dict]:
         async for item in _stream_task_polling(task_id):
             yield item
         return
-
     r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
     pubsub = r.pubsub()
-    channel = f"task:{task_id}"
-    await pubsub.subscribe(channel)
-
     try:
-        with next(get_db()) as db:
-            task = db.get(UploadTask, task_id)
-            if task is None:
-                yield {
-                    "event": "error",
-                    "data": json.dumps({"error_msg": f"任务 {task_id} 不存在"}),
-                }
-                return
-
-            yield {
-                "event": "progress",
-                "data": json.dumps(
-                    {
-                        "progress_pct": task.progress_pct,
-                        "progress_msg": task.progress_msg,
-                        "status": task.status,
-                    }
-                ),
-            }
-
-            if task.status in ("success", "failed", "cancelled"):
-                event = "done" if task.status == "success" else "error"
-                payload: dict = {
-                    "status": task.status,
-                    "batch_no": task.batch_no,
-                }
-                if task.error_msg:
-                    payload["error_msg"] = task.error_msg
-                yield {"event": event, "data": json.dumps(payload)}
-                return
-
-        start_ts = time.monotonic()
-        while True:
-            if time.monotonic() - start_ts > _STREAM_MAX_SECONDS:
-                yield {
-                    "event": "error",
-                    "data": json.dumps(
-                        {"error_msg": f"流超时 {_STREAM_MAX_SECONDS}s，请重新拉取任务状态"}
-                    ),
-                }
-                return
+        try:
+            await pubsub.subscribe(f"task:{task_id}")
+        except Exception:
+            async for item in _stream_task_polling(task_id):
+                yield item
+            return
+        snapshot, terminal = _snapshot_event(task_id)
+        yield snapshot
+        if terminal:
+            return
+        last_sequence = json.loads(snapshot["data"]).get("event_seq", 0)
+        started = time.monotonic()
+        while time.monotonic() - started < _STREAM_MAX_SECONDS:
             try:
-                msg = await asyncio.wait_for(
-                    pubsub.get_message(ignore_subscribe_messages=True, timeout=15.0),
-                    timeout=20.0,
+                message = await asyncio.wait_for(
+                    pubsub.get_message(ignore_subscribe_messages=True, timeout=15.0), timeout=20.0
                 )
             except TimeoutError:
-                yield {"event": "ping", "data": "{}"}
+                message = None
+            except Exception:
+                async for item in _stream_task_polling(task_id):
+                    yield item
+                return
+            if message is None:
+                snapshot, terminal = _snapshot_event(task_id)
+                last_sequence = json.loads(snapshot["data"]).get("event_seq", last_sequence)
+                yield snapshot
+                if terminal:
+                    return
                 continue
-
-            if msg is None:
-                yield {"event": "ping", "data": "{}"}
-                continue
-
-            data = msg.get("data")
-            if not isinstance(data, str):
+            raw = message.get("data")
+            if not isinstance(raw, str):
                 continue
             try:
-                payload = json.loads(data)
+                payload = json.loads(raw)
             except json.JSONDecodeError:
                 continue
-
-            event_name = payload.get("event") or "progress"
-            status_val = payload.get("status")
-            if status_val == "success":
-                event_name = "done"
-            elif status_val == "failed":
-                event_name = "error"
-
-            yield {"event": event_name, "data": json.dumps(payload)}
-
-            if event_name in ("done", "error"):
+            sequence = payload.get("event_seq")
+            if sequence is not None and sequence <= last_sequence:
+                continue
+            if sequence is not None:
+                last_sequence = sequence
+            status = payload.get("status")
+            terminal = status in {"success", "failed", "cancelled"}
+            event = ("done" if status == "success" else "error") if terminal else "progress"
+            yield {"event": event, "data": json.dumps(payload)}
+            if terminal:
                 return
+        yield {
+            "event": "stream_closed",
+            "data": json.dumps({"code": "STREAM_TIMEOUT", "retryable": True}),
+        }
     finally:
-        try:
-            await pubsub.unsubscribe(channel)
-            await pubsub.close()
-        except Exception:
-            pass
-        try:
-            await r.close()
-        except Exception:
-            pass
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            await pubsub.aclose()
+        with contextlib.suppress(Exception):
+            await r.aclose()
 
 
 async def _stream_task_polling(task_id: int) -> AsyncIterator[dict]:
-    start_ts = time.monotonic()
-
-    while True:
-        with next(get_db()) as db:
-            task = db.get(UploadTask, task_id)
-            if task is None:
-                yield {
-                    "event": "error",
-                    "data": json.dumps({"error_msg": f"任务 {task_id} 不存在"}),
-                }
-                return
-
-            yield {
-                "event": "progress",
-                "data": json.dumps(
-                    {
-                        "progress_pct": task.progress_pct,
-                        "progress_msg": task.progress_msg,
-                        "status": task.status,
-                        "stage": task.stage,
-                        "stage_progress_pct": task.stage_progress_pct,
-                    }
-                ),
-            }
-
-            if task.status == "success":
-                yield {
-                    "event": "done",
-                    "data": json.dumps({"status": "success", "batch_no": task.batch_no}),
-                }
-                return
-            if task.status in ("failed", "cancelled"):
-                yield {
-                    "event": "error",
-                    "data": json.dumps({"status": task.status, "error_msg": task.error_msg}),
-                }
-                return
-
-        if time.monotonic() - start_ts > _STREAM_MAX_SECONDS:
-            yield {
-                "event": "error",
-                "data": json.dumps(
-                    {"error_msg": f"流超时 {_STREAM_MAX_SECONDS}s，请重新拉取任务状态"}
-                ),
-            }
+    started = time.monotonic()
+    while time.monotonic() - started < _STREAM_MAX_SECONDS:
+        snapshot, terminal = _snapshot_event(task_id)
+        yield snapshot
+        if terminal:
             return
-
         await asyncio.sleep(1.0)
+    yield {
+        "event": "stream_closed",
+        "data": json.dumps({"code": "STREAM_TIMEOUT", "retryable": True}),
+    }
 
 
 @router.get("/{task_id}/stream")
 async def stream_task(task_id: int) -> EventSourceResponse:
     return EventSourceResponse(_stream_task_events(task_id))
+
+
+class RetryRequest(BaseModel):
+    request_key: str
+    mode: Literal["failed"]
+    item_ids: list[str] | None = None
+    expected_source_revision: int = Field(ge=0)
+
+
+@router.post("/{task_id}/retry", status_code=202)
+def retry_task(task_id: int, body: RetryRequest, db: DbSession):
+    from app.services.processing_retry import create_retry_run
+    from app.services.processing_run import RunConflictError, record_dispatch_failure
+    from app.workers.dispatch import (
+        ConfirmedDispatchError,
+        dispatch_batch_task,
+        dispatch_prechecked_table,
+        dispatch_reprocess_task,
+    )
+
+    engine = db.bind
+    db.rollback()
+    try:
+        ticket = create_retry_run(
+            engine, task_id, request_key=body.request_key,
+            expected_source_revision=body.expected_source_revision, item_ids=body.item_ids,
+        )
+    except (RunConflictError, ValueError) as exc:
+        code = getattr(exc, "code", "RETRY_REQUEST_INVALID")
+        status = 404 if code == "RUN_MISSING" else 422 if code in {
+            "RETRY_ITEMS_INVALID", "RETRY_INPUT_MISSING", "RETRY_SOURCE_UNKNOWN",
+            "RETRY_REQUEST_INVALID",
+        } else 409
+        raise HTTPException(status, detail={
+            "code": code, "message": str(exc), "retryable": False, "context": {},
+        }) from exc
+    run = db.get(ProcessingRun, ticket.run_id)
+    # Admission is already committed. Only the first acceptance may dispatch;
+    # replayed requests return the same task without a second queue delivery.
+    from app.services.processing_run import _locked_session
+
+    db.rollback()
+    with _locked_session(engine) as delivery:
+        owned = delivery.scalar(select(ProcessingRun).where(
+            ProcessingRun.id == ticket.run_id,
+        ).with_for_update())
+        already = owned.config_json.get("retry_delivery_started", False)
+        if not already:
+            owned.config_json = {**owned.config_json, "retry_delivery_started": True}
+        batch_id = owned.batch_id
+    if not already:
+        batch = db.get(Batch, batch_id)
+        config = run.config_json
+        try:
+            if "table_stats" in config.get("precheck_report", {}):
+                delivery_id = dispatch_prechecked_table(
+                    ticket.task_id, ticket.run_id, ticket.lease_token
+                )
+            elif run.kind == "upload":
+                delivery_id = dispatch_batch_task(
+                    ticket.task_id, Path(batch.raw_zip_path), batch.batch_no, batch.mapping_id,
+                    run_id=ticket.run_id, lease_token=ticket.lease_token,
+                    **{key: config[key] for key in (
+                        "f_start_ghz", "f_end_ghz", "deembed", "deembed_method", "process_type"
+                    ) if key in config},
+                )
+            else:
+                delivery_id = dispatch_reprocess_task(
+                    ticket.task_id, batch.batch_no, batch.mapping_id, run.kind,
+                    zip_path=Path(batch.raw_zip_path) if batch.raw_zip_path else None,
+                    metrics=config.get("metrics"), run_id=ticket.run_id,
+                    lease_token=ticket.lease_token,
+                    **{key: config[key] for key in (
+                        "f_start_ghz", "f_end_ghz", "deembed", "deembed_method", "process_type"
+                    ) if key in config},
+                )
+            if delivery_id is None:
+                raise ConfirmedDispatchError("队列未接受重试任务")
+        except Exception as exc:
+            db.rollback()
+            record_dispatch_failure(
+                engine, ticket, confirmed=isinstance(exc, ConfirmedDispatchError)
+            )
+            raise HTTPException(503, detail={
+                "code": "RETRY_DISPATCH_FAILED", "message": "重试投递异常，任务与输入保留",
+                "retryable": True, "context": {"task_id": ticket.task_id},
+            }) from exc
+    db.expire_all()
+    task = db.get(UploadTask, ticket.task_id)
+    return {
+        "task_id": str(ticket.task_id), "run_id": ticket.run_id,
+        "batch_no": task.batch_no, "status": task.status,
+        "stream_url": f"/api/tasks/{ticket.task_id}/stream",
+    }

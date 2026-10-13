@@ -1,10 +1,14 @@
-import React, { useCallback, useEffect, useMemo, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Plotly from 'plotly.js/dist/plotly';
 import createPlotlyComponent from 'react-plotly.js/factory';
 import { buildCachedJmpChartScene } from '../features/analysis/chart/chartSceneCache';
 import {
   buildSelectionRestyle,
   buildYAxisAutorangeUpdate,
+  buildYDataRanges,
+  buildYAxisLayoutRanges,
+  datumRowIds,
+  type YAxisRanges,
 } from '../features/analysis/chart/chartInteraction';
 import { buildPointStyleRestyles } from '../features/analysis/pointStyle';
 import { formatMedianLabel, medianOf } from '../features/analysis/chart/buildSwarmMedianTraces';
@@ -28,12 +32,11 @@ function applyPlotSelection(graphDiv: any, selectedRowIds?: Set<string>) {
   if (!hasSelection && !hasAppliedSelection) return;
   getPlotly().then((Plotly) => {
     try {
-      traceIndices.reduce<Promise<unknown>>((pending, traceIndex, index) => pending.then(() =>
-        Plotly.restyle(graphDiv, {
-          selectedpoints: [selectedpoints[index]],
-          'selected.marker.opacity': 1,
-          'unselected.marker.opacity': hasSelection ? 0.18 : 1,
-        }, [traceIndex])), Promise.resolve())
+      Promise.resolve(Plotly.restyle(graphDiv, {
+        selectedpoints,
+        'selected.marker.opacity': 1,
+        'unselected.marker.opacity': hasSelection ? 0.18 : 1,
+      }, traceIndices))
         .catch((error) => reportPlotlyError('restyle selection', error));
     } catch (error) {
       reportPlotlyError('restyle selection', error);
@@ -43,7 +46,9 @@ function applyPlotSelection(graphDiv: any, selectedRowIds?: Set<string>) {
 
 function applyYAxisAutorange(graphDiv: any) {
   if (!graphDiv?.layout) return;
-  const update = buildYAxisAutorangeUpdate(graphDiv.layout);
+  const update = buildYAxisAutorangeUpdate({ ...graphDiv.layout,
+    meta: { ...graphDiv.layout.meta, analysisYRanges: graphDiv.layout.meta?.analysisActiveYRanges
+      || graphDiv.layout.meta?.analysisYRanges } }, graphDiv.data);
   if (Object.keys(update).length === 0) return;
   getPlotly().then((Plotly) => {
     try {
@@ -55,17 +60,52 @@ function applyYAxisAutorange(graphDiv: any) {
   }).catch((error) => reportPlotlyError('load for Y autorange', error));
 }
 
-function applyAxesAutorange(graphDiv: any) {
+function applyAxesAutorange(graphDiv: any, numericY = false) {
   if (!graphDiv?.layout) return;
-  const update = Object.keys(graphDiv.layout).reduce<Record<string, boolean>>((axes, key) => {
-    if (/^[xy]axis\d*$/.test(key)) axes[`${key}.autorange`] = true;
+  const update = Object.keys(graphDiv.layout).reduce<Record<string, unknown>>((axes, key) => {
+    if ((numericY ? /^xaxis\d*$/ : /^[xy]axis\d*$/).test(key)) axes[`${key}.autorange`] = true;
     return axes;
   }, {});
+  if (numericY) Object.assign(update, buildYAxisAutorangeUpdate(graphDiv.layout, graphDiv.data));
   if (Object.keys(update).length === 0) return;
   getPlotly().then((Plotly) => {
     Promise.resolve(Plotly.relayout(graphDiv, update))
       .catch((error) => reportPlotlyError('relayout axes autorange', error));
   }).catch((error) => reportPlotlyError('load for axes autorange', error));
+}
+
+function clearPlotSelectionOutline(graphDiv: any) {
+  if (!graphDiv?.layout?.selections?.length) return;
+  Promise.resolve(Plotly.relayout(graphDiv, { selections: [] }))
+    .catch((error) => reportPlotlyError('clear selection outline', error));
+}
+
+function nearestRawDatum(graph: any, clientX: number, clientY: number) {
+  const rect = graph.getBoundingClientRect();
+  const localX = (clientX - rect.left) * graph._fullLayout.width / rect.width;
+  const localY = (clientY - rect.top) * graph._fullLayout.height / rect.height;
+  let nearest: { datum: unknown; distance: number } | null = null;
+  for (const trace of graph.data) {
+    if (!Array.isArray(trace.customdata)
+      || (trace.meta?.analysisLayer && trace.meta.analysisLayer !== 'raw-points')) continue;
+    const xaxis = graph._fullLayout[(trace.xaxis || 'x').replace('x', 'xaxis')];
+    const yaxis = graph._fullLayout[(trace.yaxis || 'y').replace('y', 'yaxis')];
+    if (!xaxis?.d2p || !yaxis?.d2p
+      || localX < xaxis._offset || localX > xaxis._offset + xaxis._length
+      || localY < yaxis._offset || localY > yaxis._offset + yaxis._length) continue;
+    for (let index = 0; index < trace.customdata.length; index += 1) {
+      const x = xaxis._offset + xaxis.d2p(trace.x[index]);
+      const y = yaxis._offset + yaxis.d2p(trace.y[index]);
+      const size = Array.isArray(trace.marker?.size) ? trace.marker.size[index] : trace.marker?.size;
+      const distance = Math.hypot(x - localX, y - localY);
+      if (distance > Math.max(8, (size || 6) / 2 + 3) || !Number.isFinite(distance)) continue;
+      const datum = trace.customdata[index];
+      if (datumRowIds(datum).length && (!nearest || distance < nearest.distance)) {
+        nearest = { datum, distance };
+      }
+    }
+  }
+  return nearest?.datum;
 }
 
 function applyPlotPointStyles(
@@ -302,30 +342,17 @@ export function LineChart({ x, y, xLabel, yLabel, name, color, markers = [], ser
  *  unique value per cell, the caller should aggregate upstream and
  *  pass aggregated=true.
  * ------------------------------------------------------------------ */
-export function WaferMap({
-  rows, valueField, valueLabel,
-  facetField, facets,
-  aggregated = false,
-  onPointClick,
-  onSelection,
-  selectedRowIds,
-  revision,
-  interactionMode = 'select',
-  autorangeRequest = 0,
-}) {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const graphDivRef = useRef<any>(null);
-  const { traces, layout } = useMemo(() => {
+export function buildWaferSpec({ rows, valueField, valueLabel, facetField, facets, aggregated = false, colorDomain = undefined as [number, number] | null | undefined }) {
     const allXs = rows.map((r) => r['x']).filter(Number.isFinite);
     const allYs = rows.map((r) => r['y']).filter(Number.isFinite);
-    const xMin = allXs.length ? Math.min(...allXs) - 1 : -1;
-    const xMax = allXs.length ? Math.max(...allXs) + 1 : 1;
-    const yMin = allYs.length ? Math.min(...allYs) - 1 : -1;
-    const yMax = allYs.length ? Math.max(...allYs) + 1 : 1;
+    const xMin = allXs.length ? allXs.reduce((a, b) => Math.min(a, b), Infinity) - 1 : -1;
+    const xMax = allXs.length ? allXs.reduce((a, b) => Math.max(a, b), -Infinity) + 1 : 1;
+    const yMin = allYs.length ? allYs.reduce((a, b) => Math.min(a, b), Infinity) - 1 : -1;
+    const yMax = allYs.length ? allYs.reduce((a, b) => Math.max(a, b), -Infinity) + 1 : 1;
 
     const allVals = rows.map((r) => r[valueField]).filter(Number.isFinite);
-    const vMin = allVals.length ? Math.min(...allVals) : 0;
-    const vMax = allVals.length ? Math.max(...allVals) : 1;
+    const vMin = colorDomain?.[0] ?? (allVals.length ? allVals.reduce((a, b) => Math.min(a, b), Infinity) : 0);
+    const vMax = colorDomain?.[1] ?? (allVals.length ? allVals.reduce((a, b) => Math.max(a, b), -Infinity) : 1);
 
     const useFacets = !!facetField && facets && facets.length > 0;
     const panels = useFacets
@@ -393,7 +420,7 @@ export function WaferMap({
       const hoverTemplate = aggregated
         ? '<b>x=%{x}, y=%{y}</b><br>'
           + (valueLabel || valueField) + ': %{marker.color:.4g}'
-          + '<extra></extra>'
+          + '<br>此格器件数: %{customdata._cell_n}<br>有效数: %{customdata._cell_valid_n}<extra></extra>'
         : '<b>编号 %{customdata.id}</b><br>'
           + 'x=%{x}, y=%{y}<br>'
           + (valueLabel || valueField) + ': %{marker.color:.4g}<br>'
@@ -414,7 +441,7 @@ export function WaferMap({
           colorscale: NUMERIC_COLORSCALE,
           cmin: vMin,
           cmax: vMax,
-          showscale: pIdx === panels.length - 1,
+          showscale: colorDomain !== null && pIdx === panels.length - 1,
           colorbar: pIdx === panels.length - 1
             ? { title: { text: valueLabel || valueField, side: 'right' }, thickness: 12, len: 0.7, x: 1.02 }
             : undefined,
@@ -428,7 +455,23 @@ export function WaferMap({
     });
 
     return { traces: outTraces, layout: outLayout };
-  }, [rows, valueField, valueLabel, facetField, facets, aggregated]);
+}
+
+export function WaferMap({
+  plotId = 'chart-wafer', colorDomain = undefined as [number, number] | null | undefined,
+  rows, valueField, valueLabel,
+  facetField, facets,
+  aggregated = false,
+  onPointClick,
+  onSelection,
+  selectedRowIds,
+  revision,
+  interactionMode = 'select',
+  autorangeRequest = 0,
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const graphDivRef = useRef<any>(null);
+  const { traces, layout } = useMemo(() => buildWaferSpec({ rows, valueField, valueLabel, facetField, facets, aggregated, colorDomain }), [rows, valueField, valueLabel, facetField, facets, aggregated, colorDomain]);
   const plotLayout = useMemo(
     () => ({
       ...layout,
@@ -477,7 +520,7 @@ export function WaferMap({
   return (
     <div ref={containerRef} style={{ width: '100%', height: '100%' }}>
     <PlotAny
-      divId="chart-wafer"
+      divId={plotId}
       data={traces}
       layout={plotLayout}
       config={plotConfig}
@@ -931,7 +974,7 @@ function buildViolinTraces({ rows, xField, yField, zField, axisRef, zCategoryVal
 // First version: only numeric Y. Categorical Y is reported via a warning
 // so the caller can prompt the user to switch chart.
 const SWARM_GL_THRESHOLD = 5000;
-function buildSwarmTraces({ rows, totalRowCount, xField, yField, zField, axisRef, zCategoryValues, showLegend, xCategoryArray }) {
+function buildSwarmTraces({ rows, totalRowCount, xField, yField, zField, axisRef, zCategoryValues, showLegend, xCategoryArray, swarmStep }) {
   const xKey = xField.name;
   const yKey = yField.name;
   const xref = `x${axisRef}`;
@@ -940,6 +983,7 @@ function buildSwarmTraces({ rows, totalRowCount, xField, yField, zField, axisRef
   const traces = [];
   // 顶部中位数标注由调用方并入 layout.annotations（builder 契约只回 traces 数组）
   (traces as any).annotations = [];
+  const medianTraces = [];
 
   if (yIsCat) return traces;
 
@@ -985,7 +1029,7 @@ function buildSwarmTraces({ rows, totalRowCount, xField, yField, zField, axisRef
     }
     let maxBin = 1;
     for (const idxs of bins.values()) if (idxs.length > maxBin) maxBin = idxs.length;
-    const step = Math.min(0.1, (slotW * 0.9) / maxBin);
+    const step = swarmStep ?? Math.min(0.1, (slotW * 0.9) / maxBin);
     for (const idxs of bins.values()) {
       idxs.forEach((i, j) => { xs[i] = cx + (j - (idxs.length - 1) / 2) * step; });
     }
@@ -1021,7 +1065,7 @@ function buildSwarmTraces({ rows, totalRowCount, xField, yField, zField, axisRef
     if (!medians.length) return;
     const mx = medians.map((m) => m.x);
     const my = medians.map((m) => m.y);
-    traces.push({
+    medianTraces.push({
       type: 'scatter',
       mode: 'lines',
       x: mx,
@@ -1033,8 +1077,9 @@ function buildSwarmTraces({ rows, totalRowCount, xField, yField, zField, axisRef
       connectgaps: true,
       line: { color: 'rgba(232,235,240,0.55)', width: 4.5 },
       hoverinfo: 'skip',
+      meta: { analysisLayer: 'swarm-median' },
     });
-    traces.push({
+    medianTraces.push({
       type: 'scatter',
       mode: 'lines+markers',
       x: mx,
@@ -1048,6 +1093,7 @@ function buildSwarmTraces({ rows, totalRowCount, xField, yField, zField, axisRef
       line: { color, width: 2.5 },
       marker: { color, size: 5, symbol: 'circle' },
       hovertemplate: `<b>${axisTitle(yField)} 中位数</b>: %{y}<br>n=%{customdata.count}<extra>${extra}</extra>`,
+      meta: { analysisLayer: 'swarm-median' },
     });
     if (labelMode === 'off') return;
     for (const m of medians) {
@@ -1140,6 +1186,7 @@ function buildSwarmTraces({ rows, totalRowCount, xField, yField, zField, axisRef
     pushMedianLayer(medians, c, '');
   }
 
+  traces.push(...medianTraces);
   return traces;
 }
 
@@ -1379,6 +1426,34 @@ export function buildUnifiedSpec({
     return rangeCache.get(field.name) || null;
   };
 
+  // 全指标、档位和Z组共用步长，避免每个组都被单独拉宽到满槽而丢失密度比例。
+  let swarmStep: number | undefined;
+  if (chartType === 'swarm') {
+    let widest = 1;
+    for (const yField of yFields) {
+      if (yField.isCategorical) continue;
+      const values = rows.map((row) => row[yField.name]).filter(Number.isFinite) as number[];
+      if (!values.length) continue;
+      const low = values.reduce((left, right) => Math.min(left, right), Infinity);
+      const high = values.reduce((left, right) => Math.max(left, right), -Infinity);
+      const binWidth = (high - low || 1) / 30;
+      for (const xField of xFields) {
+        const bins = new Map<string, number>();
+        for (const row of rows) {
+          const value = row[yField.name];
+          if (typeof value !== 'number' || !Number.isFinite(value)) continue;
+          const bin = Math.max(0, Math.min(29, Math.floor((value - low) / binWidth)));
+          const key = JSON.stringify([String(row[xField.name]), effZ ? row[effZ.name] ?? NULL_KEY : NULL_KEY, bin]);
+          const count = (bins.get(key) ?? 0) + 1;
+          bins.set(key, count);
+          widest = Math.max(widest, count);
+        }
+      }
+    }
+    const groupCount = faceting ? 1 : Math.max(1, zCategoryValues?.length ?? 1);
+    swarmStep = Math.min(0.1, 0.9 / groupCount / widest);
+  }
+
   const hasNumericZ = effZ && !effZ.isCategorical && chartType === 'scatter';
   const outTraces: any[] = [];
   const outLayout: any = {
@@ -1390,7 +1465,8 @@ export function buildUnifiedSpec({
       xgap: 0.08,
       // plotly 要求 (rows-1)*ygap < 1；分面时行数常超 7，
       // 按总行数收缩使像素间距近似恒定（≈112px/行高350px）。
-      ygap: faceting ? Math.min(0.16, 0.32 / totalRows) : 0.16,
+      ygap: chartType === 'swarm' ? Math.min(0.03, 0.32 / totalRows)
+        : faceting ? Math.min(0.16, 0.32 / totalRows) : 0.16,
       roworder: 'top to bottom',
     },
     margin: { l: 60, r: hasNumericZ ? 120 : 60, t: 60, b: 60 },
@@ -1475,6 +1551,14 @@ export function buildUnifiedSpec({
           }
         }
 
+        if (chartType === 'swarm') {
+          xLayout.matches = zi === 0 && r === 0 ? undefined : `x${axisSuffix(c + 1)}`;
+          if (zi !== nZ - 1 || r !== nRows - 1) {
+            xLayout.showticklabels = false;
+            xLayout.title = undefined;
+          }
+        }
+
         outLayout[xAxisKey] = xLayout;
 
         const yLayout = {
@@ -1518,6 +1602,7 @@ export function buildUnifiedSpec({
           showLegend: !faceting && cellIdx === COLOR_OWNER_CELL,
           cellGroup: `cell${cellIdx}`,
           xCategoryArray,
+          swarmStep,
         });
         outTraces.push(...cellTraces);
         // 蜂群图的顶部中位数标注挂在返回数组的 annotations 属性上（builder 契约只回 traces）
@@ -1582,6 +1667,7 @@ export function buildUnifiedSpec({
 }
 
 export function UnifiedChartGrid({
+  plotId = 'chart-unified',
   chartType,
   rows,
   xFields,
@@ -1602,7 +1688,10 @@ export function UnifiedChartGrid({
   datasetRevision,
   showDataPoints = true,
   interactionMode = 'select',
+  yAxisRanges,
+  onYAxisReset,
 }: UnifiedSpecArgs & {
+  plotId?: string;
   onWarningsChange?: (warns: any[]) => void;
   onPointClick?: (d: unknown, event: any) => void;
   onSelection?: (e: unknown) => void;
@@ -1611,9 +1700,15 @@ export function UnifiedChartGrid({
   pointStyles?: Record<string, PointStyleOverride>;
   autorangeRequest?: number;
   revision?: string;
+  yAxisRanges?: YAxisRanges;
+  onYAxisReset?: () => void;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const graphDivRef = useRef<any>(null);
+  const pointerRef = useRef<{ x: number; y: number; id: number; pointClicked: boolean } | null>(null);
+  const blankClickFrameRef = useRef(0);
+  const [containerWidth, setContainerWidth] = useState<number | null>(null);
+  const sceneWidth = width ?? (chartType === 'swarm' ? containerWidth : null);
   const pendingYAxisAutorangeRef = useRef(false);
   const previousRowsRef = useRef({ datasetId: revision, rowCount: rows.length });
   if (analysisLayout
@@ -1628,22 +1723,33 @@ export function UnifiedChartGrid({
     () => analysisLayout
       ? buildCachedJmpChartScene(
         revision,
-        { chartType, rows, xFields, yFields, zField, datasetRevision, showDataPoints, height, width },
+        { chartType, rows, xFields, yFields, zField, datasetRevision, showDataPoints, height, width: sceneWidth },
       )
-      : buildUnifiedSpec({ chartType, rows, xFields, yFields, zField, facetZ, height, width }),
-    [analysisLayout, chartType, rows, xFields, yFields, zField, facetZ, height, width, datasetRevision, showDataPoints],
+      : buildUnifiedSpec({ chartType, rows, xFields, yFields, zField, facetZ, height, width: sceneWidth }),
+    [analysisLayout, chartType, rows, xFields, yFields, zField, facetZ, height, sceneWidth, datasetRevision, showDataPoints],
   );
-  const plotLayout = useMemo(() => ({
-    ...layout,
-    dragmode: interactionMode,
-    uirevision: revision || 'analysis',
-  }), [layout, revision, interactionMode]);
+  const automaticYRanges = useMemo(() => buildYDataRanges(rows, yFields), [rows, yFields]);
+  const plotLayout = useMemo(() => {
+    const automaticAxes = buildYAxisLayoutRanges(layout, yFields, automaticYRanges);
+    const axes = buildYAxisLayoutRanges(layout, yFields, { ...automaticYRanges, ...yAxisRanges });
+    return {
+      ...layout,
+      ...Object.fromEntries(Object.entries(axes).map(([key, range]) =>
+        [key, { ...layout[key], autorange: false, range }])),
+      meta: { ...layout.meta, analysisYRanges: automaticAxes, analysisActiveYRanges: axes },
+      ...(chartType === 'swarm' && layout.width ? { autosize: false } : {}),
+      dragmode: interactionMode,
+      // Row selection is owned by the workspace; avoid a second Plotly click selection.
+      clickmode: 'event',
+      uirevision: revision || 'analysis',
+    };
+  }, [layout, revision, interactionMode, chartType, automaticYRanges, yAxisRanges, yFields]);
   const plotConfig = useMemo(() => analysisLayout ? {
     ...baseConfig,
     displayModeBar: false,
     scrollZoom: true,
-    doubleClick: 'reset+autosize',
-  } : { ...baseConfig, displayModeBar: false }, [analysisLayout]);
+    doubleClick: false,
+  } : { ...baseConfig, displayModeBar: false, doubleClick: false }, [analysisLayout]);
   const hasAppliedPointStylesRef = useRef(false);
   const syncPointStyles = useCallback((graphDiv: any) => {
     const hasStyles = Object.keys(pointStyles || {}).length > 0;
@@ -1667,13 +1773,38 @@ export function UnifiedChartGrid({
   }, [warnsKey, perfKey, rows, onWarningsChange]);
 
   const handleClick = useCallback((e) => {
-    if (!onPointClick) return;
     const p = e.points && e.points[0];
+    const pointer = pointerRef.current;
+    const graph = graphDivRef.current;
+    if (p && pointer && graph && p.xaxis?.d2p && p.yaxis?.d2p) {
+      const rect = graph.getBoundingClientRect();
+      const x = rect.left + (p.xaxis._offset + p.xaxis.d2p(p.x))
+        * rect.width / graph._fullLayout.width;
+      const y = rect.top + (p.yaxis._offset + p.yaxis.d2p(p.y))
+        * rect.height / graph._fullLayout.height;
+      const size = Array.isArray(p.data?.marker?.size)
+        ? p.data.marker.size[p.pointIndex] : p.data?.marker?.size;
+      // Plotly throttles hover updates. A rapid blank click can otherwise reuse
+      // the previous hovered point, especially in Electron.
+      if (Number.isFinite(x) && Number.isFinite(y)
+        && Math.hypot(x - pointer.x, y - pointer.y) > Math.max(8, (size || 6) / 2 + 3)) {
+        const datum = nearestRawDatum(graph, pointer.x, pointer.y);
+        if (datum) {
+          pointer.pointClicked = true;
+          onPointClick?.(datum, e);
+        }
+        return;
+      }
+    }
+    if (p && pointerRef.current) pointerRef.current.pointClicked = true;
+    if (!onPointClick) return;
+    if (p?.data?.meta?.analysisLayer === 'swarm-median') return;
     if (p && p.customdata) onPointClick(p.customdata, e);
   }, [onPointClick]);
 
   useEffect(() => {
     applyPlotSelection(graphDivRef.current, selectedRowIds);
+    if (!selectedRowIds?.size) clearPlotSelectionOutline(graphDivRef.current);
   }, [selectedRowIds]);
 
   useEffect(() => {
@@ -1681,8 +1812,48 @@ export function UnifiedChartGrid({
   }, [syncPointStyles]);
 
   useEffect(() => {
-    if (autorangeRequest > 0) applyAxesAutorange(graphDivRef.current);
+    if (autorangeRequest > 0) applyAxesAutorange(graphDivRef.current, true);
   }, [autorangeRequest]);
+
+  useEffect(() => {
+    if (interactionMode !== 'select' && interactionMode !== 'lasso') {
+      clearPlotSelectionOutline(graphDivRef.current);
+    }
+  }, [interactionMode]);
+
+  const handleDeselect = useCallback(() => {
+    clearPlotSelectionOutline(graphDivRef.current);
+    onDeselect?.();
+  }, [onDeselect]);
+
+  const handleSelected = useCallback((event: any) => {
+    // Clearing a layout selection or changing dragmode emits an empty selected
+    // event without a region. It must not discard the workspace's row selection.
+    if (!event?.points?.length && !event?.range && !event?.lassoPoints) return;
+    onSelection?.(event);
+  }, [onSelection]);
+
+  useEffect(() => {
+    // Plotly places a drag cover outside the chart while the pointer is down.
+    // Listen at window level so clicks ending on that cover are still observed.
+    const handlePointerUp = (event: PointerEvent) => {
+      const pointer = pointerRef.current;
+      if (!pointer || pointer.id !== event.pointerId) return;
+      if (Math.hypot(event.clientX - pointer.x, event.clientY - pointer.y) > 4) {
+        pointerRef.current = null;
+        return;
+      }
+      blankClickFrameRef.current = requestAnimationFrame(() => {
+        if (!pointer.pointClicked) handleDeselect();
+        pointerRef.current = null;
+      });
+    };
+    window.addEventListener('pointerup', handlePointerUp, true);
+    return () => {
+      cancelAnimationFrame(blankClickFrameRef.current);
+      window.removeEventListener('pointerup', handlePointerUp, true);
+    };
+  }, [handleDeselect]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -1691,6 +1862,9 @@ export function UnifiedChartGrid({
     const observer = new ResizeObserver(() => {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
+        if (chartType === 'swarm' && container.clientWidth > 0) {
+          setContainerWidth(container.clientWidth);
+        }
         if (graphDivRef.current) {
           getPlotly().then((Plotly) => Plotly.Plots.resize(graphDivRef.current));
         }
@@ -1701,7 +1875,7 @@ export function UnifiedChartGrid({
       cancelAnimationFrame(frame);
       observer.disconnect();
     };
-  }, []);
+  }, [chartType, placeholder]);
 
   if (placeholder) {
     return (
@@ -1712,15 +1886,24 @@ export function UnifiedChartGrid({
   }
 
   return (
-    <div ref={containerRef} style={{ width: '100%', height: plotLayout.height }}>
+    <div ref={containerRef} style={{ width: '100%', height: plotLayout.height }}
+      onPointerDownCapture={(event) => {
+        cancelAnimationFrame(blankClickFrameRef.current);
+        pointerRef.current = event.button === 0
+          && (event.target as Element).closest('.nsewdrag, .select-outline')
+          ? { x: event.clientX, y: event.clientY, id: event.pointerId, pointClicked: false }
+          : null;
+      }}
+      onPointerCancel={() => { pointerRef.current = null; }}
+    >
       <PlotAny
         key={`${analysisLayout ? 'analysis' : 'generic'}:${chartType}`}
-        divId="chart-unified"
+        divId={plotId}
         className={analysisLayout ? 'analysis-plot' : undefined}
         data={allTraces}
         layout={plotLayout}
         config={plotConfig}
-        style={{ width: '100%', height: plotLayout.height }}
+        style={{ width: chartType === 'swarm' ? plotLayout.width ?? '100%' : '100%', height: plotLayout.height }}
         useResizeHandler
         onInitialized={(_figure, graphDiv) => {
           graphDivRef.current = graphDiv;
@@ -1736,8 +1919,12 @@ export function UnifiedChartGrid({
           applyYAxisAutorange(graphDivRef.current);
         }}
         onClick={handleClick}
-        onSelected={onSelection}
-        onDeselect={onDeselect}
+        onSelected={handleSelected}
+        onDeselect={handleDeselect}
+        onDoubleClick={() => {
+          onYAxisReset?.();
+          applyAxesAutorange(graphDivRef.current, true);
+        }}
         onError={(error) => reportPlotlyError('react', error)}
       />
     </div>

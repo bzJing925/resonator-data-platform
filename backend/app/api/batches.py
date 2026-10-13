@@ -11,7 +11,6 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import false, func, select
 
 from app.api.deps import DEVICE_COLUMNS, DbSession
-from app.config import get_settings
 from app.models import Batch, Device, Mapping, MappingEntry, UploadTask
 from app.schemas.batch import (
     BatchDetail,
@@ -33,9 +32,10 @@ from app.services.batch_rename_service import (
     BatchRenameInvalidNameError,
     rename_batch,
 )
+from app.services.batch_scope import active_batch_clause, get_active_batch
 from app.services.batch_stats_service import get_batch_stats
-from app.services.cleanup_service import delete_batch_and_files
-from app.workers.dispatch import dispatch_reprocess_task
+from app.services.processing_run import RunConflictError, create_run, record_dispatch_failure
+from app.workers.dispatch import ConfirmedDispatchError, dispatch_reprocess_task
 
 router = APIRouter(prefix="/batches", tags=["batches"])
 
@@ -58,10 +58,11 @@ def list_batches(
     col = _SORT_FIELDS.get(key, Batch.uploaded_at)
     order = col.desc() if desc else col.asc()
 
-    total = db.scalar(select(func.count()).select_from(Batch)) or 0
+    total = db.scalar(select(func.count()).select_from(Batch).where(active_batch_clause())) or 0
     stmt = (
         select(Batch, Mapping.name)
         .join(Mapping, Batch.mapping_id == Mapping.id, isouter=True)
+        .where(active_batch_clause())
         .order_by(order)
         .offset((page - 1) * size)
         .limit(size)
@@ -88,6 +89,7 @@ def list_batches(
 
 @router.get("/{batch_no}", response_model=BatchDetail)
 def get_batch(batch_no: str, db: DbSession) -> BatchDetail:
+    get_active_batch(db, batch_no)
     # 一次 join 查询带出 mapping_name，避免 N+1
     row = db.execute(
         select(Batch, Mapping.name)
@@ -139,7 +141,7 @@ def _start_reprocess(
     kind: _ReprocessKind,
     metrics: list[str] | None = None,
 ) -> ReprocessResponse:
-    batch = db.scalar(select(Batch).where(Batch.batch_no == batch_no))
+    batch = get_active_batch(db, batch_no)
     if batch is None:
         raise HTTPException(status_code=404, detail=f"批次 {batch_no} 不存在")
 
@@ -152,41 +154,58 @@ def _start_reprocess(
                 detail="原始数据包已清理，无法重新解压",
             )
 
-    task = db.get(UploadTask, batch.task_id)
-    if task is None:
-        raise HTTPException(status_code=404, detail="批次关联任务不存在")
-    if task.status in ("pending", "running"):
-        raise HTTPException(status_code=409, detail="该批次已有进行中的任务")
-
-    task.status = "pending"
-    task.kind = kind
-    task.stage = {"reextract": "extract", "redeembed": "deembed", "recompute": "metrics"}[kind]
-    task.progress_pct = 0
-    task.stage_progress_pct = 0
-    task.progress_msg = "排队中"
-    task.error_msg = None
-    task.cancelled_at = None
-    task.finished_at = None
-    db.commit()
-
-    celery_task_id = dispatch_reprocess_task(
-        task_id=task.id,
-        batch_no=batch.batch_no,
-        mapping_id=batch.mapping_id,
-        kind=kind,
-        zip_path=raw_zip,
-        f_start_ghz=batch.f_start_ghz,
-        f_end_ghz=batch.f_end_ghz,
-        deembed=batch.deembedded,
-        deembed_method=batch.deembed_method,
-        process_type=batch.process_type,
-        metrics=metrics,
-    )
+    batch_id = batch.id
+    options = {
+        "f_start_ghz": batch.f_start_ghz,
+        "f_end_ghz": batch.f_end_ghz,
+        "metrics": metrics or [],
+        "deembed": batch.deembedded,
+    }
+    db.rollback()
+    try:
+        ticket = create_run(db.bind, batch_id, kind, config=options)
+    except RunConflictError as exc:
+        raise HTTPException(
+            409, detail={"code": exc.code, "message": str(exc), "retryable": False, "context": {}}
+        ) from exc
+    task = db.get(UploadTask, ticket.task_id)
+    batch = db.get(Batch, batch_id)
+    try:
+        celery_task_id = dispatch_reprocess_task(
+            task_id=ticket.task_id,
+            run_id=ticket.run_id,
+            lease_token=ticket.lease_token,
+            batch_no=batch.batch_no,
+            mapping_id=batch.mapping_id,
+            kind=kind,
+            zip_path=raw_zip,
+            f_start_ghz=batch.f_start_ghz,
+            f_end_ghz=batch.f_end_ghz,
+            deembed=batch.deembedded,
+            deembed_method=batch.deembed_method,
+            process_type=batch.process_type,
+            metrics=metrics,
+        )
+        if celery_task_id is None:
+            raise ConfirmedDispatchError("队列未接受任务")
+    except Exception as exc:
+        db.rollback()
+        record_dispatch_failure(db.bind, ticket, confirmed=isinstance(exc, ConfirmedDispatchError))
+        raise HTTPException(
+            503,
+            detail={
+                "code": "DISPATCH_FAILED",
+                "message": "任务投递异常，输入已保留",
+                "retryable": True,
+                "context": {"task_id": ticket.task_id},
+            },
+        ) from exc
     if celery_task_id:
         task.celery_task_id = celery_task_id
         db.commit()
 
     return ReprocessResponse(
+        run_id=ticket.run_id,
         task_id=str(task.id),
         batch_no=batch.batch_no,
         stream_url=f"/api/tasks/{task.id}/stream",
@@ -195,8 +214,10 @@ def _start_reprocess(
 
 @router.delete("/{batch_no}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_batch(batch_no: str, db: DbSession) -> None:
-    if not delete_batch_and_files(db, batch_no):
-        raise HTTPException(status_code=404, detail=f"批次 {batch_no} 不存在")
+    from app.services.batch_lifecycle import soft_delete
+
+    db.rollback()
+    soft_delete(db.bind, batch_no)
 
 
 @router.post("/{batch_no}/rename", response_model=BatchRenameResponse)
@@ -250,7 +271,7 @@ def list_batch_devices(
     page: Annotated[int, Query(ge=1)] = 1,
     size: Annotated[int, Query(ge=1, le=1000)] = 100,
 ) -> dict[str, Any]:
-    batch = db.scalar(select(Batch).where(Batch.batch_no == batch_no))
+    batch = get_active_batch(db, batch_no)
     if batch is None:
         raise HTTPException(status_code=404, detail=f"批次 {batch_no} 不存在")
 
@@ -312,12 +333,13 @@ def download_batch_zip(
     db: DbSession,
 ) -> Response:
     """下载该批次全部 snp 文件的打包 zip（自动选取）。"""
-    batch = db.scalar(select(Batch).where(Batch.batch_no == batch_no))
+    batch = get_active_batch(db, batch_no)
     if batch is None:
         raise HTTPException(status_code=404, detail=f"批次 {batch_no} 不存在")
 
-    settings = get_settings()
-    base_dir = settings.files_dir / batch_no
+    from app.services.file_tree_service import batch_files_dir
+
+    base_dir = batch_files_dir(batch)
     if not base_dir.exists():
         raise HTTPException(status_code=404, detail="批次解压目录不存在")
 
@@ -339,3 +361,18 @@ def download_batch_zip(
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{batch_no}.zip"'},
     )
+
+
+@router.get("/{batch_no}/deletion-impact")
+def batch_deletion_impact(batch_no: str, db: DbSession):
+    from app.services.batch_lifecycle import deletion_impact
+
+    return deletion_impact(db, get_active_batch(db, batch_no))
+
+
+@router.post("/{batch_no}/restore")
+def restore_batch(batch_no: str, db: DbSession):
+    from app.services.batch_lifecycle import restore
+
+    db.rollback()
+    return restore(db.bind, batch_no)

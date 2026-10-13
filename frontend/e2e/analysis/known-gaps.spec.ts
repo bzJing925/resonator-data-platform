@@ -45,7 +45,7 @@ test.describe('分析工作区 Electron 端到端验收', () => {
       await clickApplicationMenu(electronApp, 'analysis.autorange');
       await expect(page.getByTestId('last-command')).toHaveText('autorange:chart');
       await expect.poll(() => graph.evaluate((element: any) =>
-        element._fullLayout.yaxis.autorange)).toBe(true);
+        element._fullLayout.yaxis.range)).toEqual([795, 1196]);
       await clickApplicationMenu(electronApp, 'analysis.edit-style');
       await expect(page.getByTestId('last-command')).toHaveText('editStyle:chart');
 
@@ -146,6 +146,10 @@ test.describe('分析工作区 Electron 端到端验收', () => {
         ]));
         await page.locator('#chart-unified').evaluate((element: any) =>
           element.emit('plotly_deselect'));
+        await expect(page.getByTestId('selection')).toHaveText('');
+        await expect.poll(() => page.locator('#chart-unified').evaluate((element: any) =>
+          element.data.filter((trace: any) => trace.meta?.analysisLayer === 'raw-points')
+            .map((trace: any) => trace.selectedpoints ?? null))).toEqual([null, null, null]);
 
         const clickPointBox = await page.locator('#chart-unified').evaluate((element: any) => {
           const point = [...element.querySelectorAll('.scatterlayer .point')]
@@ -279,15 +283,17 @@ test.describe('分析工作区 Electron 端到端验收', () => {
       await expect(page.getByText('2 行已选中')).toBeVisible();
       await viewport.evaluate((element) => { element.scrollTop = 280; });
       await expect.poll(() => viewport.evaluate((element) => element.scrollTop)).toBe(280);
+      // Plotly's asynchronous selection redraw can move the outer scroll surface.
+      // Physical pointer coordinates must be read after the row is on screen.
+      await page.locator('.analysis-grid-row[data-row-index="11"]').scrollIntoViewIfNeeded();
       const viewportBox = await viewport.boundingBox();
       const visibleRow = await page.locator('.analysis-grid-row[data-row-index="11"]').boundingBox();
       if (!viewportBox || !visibleRow) throw new Error('Worksheet viewport is not visible');
       await page.mouse.move(visibleRow.x + 10, visibleRow.y + visibleRow.height / 2);
       await page.mouse.down();
       await page.mouse.move(visibleRow.x + 10, viewportBox.y + 2, { steps: 8 });
-      await page.waitForTimeout(150);
-      await page.mouse.up();
       await expect.poll(() => viewport.evaluate((element) => element.scrollTop)).toBeLessThan(280);
+      await page.mouse.up();
 
       await viewport.focus();
       await page.keyboard.press('Home');
@@ -307,13 +313,13 @@ test.describe('分析工作区 Electron 端到端验收', () => {
     }
   });
 
-  test('图表使用 structureType 外层、areaReality 内层和多 Y 纵排布局', async () => {
+  test('图表使用 structureType X、areaReality 分面和多 Y 纵排布局', async () => {
     const { electronApp, page } = await launchHarness();
     try {
       const layout = await page.locator('#chart-unified').evaluate((element: any) => element.layout);
       expect(layout.meta?.analysisLayout).toEqual({
-        outerX: 'structureType',
-        innerX: 'areaReality',
+        xFields: ['structureType'],
+        zField: 'areaReality',
         yMetrics: ['qs', 'qp', 'k2eff_pct'],
       });
       const interactionConfig = await page.locator('#chart-unified').evaluate((element: any) => ({
@@ -321,12 +327,8 @@ test.describe('分析工作区 Electron 端到端验收', () => {
         scrollZoom: element._context.scrollZoom,
         displayModeBar: element._context.displayModeBar,
       }));
-      expect(interactionConfig).toEqual({ dragmode: 'select', scrollZoom: true, displayModeBar: true });
-      const modebarTitles = await page.locator('#chart-unified .modebar-btn').evaluateAll((buttons) =>
-        buttons.map((button) => button.getAttribute('data-title')));
-      expect(modebarTitles).toEqual(expect.arrayContaining([
-        'Zoom', 'Pan', 'Box Select', 'Lasso Select', 'Autoscale', 'Reset axes',
-      ]));
+      expect(interactionConfig).toEqual({ dragmode: 'select', scrollZoom: true, displayModeBar: false });
+      await expect(page.locator('#chart-unified .modebar-btn')).toHaveCount(0);
     } finally {
       await electronApp.close();
     }

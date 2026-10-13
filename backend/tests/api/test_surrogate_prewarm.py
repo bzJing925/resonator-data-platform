@@ -14,6 +14,19 @@ def test_prewarm_delegates_to_shared_loader(monkeypatch):
     assert calls == [1]
 
 
+def test_failed_native_torch_probe_skips_model_load(monkeypatch):
+    monkeypatch.setenv("ALN_DISABLE_TORCH", "1")
+    monkeypatch.setattr(surrogate, "_bundle", None)
+    monkeypatch.setattr(surrogate, "_load_error", None)
+    monkeypatch.setattr(
+        surrogate,
+        "get_settings",
+        lambda: (_ for _ in ()).throw(AssertionError("model load must be skipped")),
+    )
+    assert surrogate.status()["available"] is False
+    assert "PyTorch" in surrogate.status()["reason"]
+
+
 def test_prewarm_coroutine_invokes_prewarm_after_delay(monkeypatch):
     """lifespan 调度的预热协程：延迟让开首批请求后，在线程中调用 surrogate.prewarm。"""
     called = []

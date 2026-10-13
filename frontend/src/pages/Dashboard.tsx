@@ -1,5 +1,8 @@
 import React, { memo, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { IS_STATIC } from '../config';
+import useRecentProjects from '../project/useRecentProjects';
+import AttentionList from '../sync/AttentionList';
 import I from '../components/Icons';
 import { getStats, listTasks } from '../api/endpoints';
 import type { StatsResponse, Task } from '../types';
@@ -96,17 +99,18 @@ const StatusBadge = memo(function StatusBadge({ status }: StatusBadgeProps) {
 
 export default function Dashboard() {
   const [stats, setStats] = useState<StatsResponse | null>(null);
-  const [tasks, setTasks] = useState<Task[]>([]);
+  const [tasks, setTasks] = useState<Task[] | null>(null);
+  const [taskError, setTaskError] = useState('');
+  const [refresh, setRefresh] = useState(0);
+  const recent = useRecentProjects(refresh);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    Promise.all([getStats(), listTasks()])
-      .then(([s, t]) => {
-        setStats(s);
-        setTasks(Array.isArray(t) ? t : (t as { items?: Task[] })?.items || []);
-      })
-      .catch((e: Error) => setError(e.message));
-  }, []);
+    let alive = true; setError(null); setTaskError('');
+    void getStats().then((value) => { if (alive) setStats(value); }).catch((failure) => { if (alive) { setStats(null); setError(String(failure)); } });
+    if (!IS_STATIC) void listTasks().then((value) => { if (alive) setTasks(Array.isArray(value) ? value : (value as { items?: Task[] })?.items ?? null); }).catch((failure) => { if (alive) { setTasks(null); setTaskError(String(failure)); } });
+    return () => { alive = false; };
+  }, [refresh]);
 
   const fmtN = (n?: number | null) => (n == null ? '—' : n.toLocaleString());
 
@@ -117,7 +121,7 @@ export default function Dashboard() {
           <b>仪表盘</b>
         </span>
         <div className="spacer" />
-        <button className="btn ghost" onClick={() => window.location.reload()}>
+        <button className="btn ghost" onClick={() => setRefresh((value) => value + 1)}>
           <I.refresh size={13} /> 刷新
         </button>
       </div>
@@ -156,9 +160,9 @@ export default function Dashboard() {
               所有数据本地保存，无需离开桌面。
             </p>
             <div style={{ display: 'flex', gap: 10, marginTop: 22 }}>
-              <Link to="/upload" className="btn primary" style={{ height: 32, padding: '0 16px', textDecoration: 'none' }}>
+              {!IS_STATIC && <Link to="/upload" className="btn primary" style={{ height: 32, padding: '0 16px', textDecoration: 'none' }}>
                 <I.upload size={14} /> 上传数据
-              </Link>
+              </Link>}
               <Link to="/explore" className="btn" style={{ height: 32, padding: '0 16px', textDecoration: 'none' }}>
                 探索分析
               </Link>
@@ -181,6 +185,8 @@ export default function Dashboard() {
           />
         </div>
 
+        <section aria-label="最近项目"><h2>最近项目</h2>{recent.error && <p role="alert">项目列表未提供：{recent.error}</p>}{recent.heads === null ? <p>项目列表加载中/未知</p> : recent.heads.length ? <ul>{recent.heads.map((head) => <li key={head.projectId}><Link to={`/explore?projectId=${encodeURIComponent(head.projectId)}`}>{head.name} · {head.lastOpenedAt}</Link></li>)}</ul> : <p>尚无已保存项目</p>}</section>
+        <AttentionList refresh={refresh} />
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 10, marginBottom: 14 }}>
           <Tile label="批次总数" value={fmtN(stats?.batches)} unit="" />
           <Tile label="器件记录" value={fmtN(stats?.devices)} unit="" accent="var(--t3)" />
@@ -193,12 +199,12 @@ export default function Dashboard() {
         <div style={{ background: 'var(--bg-panel)', border: '1px solid var(--border)', borderRadius: 4 }}>
           <div className="panel-head" style={{ borderRadius: '4px 4px 0 0' }}>
             <I.cpu size={12} />
-            <span>最近任务</span>
-            <Link to="/tasks" className="btn ghost sm" style={{ marginLeft: 'auto', height: 22, textDecoration: 'none' }}>
+            <span>{IS_STATIC ? '静态版不执行任务' : '最近任务'}</span>
+            {!IS_STATIC && <Link to="/tasks" className="btn ghost sm" style={{ marginLeft: 'auto', height: 22, textDecoration: 'none' }}>
               查看全部 ›
-            </Link>
+            </Link>}
           </div>
-          <table className="dtable">
+          {!IS_STATIC && <table className="dtable">
             <thead>
               <tr>
                 <th>任务 ID</th>
@@ -210,14 +216,14 @@ export default function Dashboard() {
               </tr>
             </thead>
             <tbody>
-              {tasks.length === 0 && (
+              {(!tasks || tasks.length === 0) && (
                 <tr>
                   <td colSpan={6} className="dim" style={{ textAlign: 'center', padding: 24 }}>
-                    暂无任务
+                    {taskError ? `任务列表未提供：${taskError}` : !tasks ? '加载中/未知' : '暂无任务'}
                   </td>
                 </tr>
               )}
-              {tasks.slice(0, 10).map((t) => (
+              {tasks?.slice(0, 10).map((t) => (
                 <tr key={t.id}>
                   <td className="mono">{String(t.id).slice(0, 8)}</td>
                   <td>
@@ -257,7 +263,7 @@ export default function Dashboard() {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </table>}
         </div>
       </div>
     </>

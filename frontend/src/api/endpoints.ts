@@ -62,6 +62,7 @@ export const uploadBatch = (formData: FormData, onProgress?: (e: { loaded: numbe
 
 export const pullWebData = () => api.post('/web-sync/pull', undefined, { timeout: 0 }).then((r) => r.data as {
   mappings_added: number; batches_added: number; devices_added: number;
+    batches_updated?: number; batches_deleted?: number; tables_pushed?: number; errors?: string[];
 });
 
 export const pushBatchToWeb = (batchNo: string, token: string) =>
@@ -74,8 +75,10 @@ export const getServerSyncStatus = () =>
 export const saveServerSyncConfig = (serverUrl: string, username: string) =>
   api.put('/desktop-sync/config', { server_url: serverUrl, username }).then((r) => r.data);
 export const pullFromServer = () =>
-  api.post('/desktop-sync/pull', undefined, { timeout: 0 }).then((r) => r.data as {
+  api.post('/desktop-sync/synchronize', undefined, { timeout: 0 }).then((r) => r.data as {
     mappings_added: number; batches_added: number; devices_added: number;
+    batches_updated?: number; batches_deleted?: number; tables_pushed?: number;
+    mappings_pushed?: number; raw_pushed?: number; errors?: string[];
   });
 export const pushBatchToServer = (batchNo: string) =>
   api.post(`/desktop-sync/push/${encodeURIComponent(batchNo)}`, undefined, { timeout: 0 }).then((r) => r.data as {
@@ -187,3 +190,40 @@ export const distinctValues = (field: string, limit = 500) => getQueryDistinct(f
 export const exportCsv = (IS_STATIC ? staticApi.exportCsv : httpExportCsv) as unknown as typeof httpExportCsv;
 export const getSurrogateStatus = (IS_STATIC ? staticApi.getSurrogateStatus : httpGetSurrogateStatus) as typeof httpGetSurrogateStatus;
 export const predictSurrogate = (IS_STATIC ? staticApi.predictSurrogate : httpPredictSurrogate) as typeof httpPredictSurrogate;
+
+// Durable full-filter export; static clients must use their local budgeted adapter.
+export function createExportJob(body: { request_key: string; format: 'csv' | 'xlsx'; query_spec: import('../types/platformContracts').QuerySpec; expected_sources: import('../types/platformContracts').SourceRef[] }) {
+  if (IS_STATIC) return Promise.reject(new Error('静态页面不能创建服务器导出任务'));
+  return api.post('/export/jobs', body).then((r) => r.data);
+}
+export function getExportJob(id: string) {
+  if (IS_STATIC) return Promise.reject(new Error('静态页面不能读取服务器导出任务'));
+  return api.get(`/export/jobs/${encodeURIComponent(id)}`).then((r) => r.data);
+}
+export function inspectComparisonConditions(body: { comparison: import('../types/platformContracts').AnalysisComparison; quality_rule: import('../types/platformContracts').QualityRuleV1 | null }) {
+  if (IS_STATIC) return import('./static/comparison').then((module) => module.inspectStaticConditions(body.comparison, body.quality_rule));
+  return api.post('/analysis/compare/conditions', body).then((r) => r.data);
+}
+
+export const prepareUploadDraft = (body: FormData, onProgress?: (value: { loaded: number; total?: number }) => void) =>
+  api.post('/uploads/prepare', body, { timeout: 0, onUploadProgress: onProgress }).then((response) => response.data as { draft_id: string });
+export const getUploadGroup = (groupId: string) => api.get(`/uploads/groups/${groupId}`).then((response) => response.data as { group_id: string; drafts: import('../upload/types').UploadDraft[] });
+export const commitUploadDraft = (id: string, body: { request_key: string; check_digest: string; acknowledged_warning_codes: string[] }) => api.post(`/uploads/drafts/${id}/commit`, body).then((response) => response.data as { task_id: string; run_id: string; batch_no: string; status: string });
+export const recheckUploadDraft = (id: string, body: import('../upload/types').UploadOptions) => api.post(`/uploads/drafts/${id}/recheck`, body).then((response) => response.data);
+export const getProcessingReport = (id: string | number, offset = 0) => api.get(`/tasks/${id}/report`, { params: { offset, limit: 100 } }).then((response) => response.data as import('../upload/types').ProcessingReport);
+export const downloadProcessingIssues = (id: string | number) => api.get(`/tasks/${id}/issues.csv`, { responseType: 'blob' });
+
+export interface RetryOptions { task_id: number; run_id: string | null; expected_source_revision: number | null; retry_of_task_id: number | null; items: { id: string; unit_kind: string; source_member: string; port: string | null; status: string; error_code: string | null }[]; next_offset: number | null }
+export const getRetryOptions = (id: string | number, offset = 0) => api.get(`/tasks/${id}/retry-options`, { params: { offset, limit: 100 } }).then((r) => r.data as RetryOptions);
+export const retryTask = (id: string | number, body: { request_key: string; mode: 'failed'; item_ids?: string[]; expected_source_revision: number }) => api.post(`/tasks/${id}/retry`, body).then((r) => r.data as { task_id: string; run_id: string; batch_no: string; status: string });
+export interface DeletionImpact { batch_no: string; source_ref: import('../types/platformContracts').SourceRef; device_count: number; scope: string; raw_input_available: boolean; active_task_id: number | null; purge_after: string }
+export const getDeletionImpact = (name: string) => api.get(`/batches/${encodeURIComponent(name)}/deletion-impact`).then((r) => r.data as DeletionImpact);
+export const hideReplica = (source_ref: import('../types/platformContracts').SourceRef, hidden: boolean) => api.post('/replica-preferences', { source_ref, hidden }).then((r) => r.data);
+export const getReplicaPreferences = () => api.get('/replica-preferences').then((r) => r.data as { items: { batch_no: string | null; source_ref: import('../types/platformContracts').SourceRef; hidden: boolean }[] });
+export const deleteRemoteSource = (source: import('../types/platformContracts').SourceRef) => api.delete(`/sync/v3/sources/${source.origin_id}/${source.source_batch_id}`, { data: { expected_revision: source.source_revision } }).then((r) => r.data);
+export const getTrash = (page = 1) => api.get('/trash', { params: { page, size: 20 } }).then((r) => r.data as { total: number; items: DeletionImpact[] });
+export const restoreBatch = (name: string) => api.post(`/batches/${encodeURIComponent(name)}/restore`).then((r) => r.data);
+
+export const getRemoteDeletionImpact = (source: import('../types/platformContracts').SourceRef) => api.get(`/sync/v3/sources/${source.origin_id}/${source.source_batch_id}/deletion-impact`).then((r) => r.data as DeletionImpact);
+export const cancelExportJob = (id: string) => api.post(`/export/jobs/${id}/cancel`).then((r) => r.data);
+export const downloadExportArtifact = (id: string, name: string) => api.get(`/export/jobs/${id}/artifacts/${encodeURIComponent(name)}`, { responseType: 'blob' }).then((r) => r.data as Blob);

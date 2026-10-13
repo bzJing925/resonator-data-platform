@@ -29,5 +29,12 @@ def is_task_cancelled(task_id: int) -> bool:
 
 
 def raise_if_cancelled(task_id: int) -> None:
+    from app.services.processing_run import assert_run_writable
+    from app.workers.run_execution import current_run
+
     if is_task_cancelled(task_id):
         raise TaskCancelledError()
+    run = current_run.get()
+    if run is not None and run.task_id == task_id:
+        with SessionLocal() as db:
+            assert_run_writable(db, run.run_id, run.lease_token)

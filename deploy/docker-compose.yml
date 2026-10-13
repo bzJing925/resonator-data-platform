@@ -94,7 +94,7 @@ services:
       - ${DATA_ROOT:?need DATA_ROOT in .env}:/data
     extra_hosts:
       - "host.containers.internal:host-gateway"
-    command: ["celery", "-A", "app.workers", "worker", "--loglevel=info", "--concurrency=${WORKER_CONCURRENCY:-4}"]
+    command: ["celery", "-A", "app.workers", "worker", "--loglevel=info", "--concurrency=${WORKER_CONCURRENCY:-4}", "--beat", "--schedule=/data/logs/worker/celerybeat-schedule"]
 
   nginx:
     image: docker.io/library/nginx:alpine

@@ -10,6 +10,8 @@ from app.services import web_sync_service
 def _session() -> Session:
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
+    from app.services.replica_service import init_replication
+    init_replication(engine)
     return Session(engine)
 
 
@@ -52,7 +54,12 @@ def test_push_batch_writes_share_pack_to_main(monkeypatch) -> None:
     )
     db.add(batch)
     db.flush()
-    db.add(Device(batch_id=batch.id, original_filename="one.s1p", s_param_port="S11", pf="N"))
+    from uuid import uuid4
+
+    from app.services.source_identity import assign_batch_identity
+    assign_batch_identity(db, batch)
+    db.add(Device(batch_id=batch.id, original_filename="one.s1p", s_param_port="S11",
+                  pf="N", source_device_key=str(uuid4())))
     db.commit()
 
     seen = {}

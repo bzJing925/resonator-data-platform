@@ -14,6 +14,13 @@ const client: AxiosInstance = axios.create({
 });
 
 client.interceptors.request.use(async (config: InternalAxiosRequestConfig) => {
+  const method = (config.method ?? 'get').toLowerCase();
+  const route = config.url ?? '';
+  const readOnlyPost = method === 'post' && /^\/(query\/(devices|aggregate)|analysis\/compare(?:\/conditions)?|surrogate\/predict|export\/csv|files\/download-zip(?:-nodes)?)$/.test(route);
+  if (!['get', 'head', 'options'].includes(method) && !readOnlyPost) {
+    const { assertWriteCapability, readCapabilities, writeFeature } = await import('./capabilities');
+    assertWriteCapability(readCapabilities(), route === '/export/jobs' && config.data?.format === 'xlsx' ? 'full_export_xlsx' : writeFeature(route));
+  }
   config.baseURL = await resolveBaseURL();
   return config;
 });

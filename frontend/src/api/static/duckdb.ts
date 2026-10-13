@@ -11,6 +11,23 @@ import mvp_worker from '@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?ur
 
 let _db: Promise<duckdb.AsyncDuckDB> | null = null;
 let _conn: Promise<duckdb.AsyncDuckDBConnection> | null = null;
+let snapshotRoot = 'webdata/';
+export function configureSnapshotRoot(url: string) { snapshotRoot = url; }
+let devicesSnapshot: string | null | undefined;
+export async function publishedSnapshotToken(): Promise<string | null> {
+  const response = await fetch(`${snapshotRoot}manifest.json`, { cache: 'no-store' });
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error('无法核对已发布数据版本');
+  return JSON.stringify(await response.json());
+}
+export async function assertDeviceSnapshot() {
+  if (devicesSnapshot !== undefined && await publishedSnapshotToken() !== devicesSnapshot) {
+    throw new Error('QUERY_SOURCE_CHANGED：已发布数据版本变化，请重新加载页面');
+  }
+}
+export function deviceSnapshotMetadata(): unknown {
+  return devicesSnapshot ? JSON.parse(devicesSnapshot) : null;
+}
 const _tables = new Map<string, Promise<void>>();
 
 async function init(): Promise<duckdb.AsyncDuckDB> {
@@ -45,12 +62,29 @@ export function ensureTable(name: 'devices' | 'cell_means'): Promise<void> {
   if (!p) {
     p = (async () => {
       const conn = await getConn();
-      const resp = await fetch(`webdata/${name}.arrow.gz`);
+      const snapshot = name === 'devices' ? await publishedSnapshotToken() : undefined;
+      const resp = await fetch(`${snapshotRoot}${name}.arrow.gz`);
       if (!resp.ok) throw new Error(`快照缺失: ${name}.arrow.gz`);
+      const received = await resp.arrayBuffer();
+      const header = new Uint8Array(received);
+      const gzipped = header[0] === 0x1f && header[1] === 0x8b;
+      if (name === 'devices' && snapshot) {
+        const metadata = JSON.parse(snapshot);
+        const expected = gzipped ? metadata.devices_sha256 : metadata.devices_arrow_sha256;
+        if (Array.isArray(metadata.comparison_sources) && metadata.comparison_sources.length && typeof expected !== 'string') throw new Error('静态传输缺少对应字节的发布摘要');
+        if (typeof expected === 'string') {
+          const bytes = await crypto.subtle.digest('SHA-256', received);
+          const digest = [...new Uint8Array(bytes)].map((v) => v.toString(16).padStart(2, '0')).join('');
+          if (digest !== expected) throw new Error('QUERY_SOURCE_CHANGED：静态数据文件与发布证据不一致');
+        }
+      }
       const ds = new DecompressionStream('gzip');
-      const buf = await new Response(resp.body!.pipeThrough(ds)).arrayBuffer();
+      // fetch may already decode HTTP Content-Encoding:gzip (e.g. Vite preview/Nginx).
+      const buf = gzipped ? await new Response(new Blob([received]).stream().pipeThrough(ds)).arrayBuffer() : received;
       const table = tableFromIPC(new Uint8Array(buf));
+      if (name === 'devices' && await publishedSnapshotToken() !== snapshot) throw new Error('QUERY_SOURCE_CHANGED：加载数据期间版本变化');
       await conn.insertArrowTable(table, { name, create: true });
+      if (name === 'devices') devicesSnapshot = snapshot;
     })();
     _tables.set(name, p);
   }

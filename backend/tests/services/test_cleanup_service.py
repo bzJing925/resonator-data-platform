@@ -6,7 +6,7 @@ from app.models import Batch, Device, FileNode, Mapping
 from app.services.cleanup_service import delete_batch_and_files
 
 
-def test_delete_batch_and_files_removes_batch_and_files(db, cleanup_settings, tmp_path):
+def test_delete_batch_and_files_refuses_active_batch(db, cleanup_settings, tmp_path):
     mapping = Mapping(name="M1", file_path=str(tmp_path / "mapping.xlsx"))
     db.add(mapping)
     db.commit()
@@ -39,12 +39,12 @@ def test_delete_batch_and_files_removes_batch_and_files(db, cleanup_settings, tm
     db.add(file_node)
     db.commit()
 
-    assert delete_batch_and_files(db, "B.01") is True
-    assert db.scalar(select(Batch).where(Batch.batch_no == "B.01")) is None
-    assert db.scalar(select(Device).where(Device.batch_id == batch.id)) is None
-    assert db.scalar(select(FileNode).where(FileNode.batch_id == batch.id)) is None
-    assert not files_dir.exists()
-    assert not raw_zip.exists()
+    assert delete_batch_and_files(db, "B.01") is False
+    assert db.scalar(select(Batch).where(Batch.batch_no == "B.01")) is not None
+    assert db.scalar(select(Device).where(Device.batch_id == batch.id)) is not None
+    assert db.scalar(select(FileNode).where(FileNode.batch_id == batch.id)) is not None
+    assert files_dir.exists()
+    assert raw_zip.exists()
 
 
 def test_delete_batch_and_files_returns_false_when_missing(db, cleanup_settings):

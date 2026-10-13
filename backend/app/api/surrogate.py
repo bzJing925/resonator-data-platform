@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 from functools import lru_cache
 from pathlib import Path
@@ -39,6 +40,9 @@ def _resolve(p: Path) -> Path:
 def _load_bundle() -> dict | None:
     """首次请求时加载推理器与数据集；失败记录原因并返回 None（不反复重试）。"""
     global _bundle, _load_error
+    if os.environ.get("ALN_DISABLE_TORCH") == "1":
+        _load_error = "当前系统的 PyTorch 运行检查未通过，代理模型已停用"
+        return None
     if _bundle is not None or _load_error is not None:
         return _bundle
     with _lock:
@@ -135,12 +139,23 @@ def _options(bundle: dict) -> dict:
     }
 
 
+def _metadata():
+    from app.schemas.model_metadata import ModelMetadata
+    from app.services.model_metadata import describe
+    if os.environ.get("ALN_DISABLE_TORCH") == "1":
+        return ModelMetadata()
+    settings = get_settings()
+    return describe(_resolve(settings.SURROGATE_DATA_DIR), _resolve(settings.SURROGATE_CKPT_DIR),
+                    _resolve(settings.SURROGATE_EVAL_DIR))
+
+
 @router.get("/surrogate/status")
 def status() -> dict:
     bundle = _load_bundle()
     if bundle is None:
-        return {"available": False, "reason": _load_error}
-    return {"available": True, **_options(bundle)}
+        return {"available": False, "reason": _load_error,
+                "metadata": _metadata().model_dump(mode="json")}
+    return {"available": True, **_options(bundle), "metadata": _metadata().model_dump(mode="json")}
 
 
 def prewarm() -> None:
@@ -184,6 +199,10 @@ def _predict_cached(eg: float, fl: float, ag: float, area: float, pf: float) -> 
 @router.get("/surrogate/predict")
 def predict(eg: float, fl: float, area: float, pf: int = 0, ag: float = 1.0) -> dict:
     try:
-        return _predict_cached(round(eg, 3), round(fl, 3), round(ag, 3), round(area, 1), float(pf))
+        from app.services.model_metadata import with_applicability
+        answer = _predict_cached(round(eg, 3), round(fl, 3), round(ag, 3),
+                                 round(area, 1), float(pf))
+        metadata = with_applicability(_metadata(), dict(eg=eg, fl=fl, ag=ag, area=area, pf=pf))
+        return {**answer, "metadata": metadata.model_dump(mode="json")}
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc

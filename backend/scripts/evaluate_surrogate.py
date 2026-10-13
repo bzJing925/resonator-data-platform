@@ -231,6 +231,12 @@ def main() -> None:
             "improvement_vs_b0_pct": 50,
         },
     }
+    from app.services.model_metadata import artifact_digest, model_files
+    executed_files = [(name, stage2_path if name == 'stage2' else path)
+                      for name, path in model_files(data_dir, ckpt_dir)]
+    report['model_digest'] = artifact_digest(executed_files)
+    report['validation_dataset_digest'] = artifact_digest([
+        ('dataset', data_dir / 'dataset.npz'), ('split', data_dir / 'meta.json')])
     (out_dir / "report.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
     )

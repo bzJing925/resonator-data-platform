@@ -26,6 +26,9 @@ declare global {
 }
 
 export interface SSEProgressEvent {
+  schema_version?: number;
+  run_id?: string | null;
+  event_seq?: number;
   progress_pct?: number;
   stage_progress_pct?: number;
   stage?: string;
@@ -80,6 +83,9 @@ export interface Batch {
 }
 
 export interface Task {
+  run_id?: string | null;
+  quality_status?: string;
+  summary?: Record<string, unknown>;
   id: number | string;
   batch_no?: string;
   status?: string;
@@ -208,6 +214,7 @@ export interface ProcessStepData {
 }
 
 export interface SurrogateStatus {
+  metadata?: unknown;
   available: boolean;
   reason?: string;
   eg_min?: number;
@@ -220,6 +227,7 @@ export interface SurrogateStatus {
 }
 
 export interface SurrogatePredictResponse {
+  metadata?: unknown;
   params: Record<string, number>;
   freq: number[];
   z: number[];

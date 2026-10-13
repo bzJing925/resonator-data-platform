@@ -7,6 +7,8 @@
     "electron/updater-loader.cjs",
     "e2e/analysis/benchmark.ts",
     "e2e/analysis/harness.tsx",
+    "e2e/analysis/swarmHarness.tsx",
+    "e2e/analysis/chartControlsHarness.tsx",
     "scripts/*.js",
     "e2e/**/*.spec.ts"
   ],

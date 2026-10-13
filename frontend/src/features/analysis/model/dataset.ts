@@ -1,3 +1,6 @@
+import type { ResultManifest, SourceRef } from '../../../types/platformContracts';
+import { attachSourceRefs, type ExcludedRow, type LocalEdit } from './provenance';
+
 export type DatasetId = string;
 export type RowId = string;
 
@@ -29,6 +32,10 @@ export interface AnalysisDataset {
   fieldMap: AnalysisFieldMap;
   stats: Record<string, unknown> | null;
   revision: number;
+  manifest: ResultManifest | null;
+  provenance: Record<RowId, SourceRef | null>;
+  edits: LocalEdit[];
+  exclusions: ExcludedRow[];
 }
 
 interface AnalysisChartPage {
@@ -49,7 +56,7 @@ export const CHART_PAGE_ID = 'chart';
 
 const STRUCTURE_TYPE_ALIASES = ['structureType', 'structure_type', 'StructureType'];
 const AREA_REALITY_ALIASES = ['areaReality', 'area_um2', 'Area_reality'];
-const INTERNAL_ROW_FIELDS = new Set(['rowId', '__rowId', 'datasetId']);
+const INTERNAL_ROW_FIELDS = new Set(['rowId', '__rowId', 'datasetId', '_source_ref']);
 
 function sourceField(rows: Record<string, unknown>[], aliases: string[]) {
   return aliases.find((alias) => rows.some((row) =>
@@ -135,15 +142,18 @@ export function createAnalysisDataset({
   kind,
   rows,
   stats = null,
+  manifest = null,
 }: {
   id: DatasetId;
   name: string;
   kind: AnalysisDataset['kind'];
   rows: Record<string, unknown>[];
   stats?: Record<string, unknown> | null;
+  manifest?: ResultManifest | null;
 }): AnalysisDataset {
   const fieldMap = inferAnalysisFieldMap(rows);
   const normalizedRows = normalizeAnalysisRows(rows, id, fieldMap);
+  const references = attachSourceRefs(rows, manifest);
   return {
     id,
     name,
@@ -153,6 +163,12 @@ export function createAnalysisDataset({
     fieldMap,
     stats,
     revision: 1,
+    manifest: manifest ? { ...manifest, consistency: references.every((ref) => ref !== null
+      && ref.source_revision !== null && ref.source_device_key !== null)
+      ? manifest.consistency : 'unverified' } : null,
+    provenance: Object.fromEntries(normalizedRows.map((row, index) => [row.rowId, references[index]])),
+    edits: [],
+    exclusions: [],
   };
 }
 
@@ -161,14 +177,26 @@ export function duplicateAnalysisDataset(
   id: DatasetId,
   name: string,
 ): AnalysisDataset {
+  const rowIds = new Map([...source.rows.map((row) => row.rowId),
+    ...source.exclusions.map((row) => row.rowId)].map((rowId, index) => [rowId, `${id}:row:${index}`]));
   return {
     ...source,
     id,
     name,
     kind: 'derived',
-    rows: source.rows.map((row, index) => {
-      const rowId = `${id}:row:${index}`;
+    rows: source.rows.map((row) => {
+      const rowId = rowIds.get(row.rowId)!;
       return { ...row, rowId, __rowId: rowId, datasetId: id };
+    }),
+    manifest: source.manifest ? structuredClone(source.manifest) : null,
+    provenance: Object.fromEntries(Object.entries(source.provenance).map(([rowId, ref]) =>
+      [rowIds.get(rowId) ?? rowId, ref ? { ...ref } : null])),
+    edits: source.edits.map((edit) => ({ ...structuredClone(edit), datasetId: id,
+      rowId: rowIds.get(edit.rowId) ?? edit.rowId })),
+    exclusions: source.exclusions.map((excluded) => {
+      const rowId = rowIds.get(excluded.rowId)!;
+      return { ...structuredClone(excluded), datasetId: id, rowId,
+        originalRow: { ...structuredClone(excluded.originalRow), datasetId: id, rowId, __rowId: rowId } };
     }),
     columns: source.columns.map((column) => ({ ...column })),
     fieldMap: { ...source.fieldMap },

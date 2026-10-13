@@ -19,10 +19,7 @@ def device_columns() -> set[str]:
     return {c.key for c in inspect(Device).c}
 
 
-DEVICE_COLUMNS: set[str] = device_columns()
-
+# Compatibility aliases; shared query rules live below the API layer.
+from app.services.query_spec import ALLOWED_QUERY_FIELDS, DEVICE_COLUMNS  # noqa: E402, F401
 
 VIRTUAL_COLUMNS: set[str] = {"batch_no"}
-
-
-ALLOWED_QUERY_FIELDS: set[str] = DEVICE_COLUMNS | VIRTUAL_COLUMNS

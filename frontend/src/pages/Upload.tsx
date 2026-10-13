@@ -1,50 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { Link } from 'react-router-dom';
+import UploadGroup from '../upload/UploadGroup';
 import I from '../components/Icons';
-import { listMappings, pullWebData, pushBatchToWeb, uploadBatch } from '../api/endpoints';
-import { useUploadProgress } from '../contexts/UploadProgressContext';
+import { listMappings, pullWebData } from '../api/endpoints';
 import { usePageState } from '../contexts/PageStateContext';
-import useSSE from '../hooks/useSSE';
 import type { Mapping } from '../types';
-
-interface ProgressBarProps {
-  label: string;
-  pct: number;
-  status?: string;
-  compact?: boolean;
-}
-
-function ProgressBar({ label, pct, status, compact = false }: ProgressBarProps) {
-  const color =
-    status === 'error' ? 'var(--fail)' : status === 'success' ? 'var(--pass)' : 'var(--primary)';
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: compact ? 6 : 10 }}>
-      <span style={{ fontSize: 11, color: 'var(--fg-3)', width: 56, flexShrink: 0 }}>{label}</span>
-      <div
-        style={{
-          flex: 1,
-          height: compact ? 5 : 8,
-          background: 'var(--bg-panel-2)',
-          border: '1px solid var(--border)',
-          borderRadius: 3,
-          overflow: 'hidden',
-        }}
-      >
-        <div
-          style={{
-            width: `${pct}%`,
-            height: '100%',
-            background: color,
-            transition: 'width 0.3s',
-          }}
-        />
-      </div>
-      <span className="mono" style={{ width: 44, textAlign: 'right', fontSize: 11 }}>
-        {pct}%
-      </span>
-    </div>
-  );
-}
 
 const UPLOAD_INITIAL_STATE = {
   mappingId: '',
@@ -75,21 +35,14 @@ export default function Upload() {
 
   const [mappings, setMappings] = useState<Mapping[]>([]);
   const [files, setFiles] = useState<File[]>([]);
+  const [targetBatch, setTargetBatch] = useState('');
   const [uploadKind, setUploadKind] = useState<'raw' | 'table'>('raw');
   const [dragOver, setDragOver] = useState<boolean>(false);
   const [submitting, setSubmitting] = useState<boolean>(false);
-  const [taskInfo, setTaskInfo] = useState<{ task_id: string | number; batch_no: string } | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [uploadPct, setUploadPct] = useState<number>(0);
-  const [syncToWeb, setSyncToWeb] = useState<boolean>(false);
-  const [webToken, setWebToken] = useState<string>('');
   const [webSyncMessage, setWebSyncMessage] = useState<string | null>(null);
   const [pullingWeb, setPullingWeb] = useState<boolean>(false);
-  const [pushingWeb, setPushingWeb] = useState<boolean>(false);
-  const pushedBatchRef = useRef<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
-  const navigate = useNavigate();
-  const { addTask } = useUploadProgress();
 
   const refreshMappings = useCallback(() => {
     listMappings()
@@ -105,37 +58,6 @@ export default function Upload() {
     refreshMappings();
   }, [refreshMappings]);
 
-  const sse = useSSE(taskInfo?.task_id, { enabled: !!taskInfo });
-
-  useEffect(() => {
-    if (sse.done && sse.status === 'success' && taskInfo?.batch_no) {
-      const finish = () => setTimeout(() => navigate(`/batches/${encodeURIComponent(taskInfo.batch_no)}`), 1500);
-      if (!syncToWeb || !webToken || pushedBatchRef.current === taskInfo.batch_no) {
-        const timer = finish();
-        return () => clearTimeout(timer);
-      }
-      pushedBatchRef.current = taskInfo.batch_no;
-      setPushingWeb(true);
-      setWebSyncMessage('正在写入网页版数据仓…');
-      let active = true;
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      pushBatchToWeb(taskInfo.batch_no, webToken)
-        .then((result) => {
-          if (active) setWebSyncMessage(result.message);
-        })
-        .catch((error) => {
-          if (active) setWebSyncMessage(`网页版同步失败：${error?.response?.data?.detail || error.message}`);
-        })
-        .finally(() => {
-          if (active) setPushingWeb(false);
-          if (active) timer = finish();
-        });
-      return () => {
-        active = false;
-        if (timer) clearTimeout(timer);
-      };
-    }
-  }, [sse.done, sse.status, taskInfo, navigate, syncToWeb, webToken]);
 
   const validExts = uploadKind === 'raw' ? RAW_FILE_EXTS : TABLE_FILE_EXTS;
 
@@ -179,64 +101,11 @@ export default function Upload() {
     setDragOver(false);
   };
 
-  const submit = async () => {
-    setSubmitError(null);
-    if (files.length === 0) {
-      setSubmitError(`请选择 ${validExts.join(' / ')} 文件`);
-      return;
-    }
-    if (!mappingId) {
-      setSubmitError('请选择对照表（如果列表为空，先到 /mappings 上传）');
-      return;
-    }
-
-    setSubmitting(true);
-    setUploadPct(0);
-    const results: { task_id: string | number; batch_no: string }[] = [];
-    const errors: string[] = [];
-
-    for (let i = 0; i < files.length; i++) {
-      const f = files[i];
-      const fd = new FormData();
-      fd.append('file', f);
-      fd.append('mapping_id', mappingId);
-      if (fStart) fd.append('f_start_ghz', fStart);
-      if (fEnd) fd.append('f_end_ghz', fEnd);
-      fd.append('deembed', deembed ? 'true' : 'false');
-      if (deembed) fd.append('deembed_method', deembedMethod);
-
-      try {
-        const res = await uploadBatch(fd, (p) => {
-          if (p.total) {
-            const filePct = (p.loaded / p.total) * 100;
-            const overall = ((i + filePct / 100) / files.length) * 100;
-            setUploadPct(Math.round(overall));
-          }
-        });
-        results.push(res as { task_id: string | number; batch_no: string });
-      } catch (e: any) {
-        errors.push(`${f.name}: ${e.message}`);
-      }
-    }
-
-    if (errors.length) {
-      setSubmitError(`部分文件上传失败（${errors.length}/${files.length}）：\n${errors.join('\n')}`);
-    }
-    if (results.length) {
-      setTaskInfo(results[0]); // 导航到第一个成功的批次
-      results.forEach((r) => addTask(r));
-    }
-    setSubmitting(false);
-  };
-
   const reset = () => {
-    setTaskInfo(null);
     setFiles([]);
-    setUploadPct(0);
     setSubmitError(null);
     setDragOver(false);
     setWebSyncMessage(null);
-    pushedBatchRef.current = null;
     if (inputRef.current) inputRef.current.value = '';
   };
 
@@ -287,6 +156,7 @@ export default function Upload() {
           padding: 18,
           display: 'grid',
           gridTemplateColumns: '1fr 1fr',
+          gridAutoRows: 'max-content',
           gap: 14,
           alignContent: 'start',
           maxWidth: 1280,
@@ -339,7 +209,7 @@ export default function Upload() {
                     <button
                       className="btn sm danger"
                       onClick={() => setFiles((prev) => prev.filter((_, i) => i !== idx))}
-                      disabled={submitting || !!taskInfo}
+                      disabled={submitting}
                     >
                       <I.trash size={12} />
                     </button>
@@ -422,7 +292,7 @@ export default function Upload() {
                 style={{ width: '100%' }}
                 value={mappingId}
                 onChange={(e) => setMappingId(e.target.value)}
-                disabled={submitting || !!taskInfo}
+                disabled={submitting}
               >
                 {mappings.length === 0 && <option value="">（无对照表，请先上传）</option>}
                 {mappings.map((m) => (
@@ -432,55 +302,37 @@ export default function Upload() {
                 ))}
               </select>
             </div>
-            <div className="field">
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={syncToWeb}
-                  onChange={(e) => setSyncToWeb(e.target.checked)}
-                  disabled={submitting || !!taskInfo}
-                />
-                <span style={{ fontSize: 13, color: 'var(--fg-1)' }}>入库后同步到网页版</span>
-              </label>
-              {syncToWeb && (
-                <div style={{ marginTop: 8 }}>
-                  <input
-                    className="input mono"
-                    type="password"
-                    placeholder="GitHub Token（Contents: Read and write）"
-                    value={webToken}
-                    onChange={(e) => setWebToken(e.target.value)}
-                    disabled={submitting || !!taskInfo}
-                    style={{ width: '100%' }}
-                  />
-                  <div className="dim" style={{ fontSize: 10.5, marginTop: 4 }}>
-                    直接写入网页版数据仓；网站会在 CI 校验、合并和发布后更新。Token 不保存。
-                  </div>
-                </div>
-              )}
-            </div>
+            {uploadKind === 'table' && <div className="field">
+              <label>关联服务器原始批次（可选）</label>
+              <input className="input" value={targetBatch}
+                onChange={(e) => setTargetBatch(e.target.value)}
+                placeholder="填写服务器批次名；留空则作为独立指标批次"
+                disabled={submitting} />
+              <small>关联后按原始文件名、目录和端口更新指标，保留服务器原始文件与曲线。</small>
+            </div>}
+            <Link to="/settings?target=web">网页发布请到设置中人工确认</Link>
             <div className="field">
               <div className="field-label">
                 <span>频率范围 (GHz)</span>
-                <span className="hint">留空 = 全频段</span>
+                <span className="hint">留空自动使用文件频段</span>
               </div>
               <div className="row-flex">
                 <input
                   className="input mono"
-                  placeholder="14.0"
+                  placeholder="自动"
                   value={fStart}
                   onChange={(e) => setFStart(e.target.value)}
                   style={{ flex: 1 }}
-                  disabled={submitting || !!taskInfo}
+                  disabled={submitting}
                 />
                 <span className="dim">—</span>
                 <input
                   className="input mono"
-                  placeholder="16.0"
+                  placeholder="自动"
                   value={fEnd}
                   onChange={(e) => setFEnd(e.target.value)}
                   style={{ flex: 1 }}
-                  disabled={submitting || !!taskInfo}
+                  disabled={submitting}
                 />
               </div>
             </div>
@@ -490,8 +342,8 @@ export default function Upload() {
                   display: 'flex',
                   alignItems: 'flex-start',
                   gap: 8,
-                  cursor: submitting || taskInfo ? 'default' : 'pointer',
-                  opacity: submitting || taskInfo ? 0.6 : 1,
+                  cursor: submitting ? 'default' : 'pointer',
+                  opacity: submitting ? 0.6 : 1,
                 }}
               >
                 <input
@@ -499,7 +351,7 @@ export default function Upload() {
                   data-testid="deembed-toggle"
                   checked={deembed}
                   onChange={(e) => setDeembed(e.target.checked)}
-                  disabled={submitting || !!taskInfo}
+                  disabled={submitting}
                   style={{ marginTop: 2 }}
                 />
                 <span>
@@ -512,11 +364,11 @@ export default function Upload() {
                   {deembed && (
                     <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
                       <div style={{ fontSize: 11, color: 'var(--fg-2)' }}>去嵌方法：</div>
-                      <select
+                      <select className="select"
                         value={deembedMethod}
                         onChange={(e) => setDeembedMethod(e.target.value)}
-                        disabled={submitting || !!taskInfo}
-                        style={{ fontSize: 12, padding: '4px 8px', borderRadius: 4, border: '1px solid var(--border)', background: 'var(--bg-1)', color: 'var(--fg-1)' }}
+                        disabled={submitting}
+                        style={{ fontSize: 12, padding: '4px 8px', borderRadius: 4, border: '1px solid var(--border)', background: 'var(--bg-panel)', color: 'var(--fg-1)' }}
                       >
                         <option value="default">平台默认（同目录第一组校准件）</option>
                         <option value="original">原始（de.py：按编号+位置匹配）</option>
@@ -538,78 +390,10 @@ export default function Upload() {
               <I.alert size={12} /> {submitError}
             </div>
           )}
-          {taskInfo ? (
-            <button className="btn" onClick={reset}>
-              重新开始
-            </button>
-          ) : (
-            <button className="btn primary" onClick={submit} disabled={submitting || files.length === 0 || !mappingId}>
-              <I.play size={11} /> {submitting ? `上传中 ${uploadPct}%` : '启动入库'}
-            </button>
-          )}
+          <UploadGroup files={files} options={{ mapping_id: Number(mappingId), f_start_ghz: fStart.trim() ? Number(fStart) : null, f_end_ghz: fEnd.trim() ? Number(fEnd) : null, process_type: 'AUTO', deembed, deembed_method: deembedMethod, target_batch: uploadKind === 'table' ? targetBatch.trim() : '' }} onBusy={setSubmitting} />
         </div>
 
-        {taskInfo && (
-          <div style={{ gridColumn: '1 / -1' }} className="chart-card">
-            <div className="chart-head">
-              <span className="title">④ 处理中 · {taskInfo.batch_no}</span>
-              <span className="axes">任务 ID：{taskInfo.task_id}</span>
-              <div className="right">
-                <span
-                  className={`badge ${
-                    sse.status === 'success' ? 'done' : sse.status === 'error' ? 'err' : 'run'
-                  }`}
-                >
-                  {{
-                    pending: '排队中',
-                    running: '运行中',
-                    success: '成功',
-                    error: '失败',
-                  }[sse.status || 'pending']}
-                </span>
-                <Link to={`/tasks/${taskInfo.task_id}`} className="btn ghost sm" style={{ textDecoration: 'none' }}>
-                  详情 ›
-                </Link>
-              </div>
-            </div>
-            <div style={{ padding: 14 }}>
-              <ProgressBar label="总进度" pct={sse.progress} status={sse.status} />
-              {sse.stage && sse.stage !== 'done' && sse.stage !== 'failed' && (
-                <ProgressBar
-                  label={sse.stage === 'metrics' ? '指标计算' : '解压'}
-                  pct={sse.stageProgress}
-                  status={sse.status}
-                  compact
-                />
-              )}
-              <div className="mono dim" style={{ fontSize: 12, marginTop: 8 }}>
-                {sse.message || '等待 worker...'}
-              </div>
-              {sse.error && (
-                <div
-                  style={{
-                    marginTop: 10,
-                    padding: 10,
-                    background: 'var(--fail-soft)',
-                    border: '1px solid var(--fail)',
-                    borderRadius: 4,
-                    color: 'var(--fail)',
-                  }}
-                >
-                  <I.alert size={12} /> {sse.error}
-                </div>
-              )}
-              {sse.done && sse.status === 'success' && (
-                <div style={{ marginTop: 10, color: 'var(--pass)', fontSize: 12 }}>
-                  <I.check size={12} /> {pushingWeb ? '本机入库完成，正在同步到网页版…' : '完成，即将跳转到批次详情...'}
-                </div>
-              )}
-              {webSyncMessage && (
-                <div className="dim" style={{ marginTop: 8, fontSize: 11.5 }}>{webSyncMessage}</div>
-              )}
-            </div>
-          </div>
-        )}
+
       </div>
     </>
   );

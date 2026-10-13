@@ -9,11 +9,9 @@ from sqlalchemy import create_engine, text
 
 from app.config import get_settings
 from app.models import Base
+from app.schema_upgrades import SCHEMA_VERSION, _migrate_v4_to_v5
 
 logger = logging.getLogger(__name__)
-
-SCHEMA_VERSION = 4
-
 
 def _ensure_dirs(root: Path) -> None:
     for sub in ("uploads", "files", "mappings", "exports", "logs", "watch"):
@@ -177,6 +175,9 @@ def _init_schema(engine) -> None:
         return
 
     if current == SCHEMA_VERSION:
+        from app.schema_upgrades import _upgrade_existing_columns
+        with engine.begin() as conn:
+            _upgrade_existing_columns(conn)
         return
 
     if current < SCHEMA_VERSION:
@@ -185,6 +186,8 @@ def _init_schema(engine) -> None:
             _migrate_v2_to_v3(engine)
         if current < 4:
             _migrate_v3_to_v4(engine)
+        if current < 5:
+            _migrate_v4_to_v5(engine)
         with engine.connect() as conn:
             _ensure_version_table(conn)
             conn.execute(
@@ -197,17 +200,9 @@ def _init_schema(engine) -> None:
             conn.commit()
         return
 
-    # 当前版本高于代码版本时回退到重建（通常只在开发分支切换时出现）
-    logger.info("桌面数据库 schema 版本 %s 高于当前 %s，重建表", current, SCHEMA_VERSION)
-    Base.metadata.drop_all(bind=engine)
-    Base.metadata.create_all(bind=engine)
-    with engine.connect() as conn:
-        _ensure_version_table(conn)
-        conn.execute(
-            text("INSERT INTO _aln_schema_version (version) VALUES (:v)"),
-            {"v": SCHEMA_VERSION},
-        )
-        conn.commit()
+    raise RuntimeError(
+        f"数据库版本 {current} 高于程序支持的 {SCHEMA_VERSION}，拒绝降级；请使用新版程序"
+    )
 
 
 def init_desktop_environment() -> None:
@@ -223,5 +218,13 @@ def init_desktop_environment() -> None:
         connect_args={"check_same_thread": False},
     )
     _init_schema(engine)
+    Base.metadata.create_all(bind=engine)
+    with engine.begin() as conn:
+        columns = {row[1] for row in conn.execute(text("PRAGMA table_info(batches)"))}
+        if "synced_at" not in columns:
+            conn.execute(text("ALTER TABLE batches ADD COLUMN synced_at DATETIME"))
+    from app.services.replica_service import init_replication
+
+    init_replication(engine)
     engine.dispose()
     logger.info("桌面环境初始化完成: %s", root)

@@ -86,6 +86,12 @@ function enforceDataLimit(serializable, dataKeys, maxDataBytes) {
 }
 
 function serializeStateMap(stateMap, optionsRef) {
+  try {
+    if (localStorage.getItem('aln_analysis_migrated_v1') === '1') {
+      const { explore: _explore, ...rest } = stateMap;
+      stateMap = rest;
+    }
+  } catch { /* Session preferences remain usable. */ }
   const persisted = {};
   for (const [key, state] of Object.entries(stateMap)) {
     const opts = optionsRef.current[key] || {};

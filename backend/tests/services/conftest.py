@@ -16,7 +16,7 @@ from app.models.base import Base
 def cleanup_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Settings:
     """将 cleanup_service 使用的 files_dir 指向临时目录，避免写入真实 DATA_ROOT。"""
     settings = Settings(DATA_ROOT=tmp_path / "data")
-    monkeypatch.setattr("app.services.cleanup_service.get_settings", lambda: settings)
+    monkeypatch.setattr("app.services.artifact_lifecycle.get_settings", lambda: settings)
     return settings
 
 

@@ -66,8 +66,10 @@ def test_get_batch_prefers_mv_when_exists(
     from app.services.batch_stats_service import get_batch_stats
 
     db = MagicMock()
+    from app.models import Batch
+    db.scalar.return_value = Batch(id=42, batch_no="active", deleted_at=None)
     db.execute.return_value.mappings.return_value.all.return_value = [
-        {"pass_count": 80, "fs_mean": 1.85, "fs_median": 1.86}
+        {"pass_count": 80, "matched_total": 100, "fs_mean": 1.85, "fs_median": 1.86}
     ]
 
     stats = get_batch_stats(db, batch_id=42, total_dev=100)

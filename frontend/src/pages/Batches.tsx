@@ -1,16 +1,16 @@
+import DeletionImpactDialog from '../lifecycle/DeletionImpactDialog';
 import React, { memo, useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import I from '../components/Icons';
-import { listBatches, deleteBatch, renameBatch } from '../api/endpoints';
+import { listBatches, renameBatch } from '../api/endpoints';
 import RenameBatchModal from '../components/RenameBatchModal';
-import ServerSyncPanel from '../components/ServerSyncPanel';
 import { usePageState } from '../contexts/PageStateContext';
 import { IS_STATIC } from '../config';
 import type { Batch } from '../types';
 
 interface BatchRowProps {
   batch: Batch;
-  onDelete: (batchNo: string) => Promise<void>;
+  onDelete: (batch: Batch) => void;
   onRename: (batchNo: string) => void;
 }
 
@@ -65,7 +65,7 @@ const BatchRow = memo(function BatchRow({ batch, onDelete, onRename }: BatchRowP
               <button className="btn ghost sm" title="重命名" onClick={() => onRename(b.batch_no)}>
                 <I.edit size={12} />
               </button>
-              <button className="btn ghost sm danger" title="删除" onClick={() => onDelete(b.batch_no)}>
+              <button className="btn ghost sm danger" title="删除" onClick={() => onDelete(b)}>
                 <I.trash size={12} />
               </button>
             </>
@@ -79,6 +79,7 @@ const BatchRow = memo(function BatchRow({ batch, onDelete, onRename }: BatchRowP
 const BATCHES_INITIAL_STATE = { page: 1, search: '' };
 
 export default function Batches() {
+  const [deleting, setDeleting] = useState<string | null>(null);
   const [state, setState] = usePageState('batches', BATCHES_INITIAL_STATE);
   const { page, search } = state;
   const setPage = useCallback((v: number | ((prev: number) => number)) => setState((s) => ({ ...s, page: typeof v === 'function' ? v(s.page) : v })), [setState]);
@@ -112,15 +113,7 @@ export default function Batches() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, size]);
 
-  const onDelete = async (batchNo: string) => {
-    if (!confirm(`确认删除批次 ${batchNo}？此操作不可逆。`)) return;
-    try {
-      await deleteBatch(batchNo);
-      load();
-    } catch (e: any) {
-      alert(e.message);
-    }
-  };
+  const onDelete = (batch: Batch) => setDeleting(batch.batch_no);
 
   const handleRename = async (oldBatchNo: string, newBatchNo: string) => {
     try {
@@ -141,6 +134,7 @@ export default function Batches() {
 
   return (
     <>
+      {deleting && <DeletionImpactDialog batchNo={deleting} onClose={() => setDeleting(null)} onChanged={() => { setDeleting(null); load(); }} />}
       <div className="toolbar">
         <span className="crumb">
           谐振器 <span style={{ color: 'var(--fg-4)' }}>›</span> <b>批次管理</b>
@@ -171,7 +165,8 @@ export default function Batches() {
             {error}
           </div>
         )}
-        <ServerSyncPanel onChanged={() => load()} />
+        {!IS_STATIC && <Link to="/trash" className="btn">回收站</Link>}
+        <Link to="/settings?target=server">连接与同步设置</Link>
         <table className="dtable" style={{ background: 'var(--bg-panel)' }}>
           <thead>
             <tr>

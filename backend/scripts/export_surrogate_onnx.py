@@ -197,6 +197,11 @@ def main() -> None:
     s1 = export_stage1(m1, out / "stage1.onnx", k=c1["k"])
     s2 = export_stage2(m2, out / "stage2.onnx", k=meta["k"], n_freq=meta["n_freq"])
     _align_check(ckpt, data, s1, s2, stage2_pt)
+    from app.services.model_metadata import artifact_digest, describe
+    metadata = describe(data, ckpt, ckpt.parent / 'eval_out')
+    metadata.source_model_digest = metadata.model_digest
+    metadata.model_digest = artifact_digest([('stage1', s1), ('stage2', s2)])
+    (out / 'model_metadata.json').write_text(metadata.model_dump_json(indent=2))
     print(f"ONNX 已导出并校验: {s1} , {s2}")
 
 

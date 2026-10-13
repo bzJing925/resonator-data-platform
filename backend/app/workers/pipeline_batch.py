@@ -8,27 +8,26 @@ from __future__ import annotations
 import logging
 import os
 import re
-import shutil
 import sys
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
 from celery import Task
-from sqlalchemy import delete, func, select, text, update
+from sqlalchemy import select
 
 from app.config import get_settings
 from app.core.filename import parse_filename
 from app.core.mapping import load_mapping
 from app.db import SessionLocal
-from app.models import Batch, Device, Mapping
+from app.models import Batch, Mapping
 from app.services.device_ingest import bulk_insert_devices
-from app.services.file_tree_service import build_file_tree_from_disk
 from app.workers.celery_app import celery_app
 from app.workers.pipeline.calibration import CalibrationIndex
 from app.workers.pipeline.extractor import StreamingExtractor
 from app.workers.pipeline.processor import DutProcessor
 from app.workers.progress import ProgressPublisher
+from app.workers.run_execution import current_run, leased_stage
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +83,7 @@ def _wafer_from_batch_no(batch_no: str) -> int | None:
 
 
 @celery_app.task(bind=True, name="aln.pipeline_batch")
+@leased_stage("compute")
 def pipeline_batch_task(
     self: Task,
     upload_task_id: int,
@@ -94,6 +94,8 @@ def pipeline_batch_task(
     f_end_ghz: float | None = None,
     deembed_method: str = "default",
     process_type: str = "AUTO",
+    run_id: str | None = None,
+    lease_token: str | None = None,
 ) -> dict[str, Any]:
     """Pipeline batch task: stream-extract + process + bulk-insert.
 
@@ -116,14 +118,13 @@ def pipeline_batch_task(
             raise RuntimeError(f"mappings 表无 id={mapping_id}")
         mapping_dict = load_mapping(mapping_row.file_path)
 
-        target_dir = settings.files_dir / batch_no
-        if target_dir.exists():
-            shutil.rmtree(target_dir)
-        target_dir.mkdir(parents=True, exist_ok=True)
+        from app.models import ProcessingRun
+        from app.services.result_publish import prepare_stage_directory
 
-        # 清理该 batch 旧 devices，防止重复入库
-        db.execute(delete(Device).where(Device.batch_id == batch.id))
-        db.commit()
+        ticket = current_run.get()
+        run_config = db.get(ProcessingRun, ticket.run_id).config_json
+        prepared_dir = run_config.get("prepared_dir")
+        target_dir = prepare_stage_directory(db, ticket, copy_from=prepared_dir)
 
         # ── 1. 解压（流式产出文件路径）────────────────────────────────
         extracted_paths: list[Path] = []
@@ -145,17 +146,16 @@ def pipeline_batch_task(
             scan_interval=settings.PIPELINE_SCAN_INTERVAL,
         )
         try:
-            for p in extractor.extract(progress_callback=_extract_progress):
+            paths = (
+                sorted(target_dir.rglob("*"))
+                if prepared_dir
+                else extractor.extract(progress_callback=_extract_progress)
+            )
+            for p in paths:
                 extracted_paths.append(p)
         except Exception:
             logger.exception("解压失败")
             raise
-
-        # 初始化虚拟文件树
-        try:
-            build_file_tree_from_disk(db, batch)
-        except Exception:
-            logger.exception("初始化虚拟文件树失败（非致命）")
 
         # ── 2. 文件分类与校准件优先 ───────────────────────────────────
         cal_s2p_files: list[Path] = []
@@ -165,22 +165,54 @@ def pipeline_batch_task(
         failures: list[str] = []
         total_processed = 0
 
-        # 扫描所有已提取文件进行分类
+        # Preserve source-member identity before generating derived curves.
+        from app.core.deembed import DeembedMethod, is_calibration_filename
+        from app.services.processing_report import record_item_result
+        from app.services.source_identity import register_source_input
+        from app.services.upload_precheck import file_digest
+
+        approved = set(run_config.get("prepared_file_names", [])) if prepared_dir else None
         for p in extracted_paths:
             if not p.is_file():
                 continue
+            member = str(p.relative_to(target_dir))
             ext = p.suffix.lower()
+            calibration = is_calibration_filename(p.name, DeembedMethod(deembed_method))
             if ext not in (".s1p", ".s2p"):
+                if not run_config.get("precheck_report"):
+                    record_item_result(db, ticket.run_id, "file", member, "skipped")
                 continue
-
-            parsed = parse_filename(p.name)
-            if parsed.is_calibration or _looks_like_calibration(p.name):
+            if calibration:
+                if not run_config.get("precheck_report"):
+                    record_item_result(db, ticket.run_id, "file", member, "success")
                 if ext == ".s2p":
                     cal_s2p_files.append(p)
                 continue
-
-            item = _path_to_item(p, target_dir)
-            pending_duts.append(item)
+            if approved is not None and member not in approved:
+                continue
+            record_item_result(db, ticket.run_id, "file", member, "pending")
+            ports = ["S11", "S22"] if ext == ".s2p" else [parse_filename(p.name).port or "S11"]
+            for port in ports:
+                source = register_source_input(
+                    db,
+                    batch.id,
+                    member,
+                    port,
+                    input_digest=file_digest(p),
+                    current_relpath=None,
+                    original_filename=p.name,
+                )
+                record_item_result(
+                    db,
+                    ticket.run_id,
+                    "device",
+                    member,
+                    "pending",
+                    port=port,
+                    source_device_key=source.source_device_key,
+                )
+            pending_duts.append(_path_to_item(p, target_dir))
+        db.commit()
 
         # 建立校准索引
         if cal_s2p_files:
@@ -212,9 +244,32 @@ def pipeline_batch_task(
             use_threads = False
 
         processor = DutProcessor(
-            compress_raw=settings.PIPELINE_COMPRESS_RAW,
-            keep_deembed_temp=settings.PIPELINE_KEEP_DEEMBED_TEMP,
+            compress_raw=False,
+            keep_deembed_temp=True,
         )
+
+        def persist_result(item, result):
+            from app.services.processing_report import record_device_result
+
+            member = item["s_param_relpath"]
+            succeeded = set()
+            for row in result.get("rows", []):
+                port = row.get("s_param_port", "S11")
+                evidence = record_device_result(db, ticket.run_id, member, port, result=row)
+                row["source_device_key"] = evidence.source_device_key
+                row["batch_id"] = batch.id
+                device_rows.append(row)
+                succeeded.add(port)
+            ports = (
+                ["S11", "S22"]
+                if item["type"] == "s2p"
+                else [parse_filename(Path(item["path"]).name).port or "S11"]
+            )
+            for port in ports:
+                if port not in succeeded:
+                    record_device_result(
+                        db, ticket.run_id, member, port, error_code="METRIC_EXTRACTION_FAILED"
+                    )
 
         last_pct = 0
 
@@ -223,10 +278,7 @@ def pipeline_batch_task(
             for item in all_duts:
                 result = processor.process(item, mapping_dict, wafer, cal_index, target_dir)
                 total_processed += 1
-                if result["ok"]:
-                    for row in result["rows"]:
-                        row["batch_id"] = batch.id
-                        device_rows.append(row)
+                persist_result(item, result)
                 for f in result.get("failures", []):
                     failures.append(f)
 
@@ -247,7 +299,7 @@ def pipeline_batch_task(
                     last_pct = stage_pct
 
                 if len(device_rows) >= INSERT_CHUNK:
-                    bulk_insert_devices(db, device_rows)
+                    bulk_insert_devices(db, device_rows, commit=True)
                     device_rows = []
         else:
             executor_cls = ThreadPoolExecutor if use_threads else ProcessPoolExecutor
@@ -268,10 +320,7 @@ def pipeline_batch_task(
                     result = future.result()
                     total_processed += 1
 
-                    if result["ok"]:
-                        for row in result["rows"]:
-                            row["batch_id"] = batch.id
-                            device_rows.append(row)
+                    persist_result(futures[future], result)
                     for f in result.get("failures", []):
                         failures.append(f)
 
@@ -293,47 +342,20 @@ def pipeline_batch_task(
                         last_pct = stage_pct
 
                     if len(device_rows) >= INSERT_CHUNK:
-                        bulk_insert_devices(db, device_rows)
+                        bulk_insert_devices(db, device_rows, commit=True)
                         device_rows = []
 
         if device_rows:
-            bulk_insert_devices(db, device_rows)
+            bulk_insert_devices(db, device_rows, commit=True)
 
-        # ── 4. 收尾 ─────────────────────────────────────────────────
-        device_count = (
-            db.scalar(select(func.count(Device.id)).where(Device.batch_id == batch.id)) or 0
-        )
+        # Only publication changes the active dataset and its file tree.
+        from app.services.result_publish import publish_run
 
-        db.execute(
-            update(Batch)
-            .where(Batch.id == batch.id)
-            .values(
-                device_count=device_count,
-                f_start_ghz=f_start_ghz,
-                f_end_ghz=f_end_ghz,
-                task_id=upload_task_id,
-            )
-        )
         db.commit()
-
-        try:
-            db.execute(text("REFRESH MATERIALIZED VIEW CONCURRENTLY mv_batch_stats"))
-            db.commit()
-        except Exception:
-            logger.exception("刷新物化视图 mv_batch_stats 失败（非致命）")
-
-        # 根据 KEEP_RAW_ZIP 删除原始 zip
-        if not settings.KEEP_RAW_ZIP:
-            try:
-                raw_zip = Path(zip_path)
-                if raw_zip.exists():
-                    raw_zip.unlink()
-                    batch.raw_zip_path = None
-                    db.commit()
-            except Exception:
-                logger.exception("删除原 zip 失败: %s", zip_path)
-
-        publisher.done(db, batch_id=batch.id, device_count=device_count)
+        result = publish_run(db.bind, ticket.run_id, ticket.lease_token)
+        db.expire_all()
+        device_count = db.get(Batch, batch.id).device_count
+        publisher.published(db, batch_id=batch.id, device_count=device_count)
         return {
             "batch_id": batch.id,
             "device_count": device_count,

@@ -19,8 +19,10 @@ from app.api.deps import DbSession
 from app.api.devices import build_sparam_response, resolve_device_sparam_path
 from app.config import get_settings
 from app.models import Batch, Device, Mapping, MappingEntry, UploadTask
-from app.services.cleanup_service import delete_batch_and_files
+from app.services.batch_scope import active_batch_clause, get_active_batch
+from app.services.raw_download import raw_file_response
 from app.services.snapshot_service import build_snapshot
+from app.services.source_identity import SourceIdentityError
 from app.services.upload_service import (
     MappingNotFoundError,
     TaskDispatchError,
@@ -73,8 +75,35 @@ def snapshot(body: SnapshotRequest, db: DbSession) -> dict[str, Any]:
     return build_snapshot(db, set(body.known_batch_nos))
 
 
+def _persist_synced_mapping(mapping, entries):
+    """Project the accepted entries into the existing algorithm's CSV format."""
+    import csv
+
+    settings = get_settings()
+    settings.mappings_dir.mkdir(parents=True, exist_ok=True)
+    path = settings.mappings_dir / f"sync-{uuid.uuid4().hex}.csv"
+    with path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.writer(stream)
+        for entry in sorted(entries, key=lambda item: item["mark"]):
+            tokens = [
+                f"{name.upper()}{entry[name]}"
+                for name in ("eg", "fl", "ag") if entry.get(name) is not None
+            ]
+            if entry.get("area_s11") is not None and entry.get("area_s22") is not None:
+                tokens.append(f"{int(entry['area_s11'])}&{int(entry['area_s22'])}")
+            if entry.get("has_pf"):
+                tokens.append("PF")
+            description = entry.get("description") or " ".join(tokens) or "unknown"
+            writer.writerow([entry["mark"], description])
+    mapping.file_path = str(path)
+
+
 @router.post("/mapping")
 def ensure_mapping(body: MappingEnsureRequest, db: DbSession) -> dict[str, Any]:
+    return ensure_mapping_data(body, db)
+
+
+def ensure_mapping_data(body, db, *, commit=True):
     name = body.name.strip()
     incoming = [entry.model_dump() for entry in body.entries]
     existing = db.scalar(select(Mapping).where(Mapping.name == name))
@@ -96,6 +125,9 @@ def ensure_mapping(body: MappingEnsureRequest, db: DbSession) -> dict[str, Any]:
             sorted(incoming, key=lambda x: x["mark"])
         ):
             raise HTTPException(status_code=409, detail=f"对照表 {name} 已存在且内容不同，请改名")
+        if not Path(existing.file_path).is_file():
+            _persist_synced_mapping(existing, incoming)
+            db.commit() if commit else db.flush()
         return {"mapping_id": existing.id, "created": False}
 
     mapping = Mapping(name=name, file_path=f"sync://{name}", entry_count=len(incoming))
@@ -105,7 +137,8 @@ def ensure_mapping(body: MappingEnsureRequest, db: DbSession) -> dict[str, Any]:
         MappingEntry,
         [{"mapping_id": mapping.id, "raw_tokens": None, **entry} for entry in incoming],
     )
-    db.commit()
+    _persist_synced_mapping(mapping, incoming)
+    db.commit() if commit else db.flush()
     return {"mapping_id": mapping.id, "created": True}
 
 
@@ -121,6 +154,8 @@ def push_batch(
     deembed_method: Annotated[str, Form()] = "default",
     process_type: Annotated[str, Form()] = "AUTO",
     uploaded_by: Annotated[str, Form()] = "anonymous",
+    source_ref: Annotated[str | None, Form()] = None,
+    source_inputs: Annotated[UploadFile | str | None, File()] = None,
 ) -> dict[str, Any]:
     # batch_no 会拼进 files_dir 路径并用于目录清理，先做正向路径校验。
     # 服务器可能跑 POSIX 或 Windows：POSIX 的 Path 认不出 Windows 的反斜杠
@@ -144,14 +179,40 @@ def push_batch(
             detail=f"去嵌方法必须是 {', '.join(sorted(valid_methods))} 之一",
         )
 
+    try:
+        transferred_ref = json.loads(source_ref) if source_ref is not None else None
+        if hasattr(source_inputs, 'file'):
+            transferred_inputs = json.load(source_inputs.file)
+        else:
+            transferred_inputs = json.loads(source_inputs) if source_inputs is not None else None
+    except ValueError as exc:
+        raise HTTPException(422, {"code": "SOURCE_TRANSFER_INVALID", "message": "来源数据格式无效",
+                                  "retryable": False, "context": {}}) from exc
     mapping = db.scalar(select(Mapping).where(Mapping.name == mapping_name.strip()))
     if mapping is None:
         raise HTTPException(status_code=422, detail=f"对照表 {mapping_name} 不存在，先推送对照表")
 
-    existing = db.scalar(select(Batch).where(Batch.batch_no == batch_no))
+    existing = None
+    if isinstance(transferred_ref, dict):
+        existing = db.scalar(select(Batch).where(
+            Batch.origin_id == transferred_ref.get('origin_id'),
+            Batch.source_batch_id == transferred_ref.get('source_batch_id')))
+    if existing is None:
+        existing = db.scalar(select(Batch).where(Batch.batch_no == batch_no))
     if existing is not None:
+        if transferred_ref is not None and (
+            not isinstance(transferred_ref, dict)
+            or transferred_ref.get('origin_id') != existing.origin_id
+            or transferred_ref.get('source_batch_id') != existing.source_batch_id
+        ):
+            raise HTTPException(409, {"code": "SYNC_SOURCE_CONFLICT",
+                "message": "同名批次来源不同，未覆盖", "retryable": False, "context": {}})
+        get_active_batch(db, existing.batch_no)
+        if transferred_ref is not None:
+            from app.services.source_transfer import verify_existing_transfer
+            verify_existing_transfer(db, existing, transferred_ref, transferred_inputs)
         task = db.get(UploadTask, existing.task_id) if existing.task_id else None
-        if task is not None and task.status in {"pending", "running"}:
+        if task is not None and task.status in {"pending", "running", "cancel_requested"}:
             raise HTTPException(status_code=409, detail="服务器上该批次任务进行中，稍后重试")
         if task is not None and task.status == "success":
             return {
@@ -159,9 +220,15 @@ def push_batch(
                 "task_id": task.id,
                 "device_count": existing.device_count,
             }
-        # 失败/取消/无任务：统一走 cleanup_service 清理（先 DB commit，
-        # 再删解压目录与原 zip），随后按新批次重传
-        delete_batch_and_files(db, batch_no)
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "SYNC_BATCH_CONFLICT",
+                "message": "同名批次已存在，失败记录与输入保留，请重试原任务或选择新批次名",
+                "retryable": False,
+                "context": {"task_id": task.id if task else None},
+            },
+        )
 
     settings = get_settings()
     month_dir = settings.uploads_dir / datetime.now(UTC).strftime("%Y-%m")
@@ -180,7 +247,7 @@ def push_batch(
         saved_path.unlink(missing_ok=True)
         raise
 
-    # zip 已落盘；下面任何 DB/投递失败都得把 zip 删掉，避免孤儿 zip 占盘
+    # Admission can commit before an error is returned; retain the saved input.
     try:
         task = create_batch_and_dispatch(
             db,
@@ -188,6 +255,8 @@ def push_batch(
             batch_no=batch_no,
             mapping_id=mapping.id,
             source="sync",
+            source_ref=transferred_ref,
+            source_inputs=transferred_inputs,
             f_start_ghz=f_start_ghz,
             f_end_ghz=f_end_ghz,
             deembed=deembed,
@@ -196,44 +265,46 @@ def push_batch(
             uploaded_by=uploaded_by,
         )
         if task is None:
-            saved_path.unlink(missing_ok=True)
             raise HTTPException(status_code=500, detail="创建批次失败")
     except HTTPException:
         raise
-    except IntegrityError:
-        saved_path.unlink(missing_ok=True)
-        raise
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(409, {"code": "SYNC_SOURCE_CONFLICT",
+            "message": "来源身份或批次已被登记，未覆盖已有数据",
+            "retryable": False, "context": {}}) from exc
+    except SourceIdentityError as exc:
+        db.rollback()
+        raise HTTPException(409, {"code": exc.code, "message": str(exc),
+                                  "retryable": False, "context": {}}) from exc
     except MappingNotFoundError as exc:
-        saved_path.unlink(missing_ok=True)
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except TaskDispatchError as exc:
-        saved_path.unlink(missing_ok=True)
         raise HTTPException(status_code=503, detail=f"任务队列不可用: {exc}") from exc
     except Exception as exc:
-        saved_path.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail=f"创建批次失败: {exc!s}") from exc
     if task.batch_no != batch_no:
-        # create_batch_and_dispatch 对冲突名自动加后缀——推送语义要求精确名，
-        # 说明与并发请求撞名，回滚本次创建并按"已同步"处理由对方完成的批次。
-        db.delete(db.scalar(select(Batch).where(Batch.batch_no == task.batch_no)))
-        db.delete(task)
-        db.commit()
-        saved_path.unlink(missing_ok=True)
-        winner = db.scalar(select(Batch).where(Batch.batch_no == batch_no))
-        return {
-            "status": "already_synced",
-            "task_id": winner.task_id if winner else None,
-            "device_count": winner.device_count if winner else 0,
-        }
+        # Admission is durable and the executor may already be running.
+        # Retain its task and input; the caller must resolve the name conflict.
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "SYNC_BATCH_CONFLICT",
+                "message": "并发推送产生批次名冲突，已接受任务与输入保留",
+                "retryable": False,
+                "context": {"task_id": task.id, "batch_no": task.batch_no},
+            },
+        )
     return {"status": "accepted", "task_id": task.id, "device_count": None}
 
 
 def _find_device(db, batch_no: str, filename: str, port: str) -> Device:
+    get_active_batch(db, batch_no)
     devices = db.scalars(
         select(Device)
         .join(Batch, Device.batch_id == Batch.id)
         .where(
-            Batch.batch_no == batch_no,
+            Batch.batch_no == batch_no, active_batch_clause(),
             Device.original_filename == filename,
             Device.s_param_port == port.upper(),
         )
@@ -276,4 +347,4 @@ def download_by_natural_key(
     path = resolve_device_sparam_path(device)
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"S 参数文件不存在: {path}")
-    return FileResponse(path, media_type="application/octet-stream", filename=path.name)
+    return raw_file_response(path)

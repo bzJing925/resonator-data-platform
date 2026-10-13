@@ -1,7 +1,10 @@
 /** 静态模式 API 实现：DuckDB-WASM（parquet）+ fetch JSON（规格 §4）。
  *  与 endpoints.ts 的 HTTP 版同签名。 */
 
-import { getConn, ensureTable, q, normalizeRow } from './duckdb';
+import { publishedSources } from './comparison';
+import { COMPARISON_METRICS } from '../../features/analysis/comparison/comparisonSpec';
+import { unverifiedManifest } from '../../features/analysis/result/resultManifest';
+import { getConn, ensureTable, q, normalizeRow, assertDeviceSnapshot } from './duckdb';
 
 async function fetchJson(path: string) {
   const r = await fetch(`webdata/${path}`);
@@ -9,93 +12,9 @@ async function fetchJson(path: string) {
   return r.json();
 }
 
-// ---- filter → SQL（对齐后端 /api/query：树形 {op, children} + 叶 {field, op, value}，
-//      兼容旧版按字段格式：数组=IN、对象=多操作符 AND、标量=eq） ----
-
-const IDENT = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
-
-function fieldName(f: string): string {
-  if (!IDENT.test(f)) throw new Error(`非法字段名: ${f}`);
-  return `"${f}"`;
-}
-
-function escapeLike(s: string): string {
-  return s.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_');
-}
-
-function leafToSql(field: string, op: string, val: any): string {
-  const col = fieldName(field);
-  switch (op) {
-    case 'in':
-      if (!Array.isArray(val) || !val.length) throw new Error(`${field}.in 必须是非空列表`);
-      return `${col} IN (${val.map(q).join(', ')})`;
-    case 'not_in':
-      if (!Array.isArray(val) || !val.length) throw new Error(`${field}.not_in 必须是非空列表`);
-      return `${col} NOT IN (${val.map(q).join(', ')})`;
-    case 'eq':
-      return `${col} = ${q(val)}`;
-    case 'neq':
-      return `${col} != ${q(val)}`;
-    case 'gte':
-      return `${col} >= ${q(val)}`;
-    case 'gt':
-      return `${col} > ${q(val)}`;
-    case 'lte':
-      return `${col} <= ${q(val)}`;
-    case 'lt':
-      return `${col} < ${q(val)}`;
-    case 'between': {
-      if (!Array.isArray(val) || val.length !== 2) throw new Error(`${field}.between 需 [lo, hi]`);
-      return `(${col} >= ${q(val[0])} AND ${col} <= ${q(val[1])})`;
-    }
-    case 'is_null':
-      return `${col} IS NULL`;
-    case 'not_null':
-      return `${col} IS NOT NULL`;
-    case 'like':
-      return `${col} LIKE '${escapeLike(String(val))}' ESCAPE '\\'`;
-    case 'contains':
-      return `${col} LIKE '%${escapeLike(String(val))}%' ESCAPE '\\'`;
-    default:
-      throw new Error(`不支持的操作符: ${field}.${op}`);
-  }
-}
-
-function nodeToSql(node: any): string {
-  if (node == null || typeof node !== 'object') return '1=1';
-  if (node.field) {
-    return leafToSql(node.field, node.op ?? 'eq', node.value);
-  }
-  if (Array.isArray(node.children)) {
-    const parts = node.children.map(nodeToSql).filter((s: string) => s !== '1=1');
-    if (!parts.length) return '1=1';
-    const joiner = (node.op ?? 'and').toLowerCase() === 'or' ? ' OR ' : ' AND ';
-    return `(${parts.join(joiner)})`;
-  }
-  return '1=1';
-}
-
-export function filtersToWhere(filters: any): string {
-  if (!filters || typeof filters !== 'object') return '1=1';
-  if (filters.field || Array.isArray(filters.children)) return nodeToSql(filters);
-  // 旧版按字段格式
-  const parts: string[] = [];
-  for (const [field, spec] of Object.entries(filters)) {
-    if (spec == null) continue;
-    if (Array.isArray(spec)) {
-      if (spec.length) parts.push(`(${fieldName(field)} IN (${spec.map(q).join(', ')}))`);
-      continue;
-    }
-    if (typeof spec === 'object') {
-      const subs = Object.entries(spec as Record<string, any>).map(([op, v]) =>
-        leafToSql(field, op, v));
-      if (subs.length) parts.push(`(${subs.join(' AND ')})`);
-      continue;
-    }
-    parts.push(`(${fieldName(field)} = ${q(spec as string | number)})`);
-  }
-  return parts.length ? parts.join(' AND ') : '1=1';
-}
+export { filtersToWhere } from './queryFilters';
+import { filtersToWhere } from './queryFilters';
+function fieldName(f: string) { if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(f)) throw new Error(`非法字段名: ${f}`); return `\"${f}\"`; }
 
 async function runQuery(sql: string): Promise<any[]> {
   const conn = await getConn();
@@ -297,22 +216,39 @@ export interface QueryBody {
 
 export async function queryDevices(body: QueryBody) {
   await ensureTable('devices');
+  await assertDeviceSnapshot();
   const where = filtersToWhere(body.filters ?? {});
-  const cols = body.fields?.length ? body.fields.map(fieldName).join(', ') : '*';
+  const sources = publishedSources();
+  const selectedFields = body.fields?.length ? [...new Set([...body.fields, ...(sources.length ? ['batch_id', 'source_device_key'] : [])])] : null;
+  const cols = selectedFields ? selectedFields.map(fieldName).join(', ') : '*';
   const limit = Math.min(body.limit ?? 10000, 200000);
   const order = body.order_by
     ? ` ORDER BY ${fieldName(body.order_by.replace(/^-/, ''))}${body.order_by.startsWith('-') ? ' DESC' : ''}`
     : '';
-  const rows = await runQuery(`SELECT ${cols} FROM devices WHERE ${where}${order} LIMIT ${limit}`);
+  const fetched = await runQuery(`SELECT ${cols} FROM devices WHERE ${where}${order} LIMIT ${limit + 1}`);
+  const rows = fetched.slice(0, limit).map((row) => {
+    const source = sources.find((record) => record.batch_id === row.batch_id)?.source;
+    return source ? { ...row, _source_ref: { ...source, source_device_key: row.source_device_key } } : row;
+  }), truncated = fetched.length > limit;
   let total: number | null = null;
   if (!body.skip_count) {
     const cnt = await runQuery(`SELECT COUNT(*) AS c FROM devices WHERE ${where}`);
     total = Number(cnt[0].c);
   }
+  if (total === null && !truncated) total = rows.length;
+  const matchedIds = sources.length ? await runQuery(`SELECT DISTINCT batch_id FROM devices WHERE ${where}`) : [];
+  const matchedSources = matchedIds.map((id) => sources.find((source) => source.batch_id === id.batch_id));
+  const metrics = body.fields?.filter((field) => COMPARISON_METRICS.includes(field)) ?? COMPARISON_METRICS;
+  const verified = sources.length > 0 && matchedSources.every((source) => source && metrics.every((metric) => source.proven_metrics.includes(metric)))
+    && rows.every((row) => typeof row._source_ref === 'object' && row._source_ref !== null);
+  const manifest = { ...unverifiedManifest({ filters: body.filters ?? {}, fields: body.fields ?? [], order_by: body.order_by ?? null }, rows.length, total, truncated),
+    source_refs: matchedSources.flatMap((source) => source ? [source.source] : []), consistency: verified ? 'verified' as const : 'unverified' as const };
+  await assertDeviceSnapshot();
   return {
+    manifest,
     total,
     returned: rows.length,
-    truncated: rows.length >= limit,
+    truncated,
     sampled: false,
     sample_rate: 1,
     rows,
@@ -336,6 +272,7 @@ export async function queryAggregate(body: {
   metrics: { field: string; agg: string[] }[];
 }) {
   await ensureTable('devices');
+  await assertDeviceSnapshot();
   const where = filtersToWhere(body.filters ?? {});
   const gb = body.group_by.map(fieldName);
   const aggs = body.metrics.flatMap((m) =>
@@ -357,7 +294,9 @@ export async function queryAggregate(body: {
     }
     return g;
   });
-  return { groups };
+  const count = await runQuery(`SELECT COUNT(*) AS c FROM devices WHERE ${where}`);
+  await assertDeviceSnapshot();
+  return { groups, manifest: unverifiedManifest({ filters: body.filters ?? {}, fields: [...new Set([...body.group_by, ...body.metrics.map((m) => m.field)])], order_by: null }, groups.length, Number(count[0].c)) };
 }
 
 // ---- 导出（客户端生成 Blob；与 HTTP 版 responseType:'blob' 同形 {data: Blob}） ----
@@ -391,6 +330,7 @@ export const getSurrogateStatus = async () => {
     const areaRows = await runQuery('SELECT DISTINCT area FROM cell_means ORDER BY area');
     return {
       available: true,
+      metadata: meta.metadata ?? null,
       eg_min: cm.e0,
       eg_max: cm.e1,
       fl_min: cm.f0,
@@ -425,6 +365,7 @@ export const predictSurrogate = async (params: {
     trueCurve = undefined;
   }
   return {
+    metadata: r.metadata,
     params: r.params,
     freq: r.freq_ghz,
     z: r.z_db,

@@ -30,6 +30,7 @@ class ResonatorRow(BaseModel):
     x: int | None = None
     y: int | None = None
     mark: str | None = Field(default=None, description="如 A1-1，可为 None")
+    matched: bool = Field(default=True, description="mark 是否命中对照表；未命中不入分析")
     eg: float | None = None
     fl: float | None = None
     ag: float | None = None

@@ -75,12 +75,18 @@ class Device(Base):
     zs2_ohm: Mapped[float | None]
 
     deembedded: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # 文件名 mark 是否命中对照表；未命中设备入库但不参与分析查询/统计
+    matched: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=text("true"), nullable=False
+    )
     s_param_path: Mapped[str | None] = mapped_column(Text)
     s_param_port: Mapped[str] = mapped_column(Text, default="S11", nullable=False)
+    source_device_key: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     batch: Mapped[Batch] = relationship(back_populates="devices")
 
     __table_args__ = (
+        UniqueConstraint("source_device_key", name="uq_device_source_key"),
         UniqueConstraint(
             "batch_id", "s_param_path", "s_param_port", name="uq_device_batch_sparam_port"
         ),

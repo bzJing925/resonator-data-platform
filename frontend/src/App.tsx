@@ -1,5 +1,6 @@
 import React, { memo, Suspense, useEffect, useState } from 'react';
 import { Routes, Route, useLocation, Navigate } from 'react-router-dom';
+import { useCapabilities } from './api/capabilities';
 import Sidebar from './components/Sidebar';
 import ErrorBoundary from './components/ErrorBoundary';
 import FloatingUploadProgress from './components/FloatingUploadProgress';
@@ -13,6 +14,8 @@ import { IS_STATIC } from './config';
 import { AnalysisWorkspaceProvider } from './features/analysis/workspace';
 
 // 路由懒加载：非首屏页面按需加载，显著减小初始 bundle
+const Trash = React.lazy(() => import('./pages/Trash'));
+const Settings = React.lazy(() => import('./pages/Settings'));
 const Upload       = React.lazy(() => import('./pages/Upload'));
 const Batches      = React.lazy(() => import('./pages/Batches'));
 const BatchDetail  = React.lazy(() => import('./pages/BatchDetail'));
@@ -34,6 +37,14 @@ const PageLoader = memo(function PageLoader() {
 });
 
 const Titlebar = memo(function Titlebar({ health }: { health?: { status?: string; db?: string; redis?: string } }) {
+  const [desktopVersion, setDesktopVersion] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    window.electronAPI?.getVersion().then((version) => {
+      if (alive) setDesktopVersion(version);
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
   const dot = health?.status === 'ok' ? '' : ' warn';
   const statusText = {
     ok: '正常',
@@ -47,7 +58,7 @@ const Titlebar = memo(function Titlebar({ health }: { health?: { status?: string
       <div className="brand">
         <span className="mark">Σ</span>
         <span className="name" style={{ fontFamily: 'var(--font-display)', letterSpacing: '0.02em' }}>ALN 谐振器数据平台</span>
-        <span className="ver">{IS_STATIC ? 'v0.2 · 静态快照版' : 'v0.2 · 桌面版'}</span>
+        <span className="ver">{IS_STATIC ? '静态快照版' : desktopVersion ? `v${desktopVersion} · 桌面版` : '网页版'}</span>
       </div>
       <div className="spacer" />
       {!IS_STATIC && (
@@ -68,6 +79,7 @@ const Titlebar = memo(function Titlebar({ health }: { health?: { status?: string
 });
 
 const Statusbar = memo(function Statusbar() {
+  const { capabilities } = useCapabilities();
   const loc = useLocation();
   return (
     <div className="statusbar">
@@ -78,9 +90,9 @@ const Statusbar = memo(function Statusbar() {
         <span className="seg">数据随构建同步 · 浏览器端计算</span>
       ) : (
         <>
-          <span className="seg">PostgreSQL 15 数据库</span>
-          <span className="seg">Redis 7 缓存</span>
-          <span className="seg">Celery 任务队列</span>
+          <span className="seg">数据库：{capabilities?.database ?? '未知'}</span>
+          <span className="seg">运行角色：{capabilities?.mode ?? '未知'}</span>
+          <span className="seg">处理执行：{capabilities?.features.upload_precheck ? '可用' : '不可用/未知'}</span>
         </>
       )}
       <span className="spacer" />
@@ -94,6 +106,7 @@ const Statusbar = memo(function Statusbar() {
 });
 
 export default function App() {
+  const { capabilities, error: capabilityError, refresh: refreshCapabilities } = useCapabilities();
   const [health, setHealth] = useState<{ status?: string; db?: string; redis?: string } | null>(null);
 
   useEffect(() => {
@@ -119,10 +132,13 @@ export default function App() {
             <Sidebar />
             <div className="main">
               <ServerAutoSync />
+              {!capabilities && <div role="alert">{capabilityError || '正在读取能力；写操作已禁用'}<button onClick={refreshCapabilities}>重试能力</button></div>}
               <ErrorBoundary>
                 <Suspense fallback={<PageLoader />}>
                   <Routes>
                     <Route path="/" element={<Dashboard />} />
+                    <Route path="/trash" element={<Trash />} />
+                    <Route path="/settings" element={<Settings />} />
                     <Route path="/explore" element={<Explore />} />
                     <Route path="/batches" element={<Batches />} />
                     <Route path="/batches/:batchNo" element={<BatchDetail />} />

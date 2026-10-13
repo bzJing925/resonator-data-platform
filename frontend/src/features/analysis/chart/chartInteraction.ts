@@ -31,11 +31,64 @@ export function buildSelectionRestyle(traces: any[], selectedRowIds?: Set<string
   return { traceIndices, selectedpoints };
 }
 
-export function buildYAxisAutorangeUpdate(layout: Record<string, unknown>) {
+export type YAxisRanges = Record<string, [number, number]>;
+
+export function buildYDataRanges(
+  rows: Record<string, unknown>[],
+  fields: Array<{ name: string }>,
+): YAxisRanges {
+  const ranges: YAxisRanges = {};
+  for (const field of fields) {
+    let min = Infinity;
+    let max = -Infinity;
+    for (const row of rows) {
+      const value = row[field.name];
+      if (typeof value !== 'number' || !Number.isFinite(value)) continue;
+      min = Math.min(min, value);
+      max = Math.max(max, value);
+    }
+    if (Number.isFinite(min)) ranges[field.name] = [min - 5, max + 5];
+  }
+  return ranges;
+}
+
+export function buildYAxisLayoutRanges(
+  layout: any,
+  fields: Array<{ name: string }>,
+  ranges: YAxisRanges,
+): YAxisRanges {
+  const axes: YAxisRanges = {};
+  const columns = layout.grid?.columns || 1;
+  for (const key of Object.keys(layout)) {
+    if (!/^yaxis\d*$/.test(key) || layout[key]?.type === 'category') continue;
+    const index = Number(key.slice(5) || 1) - 1;
+    const field = fields[Math.floor(index / columns) % fields.length];
+    if (field && ranges[field.name]) axes[key] = ranges[field.name];
+  }
+  return axes;
+}
+
+export function buildYAxisAutorangeUpdate(layout: any, traces: any[] = []) {
   return Object.keys(layout)
     .filter((key) => /^yaxis\d*$/.test(key))
-    .reduce<Record<string, true>>((update, key) => {
-      update[`${key}.autorange`] = true;
+    .reduce<Record<string, unknown>>((update, key) => {
+      let range = layout.meta?.analysisYRanges?.[key];
+      if (!range && layout[key]?.type !== 'category') {
+        let min = Infinity;
+        let max = -Infinity;
+        const ref = key.replace('axis', '');
+        for (const trace of traces) {
+          if ((trace.yaxis || 'y') !== ref) continue;
+          for (const value of trace.y || []) {
+            if (typeof value !== 'number' || !Number.isFinite(value)) continue;
+            min = Math.min(min, value);
+            max = Math.max(max, value);
+          }
+        }
+        if (Number.isFinite(min)) range = [min - 5, max + 5];
+      }
+      update[`${key}.autorange`] = !range;
+      if (range) update[`${key}.range`] = range;
       return update;
     }, {});
 }

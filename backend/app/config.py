@@ -13,8 +13,17 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Phase weights describe completed work, not estimated remaining time.
+PRECHECK_STAGE_RANGES = {
+    "hash_input": (1, 20), "validate_archive": (20, 22),
+    "validate_extract": (22, 25), "extract": (25, 55),
+    "inspect_files": (55, 85), "calibration": (85, 90),
+    "read_table": (20, 55), "inspect_rows": (55, 90),
+    "verify_input": (90, 99),
+}
 
 
 class Settings(BaseSettings):
@@ -30,6 +39,7 @@ class Settings(BaseSettings):
 
     # 桌面模式
     ALN_DESKTOP_MODE: bool = False
+    ALN_SERVER_MODE: bool = False
     ALN_DESKTOP_DIR: Path | None = None
 
     # 数据库
@@ -37,6 +47,19 @@ class Settings(BaseSettings):
 
     # 任务队列
     REDIS_URL: str = "redis://localhost:6379/0"
+    WORKER_HEARTBEAT_SECONDS: int = 5
+    WORKER_STALE_SECONDS: int = 120
+    CANCEL_GRACE_SECONDS: int = 10
+    STAGE_INSERT_CHUNK: int = 1000
+    STAGING_RETENTION_HOURS: int = 24
+    RESULT_FILE_RETENTION_HOURS: int = 24
+    ARTIFACT_LEASE_SECONDS: int = 120
+    EXPORT_LEASE_SECONDS: int = 120
+    COMPARISON_MAX_ROWS: int = 200_000
+    EXPORT_MAX_ROWS: int = 5_000_000
+    EXPORT_MAX_BYTES: int = 2 * 1024**3
+    EXPORT_TTL_HOURS: int = 24
+    CLEANUP_INTERVAL_SECONDS: int = 300
 
     # 数据根目录（容器内挂载点；本地开发可指向 /data3/aln）
     DATA_ROOT: Path = Path("/data3/aln")
@@ -44,10 +67,15 @@ class Settings(BaseSettings):
     # 代理模型产物（数据集 npz/meta/baseline + 训练 checkpoint）；
     # 相对路径基于 backend/ 目录解析；缺失时 /api/surrogate/* 降级 available=false
     SURROGATE_DATA_DIR: Path = Path("surrogate_data")
+    SURROGATE_EVAL_DIR: Path = Path("eval_out")
     SURROGATE_CKPT_DIR: Path = Path("checkpoints_surrogate")
 
     # 上传限制
     UPLOAD_MAX_GB: int = 100
+    UPLOAD_DRAFT_TTL_HOURS: int = 24
+    PRECHECK_PROGRESS_INTERVAL_SECONDS: float = Field(default=1.0, gt=0)
+    PRECHECK_CHECKPOINT_INTERVAL_SECONDS: float = Field(default=0.5, gt=0)
+    PRECHECK_HASH_CHUNK_BYTES: int = Field(default=8 * 1024 * 1024, gt=0)
 
     # 目录监听上传
     WATCH_ENABLED: bool = True

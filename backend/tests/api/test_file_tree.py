@@ -2,71 +2,48 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import text
+from sqlalchemy.orm import Session
 
-from app.db import engine
+from app.db import get_db
 from app.main import app
-from app.workers import celery_app
+from tests.fixtures.platform_db import DATABASES, platform_database
 
 
-@pytest.fixture(scope="module")
-def client() -> TestClient:
-    return TestClient(app)
+@pytest.fixture(params=DATABASES)
+def tree_client(request, tmp_path, monkeypatch):
+    # HTTP/file tree verification is independent of upload and queue execution.
+    with platform_database(request.param, tmp_path) as (db, batch):
+        monkeypatch.setattr(app.state, "artifact_engine", db.bind, raising=False)
+        directory = tmp_path / "persisted-results"
+        directory.mkdir()
+        for name in ("a.s1p", "b.s1p"):
+            (directory / name).write_text("# Hz S RI R 50\n1000000000 0.1 0\n")
+        batch.file_path = str(directory)
+        batch.raw_zip_path = str(tmp_path / "original.zip")
+        db.commit()
+        batch_no = batch.batch_no
+
+        def override_db():
+            with Session(db.bind) as session:
+                yield session
+
+        previous = dict(app.dependency_overrides)
+        app.dependency_overrides[get_db] = override_db
+        try:
+            client = TestClient(app)
+            try:
+                yield client, batch_no
+            finally:
+                client.close()
+        finally:
+            app.dependency_overrides.clear()
+            app.dependency_overrides.update(previous)
 
 
-@pytest.fixture(autouse=True)
-def celery_eager() -> None:
-    celery_app.conf.task_always_eager = True
-    celery_app.conf.task_eager_propagates = True
-
-
-@pytest.fixture(autouse=True)
-def clean_tables() -> None:
-    import os
-
-    if os.environ.get("ALN_PROTECT_DB") == "1":
-        pytest.skip("ALN_PROTECT_DB=1，跳过会清数据的集成测试")
-    with engine.begin() as conn:
-        conn.execute(
-            text(
-                "TRUNCATE file_nodes, devices, batches, upload_tasks, "
-                "mapping_entries, mappings RESTART IDENTITY CASCADE"
-            )
-        )
-
-
-def _upload_mapping_and_batch(client: TestClient, sample_mapping: Path, sample_zip: Path) -> str:
-    with sample_mapping.open("rb") as f:
-        r = client.post(
-            "/api/mappings",
-            files={"file": ("ELB003.xlsx", f)},
-            data={"name": "ELB003"},
-        )
-    assert r.status_code == 201, r.text
-    mapping_id = r.json()["id"]
-
-    with sample_zip.open("rb") as f:
-        r = client.post(
-            "/api/uploads",
-            files={"file": ("T8901P.01.zip", f)},
-            data={
-                "mapping_id": str(mapping_id),
-                "process_type": "S1P",
-                "deembed": "false",
-            },
-        )
-    assert r.status_code == 202, r.text
-    return r.json()["batch_no"]
-
-
-def test_file_tree_list_root_zip_node(
-    client: TestClient, sample_mapping: Path, sample_zip: Path
-) -> None:
-    batch_no = _upload_mapping_and_batch(client, sample_mapping, sample_zip)
+def test_file_tree_list_root_zip_node(tree_client) -> None:
+    client, batch_no = tree_client
 
     r = client.get("/api/files/tree", params={"batch_no": batch_no})
     assert r.status_code == 200, r.text
@@ -76,10 +53,8 @@ def test_file_tree_list_root_zip_node(
     assert nodes[0]["name"].endswith(".zip")
 
 
-def test_file_tree_navigate_and_mkdir(
-    client: TestClient, sample_mapping: Path, sample_zip: Path
-) -> None:
-    batch_no = _upload_mapping_and_batch(client, sample_mapping, sample_zip)
+def test_file_tree_navigate_and_mkdir(tree_client) -> None:
+    client, batch_no = tree_client
 
     # 根节点下只有 zip 文件夹
     r = client.get("/api/files/tree", params={"batch_no": batch_no})
@@ -118,17 +93,14 @@ def test_file_tree_navigate_and_mkdir(
     assert r.json()[0]["id"] == file_node["id"]
 
 
-def test_file_tree_reorder_and_delete(
-    client: TestClient, sample_mapping: Path, sample_zip: Path
-) -> None:
-    batch_no = _upload_mapping_and_batch(client, sample_mapping, sample_zip)
+def test_file_tree_reorder_and_delete(tree_client) -> None:
+    client, batch_no = tree_client
 
     r = client.get("/api/files/tree", params={"batch_no": batch_no})
     zip_node = r.json()[0]
     r = client.get("/api/files/tree", params={"batch_no": batch_no, "parent_id": zip_node["id"]})
     children = r.json()
-    if len(children) < 2:
-        pytest.skip("样例文件不足 2 个，跳过排序测试")
+    assert len(children) == 2
 
     ids = [n["id"] for n in children]
     reversed_ids = list(reversed(ids))
@@ -150,10 +122,8 @@ def test_file_tree_reorder_and_delete(
     assert reversed_ids[0] not in [n["id"] for n in r.json()]
 
 
-def test_file_tree_download_nodes(
-    client: TestClient, sample_mapping: Path, sample_zip: Path
-) -> None:
-    batch_no = _upload_mapping_and_batch(client, sample_mapping, sample_zip)
+def test_file_tree_download_nodes(tree_client) -> None:
+    client, batch_no = tree_client
 
     r = client.get("/api/files/tree", params={"batch_no": batch_no})
     zip_node = r.json()[0]

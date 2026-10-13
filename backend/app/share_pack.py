@@ -27,6 +27,7 @@ FORMAT_VERSION = 1
 
 # 分享包列（= devices 表减去 id/batch_id/s_param_path；merge 侧再赋 id/batch_no）
 PACK_COLUMNS = [
+    "source_device_key",
     "original_filename", "display_name", "mark", "wafer", "folder_name", "coord",
     "x", "y", "eg", "fl", "ag", "pf", "area_n", "area_um2",
     "fs_ghz", "fp_ghz", "zs_ohm", "zp_ohm", "qs", "qp", "qs_bodeq", "qp_bodeq",

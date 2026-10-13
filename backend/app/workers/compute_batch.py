@@ -10,18 +10,19 @@ from pathlib import Path
 from typing import Any
 
 from celery import Task
-from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.orm import Session
 
 from app.config import get_algorithm_config
-from app.core.extract import ExtractError, extract_resonator_params
+from app.core.extract import extract_resonator_params
 from app.core.mapping import load_mapping
 from app.db import SessionLocal
-from app.models import Batch, Device, Mapping
+from app.models import Batch, Mapping, ProcessingRun
 from app.services.device_ingest import bulk_insert_devices
+from app.services.processing_report import record_device_result, summarize_run
 from app.workers.cancel import TaskCancelledError, raise_if_cancelled
 from app.workers.celery_app import celery_app
 from app.workers.progress import ProgressPublisher
+from app.workers.run_execution import current_run, leased_stage
 
 logger = logging.getLogger(__name__)
 
@@ -29,11 +30,16 @@ INSERT_CHUNK = 2000
 _PARALLEL_MIN_FILES = 50
 
 
+class ParallelExtractionError(RuntimeError):
+    """Pool failed before any durable writes; safe to retry serially."""
+
+
 def _extract_single(args: tuple) -> dict[str, Any]:
     """子进程入口：提取单个文件（s1p 或 s2p 的某一端口）的谐振参数。"""
     from pathlib import Path
 
-    s1p_path, mapping, wafer, s_param_relpath, deembedded, f_start_ghz, f_end_ghz, port = args
+    s1p_path, mapping, wafer, s_param_relpath, deembedded, f_start_ghz, f_end_ghz, port = args[:8]
+    member = args[8] if len(args) > 8 else s_param_relpath
     try:
         row = extract_resonator_params(
             Path(s1p_path),
@@ -46,12 +52,26 @@ def _extract_single(args: tuple) -> dict[str, Any]:
             skip_validation=True,
             port=port,
         )
-        return {"ok": True, "row": row, "name": f"{Path(s1p_path).name}#{row.get('s_param_port')}"}
+        return {
+            "ok": True,
+            "row": row,
+            "member": member,
+            "port": row.get("s_param_port") or ("S11" if port == 0 else "S22"),
+            "name": f"{Path(s1p_path).name}#{row.get('s_param_port')}",
+        }
     except Exception as exc:
-        return {"ok": False, "error": f"{Path(s1p_path).name}: {exc}", "name": Path(s1p_path).name}
+        return {
+            "ok": False,
+            "error": f"{Path(s1p_path).name}: {exc}",
+            "member": member,
+            "port": "S11" if port == 0 else "S22",
+            "code": "METRIC_EXTRACTION_FAILED",
+            "name": Path(s1p_path).name,
+        }
 
 
 @celery_app.task(bind=True, name="aln.compute_batch")
+@leased_stage("compute")
 def compute_batch_task(self: Task, extract_result: dict[str, Any]) -> dict[str, Any]:
     """根据 extract_batch 的输出执行指标计算并入库。"""
     upload_task_id = extract_result["upload_task_id"]
@@ -85,10 +105,20 @@ def compute_batch_task(self: Task, extract_result: dict[str, Any]) -> dict[str, 
         mapping_dict = load_mapping(mapping_row.file_path)
 
         # 保证重复执行同一批次不会产生重复 device 行
-        db.execute(delete(Device).where(Device.batch_id == batch.id))
-        db.commit()
+        ticket = current_run.get()
+        if ticket is None:
+            raise RuntimeError("指标计算必须持有处理租约")
 
-        target_dir = Path(batch.file_path) if batch.file_path else None
+        run = db.get(ProcessingRun, ticket.run_id)
+        if run.retry_of_run_id:
+            selected = {(item["member"], item["port"]) for item in run.config_json["retry_items"]}
+            all_files = [item for item in all_files if (
+                item.get("source_member") or item.get("s_param_relpath"),
+                item.get("source_port") or ("S22" if item.get("port") == 1 else "S11"),
+            ) in selected]
+
+        target_path = extract_result.get("target_dir") or batch.file_path
+        target_dir = Path(target_path) if target_path else None
 
         total = len(all_files)
         if total == 0:
@@ -111,6 +141,7 @@ def compute_batch_task(self: Task, extract_result: dict[str, Any]) -> dict[str, 
                 f_start_ghz,
                 f_end_ghz,
                 item.get("port", 0),
+                item.get("source_member") or item.get("s_param_relpath"),
             )
             for item in all_files
         ]
@@ -132,85 +163,54 @@ def compute_batch_task(self: Task, extract_result: dict[str, Any]) -> dict[str, 
                 )
             except TaskCancelledError:
                 raise
-            except Exception:
+            except ParallelExtractionError:
                 logger.exception("多进程提参失败，回退到单线程")
                 use_parallel = False
 
         if not use_parallel:
-            for i, item in enumerate(all_files, start=1):
-                s1p_path = item["path"]
-                try:
-                    row = extract_resonator_params(
-                        Path(s1p_path),
-                        mapping=mapping_dict,
-                        wafer=wafer,
-                        s_param_relpath=item.get("s_param_relpath")
-                        or (
-                            str(Path(s1p_path).relative_to(target_dir)) if target_dir else s1p_path
-                        ),
-                        deembedded=item["deembedded"],
-                        f_start_ghz=f_start_ghz,
-                        f_end_ghz=f_end_ghz,
-                        skip_validation=True,
-                        port=item.get("port", 0),
-                    )
-                    row["batch_id"] = batch.id
-                    device_rows.append(row)
-                except (ExtractError, Exception) as exc:
-                    failures.append(f"{Path(s1p_path).name}: {exc}")
-                    logger.warning("提参失败 %s: %s", Path(s1p_path).name, exc)
+            import json
+            import tempfile
 
-                stage_pct = int(100 * i / total)
-                if stage_pct != last_pct and (
-                    stage_pct - last_pct >= 5 or i % 100 == 0 or i == total
-                ):
-                    raise_if_cancelled(upload_task_id)
-                    overall = 45 + int(55 * i / total)
-                    publisher.stage_update(
-                        db,
-                        stage="metrics",
-                        stage_progress_pct=stage_pct,
-                        progress_pct=overall,
-                        progress_msg=f"已处理 {i}/{total}，失败 {len(failures)}",
-                    )
-                    last_pct = stage_pct
+            with tempfile.SpooledTemporaryFile(max_size=4 * 1024 * 1024, mode="w+t") as results:
+                for i, args in enumerate(worker_args, 1):
+                    # CPU work holds no report/staging write transaction.
+                    result = _extract_single(args)
+                    results.write(json.dumps(result, default=str) + "\n")
+                    stage_pct = int(100 * i / total)
+                    if stage_pct != last_pct and (
+                        stage_pct - last_pct >= 5 or i % 100 == 0 or i == total
+                    ):
+                        raise_if_cancelled(upload_task_id)
+                        publisher.stage_update(
+                            db,
+                            stage="metrics",
+                            stage_progress_pct=stage_pct,
+                            progress_pct=45 + int(55 * i / total),
+                            progress_msg=f"已计算 {i}/{total}",
+                        )
+                        last_pct = stage_pct
+                results.seek(0)
+                device_rows, failures = _persist_results(
+                    (json.loads(line) for line in results),
+                    batch.id,
+                    db,
+                )
 
-                if len(device_rows) >= INSERT_CHUNK:
-                    bulk_insert_devices(db, device_rows)
-                    device_rows = []
+        if ticket:
+            from app.services.result_publish import publish_run
 
-            if device_rows:
-                bulk_insert_devices(db, device_rows)
-
-        device_count = (
-            db.scalar(select(func.count(Device.id)).where(Device.batch_id == batch.id)) or 0
-        )
-
-        db.execute(
-            update(Batch)
-            .where(Batch.id == batch.id)
-            .values(
-                device_count=device_count,
-                f_start_ghz=f_start_ghz,
-                f_end_ghz=f_end_ghz,
-                task_id=upload_task_id,
-            )
-        )
-        db.commit()
-
-        try:
-            db.execute(text("REFRESH MATERIALIZED VIEW CONCURRENTLY mv_batch_stats"))
             db.commit()
-        except Exception:
-            logger.exception("刷新物化视图 mv_batch_stats 失败（非致命）")
-
-        publisher.done(db, batch_id=batch.id, device_count=device_count)
-        return {
-            "batch_id": batch.id,
-            "device_count": device_count,
-            "failures": len(failures),
-            "failure_samples": failures[:5],
-        }
+            result = publish_run(db.bind, ticket.run_id, ticket.lease_token)
+            db.expire_all()
+            device_count = db.get(Batch, batch_id).device_count
+            publisher.published(db, batch_id=batch_id, device_count=device_count)
+            return {
+                "batch_id": batch_id,
+                "device_count": device_count,
+                "published_count": result["published_count"],
+                "failures": len(failures),
+                "failure_samples": failures[:5],
+            }
 
     except Exception as exc:
         logger.exception("compute_batch_task fatal")
@@ -239,47 +239,72 @@ def _extract_parallel(
     """多进程并行提取参数。"""
     from concurrent.futures import ProcessPoolExecutor, as_completed
 
-    device_rows: list[dict[str, Any]] = []
-    failures: list[str] = []
     processed = 0
     last_pct = 0
+    import json
+    import tempfile
 
-    with ProcessPoolExecutor(max_workers=max_workers) as exe:
-        futures = {exe.submit(_extract_single, args): args for args in worker_args}
-        for future in as_completed(futures):
-            result = future.result()
-            processed += 1
+    # Spool structured subprocess results to temporary storage, bounded in RAM.
+    # Nothing reaches Device or report tables until the entire pool is successful.
+    with tempfile.SpooledTemporaryFile(max_size=4 * 1024 * 1024, mode="w+t") as results:
+        try:
+            with ProcessPoolExecutor(max_workers=max_workers) as exe:
+                futures = {exe.submit(_extract_single, args): args for args in worker_args}
+                for future in as_completed(futures):
+                    result = future.result()
+                    results.write(json.dumps(result, default=str) + "\n")
+                    processed += 1
+                    stage_pct = int(100 * processed / total)
+                    if stage_pct != last_pct and (
+                        stage_pct - last_pct >= 5 or processed % 200 == 0 or processed == total
+                    ):
+                        raise_if_cancelled(upload_task_id)
+                        publisher.stage_update(
+                            db,
+                            stage="metrics",
+                            stage_progress_pct=stage_pct,
+                            progress_pct=45 + int(55 * stage_pct / 100),
+                            progress_msg=f"已计算 {processed}/{total} (并行 {max_workers} workers)",
+                        )
+                        last_pct = stage_pct
+        except TaskCancelledError:
+            raise
+        except Exception as exc:
+            raise ParallelExtractionError("指标计算进程失败") from exc
+
+        results.seek(0)
+        return _persist_results((json.loads(line) for line in results), batch_id, db)
+
+
+def _persist_results(results, batch_id, db):
+    from itertools import batched
+
+    from app.config import get_settings
+
+    ticket = current_run.get()
+    failures = []
+    for chunk in batched(results, get_settings().STAGE_INSERT_CHUNK):
+        rows = []
+        for result in chunk:
+            evidence = record_device_result(
+                db,
+                ticket.run_id,
+                result["member"],
+                result["port"],
+                result=result.get("row"),
+                error_code=result.get("code"),
+            )
             if result["ok"]:
                 row = result["row"]
                 row["batch_id"] = batch_id
-                device_rows.append(row)
+                if evidence.source_device_key:
+                    row["source_device_key"] = evidence.source_device_key
+                rows.append(row)
             else:
                 failures.append(result["error"])
-                logger.warning("提参失败 %s", result["error"])
-
-            stage_pct = int(100 * processed / total)
-            if stage_pct != last_pct and (
-                stage_pct - last_pct >= 5 or processed % 200 == 0 or processed == total
-            ):
-                raise_if_cancelled(upload_task_id)
-                overall = 45 + int(55 * stage_pct / 100)
-                publisher.stage_update(
-                    db,
-                    stage="metrics",
-                    stage_progress_pct=stage_pct,
-                    progress_pct=overall,
-                    progress_msg=(
-                        f"已处理 {processed}/{total}，"
-                        f"失败 {len(failures)} (并行 {max_workers} workers)"
-                    ),
-                )
-                last_pct = stage_pct
-
-            if len(device_rows) >= INSERT_CHUNK:
-                bulk_insert_devices(db, device_rows)
-                device_rows = []
-
-    if device_rows:
-        bulk_insert_devices(db, device_rows)
-
-    return device_rows, failures
+        if rows:
+            bulk_insert_devices(db, rows)
+        db.commit()
+    summarize_run(db, ticket.run_id)
+    db.commit()
+    return [], failures

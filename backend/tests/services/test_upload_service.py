@@ -90,7 +90,13 @@ def test_create_batch_and_dispatch_renames_duplicates(
 ) -> None:
     mapping = _make_mapping(db)
     zip_path = tmp_path / "#17.zip"
-    zip_path.write_text("fake zip")
+    from tests.fixtures.platform_cases import _algorithm_samples, _write_archive
+
+    samples = _algorithm_samples(tmp_path)
+    _write_archive(zip_path, [("17_E6-1_X0Y0.s1p", samples["dut_s1p"])])
+    mapping.file_path = str(tmp_path / "mapping.csv")
+    Path(mapping.file_path).write_text("E6-1,EG0 FL0 700&5500\n")
+    db.commit()
 
     monkeypatch.setattr(
         "app.services.upload_service.dispatch_batch_task",
@@ -118,28 +124,33 @@ def test_create_table_batch_imports_rows_without_worker(
     mapping = _make_mapping(db)
     table_path = tmp_path / "parameters.csv"
     table_path.write_text("placeholder")
-    rows = [{
-        "original_filename": "T_A1-1_X-1Y-1.s1p",
-        "display_name": "EG1 FL0.5",
-        "mark": "A1-1",
-        "coord": "X-1Y-1",
-        "x": -1,
-        "y": -1,
-        "eg": 1.0,
-        "fl": 0.5,
-        "ag": 0.1,
-        "pf": "true",
-        "area_um2": 700,
-        "fs_ghz": 4.8,
-        "fp_ghz": 5.0,
-        "zs_ohm": 1.0,
-        "zp_ohm": 200.0,
-        "qs": 100.0,
-        "qp": 120.0,
-        "qs_bodeq": 110.0,
-        "qp_bodeq": 130.0,
-        "k2eff_pct": 5.0,
-    }]
+    mapping.file_path = str(tmp_path / "mapping.csv")
+    Path(mapping.file_path).write_text("A1-1,EG0 FL0 700&5500\n")
+    db.commit()
+    rows = [
+        {
+            "original_filename": "T_A1-1_X-1Y-1.s1p",
+            "display_name": "EG1 FL0.5",
+            "mark": "A1-1",
+            "coord": "X-1Y-1",
+            "x": -1,
+            "y": -1,
+            "eg": 1.0,
+            "fl": 0.5,
+            "ag": 0.1,
+            "pf": "true",
+            "area_um2": 700,
+            "fs_ghz": 4.8,
+            "fp_ghz": 5.0,
+            "zs_ohm": 1.0,
+            "zp_ohm": 200.0,
+            "qs": 100.0,
+            "qp": 120.0,
+            "qs_bodeq": 110.0,
+            "qp_bodeq": 130.0,
+            "k2eff_pct": 5.0,
+        }
+    ]
     monkeypatch.setattr(
         "app.share_pack.rows_from_xlsx",
         lambda *_args, **_kwargs: (rows, [], {"process_type": "S1P"}, [], {}),
@@ -149,6 +160,7 @@ def test_create_table_batch_imports_rows_without_worker(
 
     assert task.status == "success"
     batch = db.query(Batch).filter_by(batch_no="#table").one()
-    assert batch.source == "table" and batch.device_count == 1 and batch.raw_zip_path is None
+    assert batch.source == "table" and batch.device_count == 1
+    assert batch.raw_zip_path == str(table_path)
     device = db.query(Device).filter_by(batch_id=batch.id).one()
-    assert device.pf == "Y" and device.s_param_port == "S11" and device.deembedded is True
+    assert device.pf == "Y" and device.s_param_port == "S11" and device.deembedded is False

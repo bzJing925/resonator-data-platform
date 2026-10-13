@@ -16,7 +16,7 @@ def _make_zip(path: Path) -> Path:
     rows = (f"{4.0 + i * 0.001:.3f} {0.5 - i * 1e-4:.6f} {170 + i * 0.01:.2f}" for i in range(801))
     s1p = "# GHz S MA R 50\n" + "\n".join(rows) + "\n"
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("dut1.s1p", s1p)
+        zf.writestr("17_A1-1_X0Y0.s1p", s1p)
     return path
 
 
@@ -35,10 +35,10 @@ def dispatch_success(db, monkeypatch):
     """
 
     def _fake_dispatch_batch_task(*, task_id, **_kwargs):
-        task = db.get(UploadTask, task_id)
-        task.status = "success"
-        task.progress_pct = 100
-        db.commit()
+        from app.services.processing_run import claim_run, finish_run
+
+        claimed = claim_run(db.bind, _kwargs["run_id"], _kwargs["lease_token"], "compute")
+        finish_run(db.bind, claimed.run_id, claimed.lease_token, "success")
         return f"test-{task_id}"
 
     monkeypatch.setattr(
@@ -87,6 +87,12 @@ def test_mapping_ensure_numeric_entries_idempotent(client, db):
     ]
     first = client.post("/api/sync/mapping", json={"name": "NUM-MAP", "entries": entries})
     assert first.status_code == 200 and first.json()["created"] is True
+    from app.core.mapping import load_mapping
+
+    mapping = db.get(Mapping, first.json()["mapping_id"])
+    projected = load_mapping(mapping.file_path)["A1"]
+    assert projected.eg == 1.5 and projected.area_s11 == 3 and projected.area_s22 == 4
+    assert projected.has_pf is True
 
     again = client.post("/api/sync/mapping", json={"name": "NUM-MAP", "entries": entries})
     assert again.status_code == 200, again.text
@@ -94,7 +100,10 @@ def test_mapping_ensure_numeric_entries_idempotent(client, db):
 
 
 def test_push_batch_idempotent(client, db, tmp_path, dispatch_success):
-    client.post("/api/sync/mapping", json={"name": "PUSH-MAP", "entries": [{"mark": "A1"}]})
+    client.post("/api/sync/mapping", json={
+        "name": "PUSH-MAP",
+        "entries": [{"mark": "A1-1", "description": "EG0 FL0 700&5500"}],
+    })
     zip_path = _make_zip(tmp_path / "PUSH-1.zip")
 
     with zip_path.open("rb") as fh:
@@ -168,11 +177,12 @@ def test_push_batch_invalid_form_values_400(client, db):
     assert bad_method.status_code == 400
 
 
-def test_push_batch_in_progress_409(client, db):
+@pytest.mark.parametrize("status", ["pending", "running", "cancel_requested"])
+def test_push_batch_in_progress_409(client, db, status):
     mapping_id = client.post(
         "/api/sync/mapping", json={"name": "RUN-MAP", "entries": [{"mark": "A1"}]}
     ).json()["mapping_id"]
-    task = UploadTask(batch_no="RUN-1", status="running", kind="upload")
+    task = UploadTask(batch_no="RUN-1", status=status, kind="upload")
     db.add(task)
     db.flush()
     db.add(Batch(batch_no="RUN-1", mapping_id=mapping_id, file_path="f.zip", task_id=task.id))
@@ -186,10 +196,10 @@ def test_push_batch_in_progress_409(client, db):
     assert resp.status_code == 409
 
 
-def test_push_batch_failed_previous_retry_accepted(
+def test_push_batch_failed_previous_preserved(
     client, db, tmp_path, settings, dispatch_success
 ):
-    """同名批次上次失败：清掉旧批次行、解压目录和原 zip 后重新入库。"""
+    """失败输入与处理历史保留，由显式retry创建下一次尝试。"""
     mapping_id = client.post(
         "/api/sync/mapping", json={"name": "FAIL-MAP", "entries": [{"mark": "A1"}]}
     ).json()["mapping_id"]
@@ -221,19 +231,13 @@ def test_push_batch_failed_previous_retry_accepted(
             files={"file": ("FAIL-1.zip", fh, "application/zip")},
             data={"batch_no": "FAIL-1", "mapping_name": "FAIL-MAP"},
         )
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["status"] == "accepted"
-    assert body["task_id"] != old_task_id
-
-    # 旧批次行、解压目录、原 zip 都被清理；同名新批次重新建行。
-    # 注意 SQLite rowid 会复用（删唯一行后新行仍可能是 id=1），
-    # 不能用 id 区分新旧批次，用 raw_zip_path/task_id 区分。
-    assert not old_files_dir.exists()
-    assert not old_raw_zip.exists()
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"]["code"] == "SYNC_BATCH_CONFLICT"
+    assert old_files_dir.exists() and old_raw_zip.exists()
     batches = db.scalars(select(Batch).where(Batch.batch_no == "FAIL-1")).all()
-    assert len(batches) == 1
-    assert batches[0].raw_zip_path != str(old_raw_zip)
+    assert len(batches) == 1 and batches[0].task_id == old_task_id
+    assert batches[0].raw_zip_path == str(old_raw_zip)
+    assert db.get(UploadTask, old_task_id).status == "failed"
 
 
 def test_push_batch_unknown_mapping_422(client):

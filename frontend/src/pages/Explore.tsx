@@ -1,15 +1,25 @@
+import ExportDialog from '../export/ExportDialog';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import I from '../components/Icons';
 import { UnifiedChartGrid, WaferMap } from '../components/Charts';
 import useFields, { displayLabel } from '../hooks/useFields';
 import { queryDevices, queryAggregate } from '../api/endpoints';
 import DeviceModal from '../components/DeviceModal';
 import FilterPanel from '../components/FilterPanel';
-import { usePageState } from '../contexts/PageStateContext';
+import { selectedRowsForDataset } from '../features/analysis/model/selection';
+import ReportDialog from '../features/analysis/report/ReportDialog';
+import ComparisonView from '../features/analysis/comparison/ComparisonView';
+import ComparisonSetup from '../features/analysis/comparison/ComparisonSetup';
+import DataScopeBanner from '../features/analysis/result/DataScopeBanner';
+import { RequestSequence, validateQueryResult } from '../features/analysis/result/resultManifest';
+import ProjectMenu from '../features/analysis/project/ProjectMenu';
+import ProjectSaveBadge from '../features/analysis/project/ProjectSaveBadge';
 import WorksheetGrid from '../features/analysis/WorksheetGrid';
 import WorkspaceTabs from '../features/analysis/WorkspaceTabs';
 import PointStyleInspector from '../features/analysis/PointStyleInspector';
-import { datumRowIds } from '../features/analysis/chart/chartInteraction';
+import { buildYDataRanges, datumRowIds, type YAxisRanges } from '../features/analysis/chart/chartInteraction';
+import YAxisRangeControls from '../features/analysis/chart/YAxisRangeControls';
 import { useAnalysisWorkspace } from '../features/analysis/workspace';
 import { serializeWorksheetCsv, serializeWorksheetTsv } from '../features/analysis/csv';
 import {
@@ -197,10 +207,19 @@ const EXPLORE_INITIAL_STATE = {
   limit: 50000,
 };
 
+function exploreConfig(spec) {
+  return { chartType: spec.chart.type, xFields: spec.chart.x_fields,
+    yFields: spec.chart.y_fields, zField: spec.chart.z_field, zMode: spec.chart.z_mode,
+    waferZ: spec.chart.wafer_z, waferFacet: spec.chart.wafer_facet ?? NO_FACET,
+    filters: spec.query_spec.filters, limit: spec.plot_limit };
+}
+
 export default function Explore() {
   const { data: fields, loading: fLoading, error: fErr } = useFields();
   const {
     state: workspaceState,
+    project,
+    updateSpec,
     datasets,
     chartDataset,
     chartDatasetId,
@@ -219,25 +238,39 @@ export default function Explore() {
     selectRows,
     editCell,
     deleteRows,
+    deleteSelection,
     updatePointStyle,
     undo,
     redo,
   } = useAnalysisWorkspace();
 
-  const [rawState, setRawState] = usePageState('explore', EXPLORE_INITIAL_STATE);
-  const migratedRowsRef = useRef(false);
-
+  const [searchParams] = useSearchParams();
+  const requestedProject = searchParams.get('projectId');
+  const attemptedProject = useRef<string | null>(null);
+  const [openProjectError, setOpenProjectError] = useState('');
   useEffect(() => {
-    if (migratedRowsRef.current) return;
-    migratedRowsRef.current = true;
-    if (Array.isArray(rawState.rows) && rawState.rows.length > 0
-      && datasets.length === 0) {
-      loadQueryRows(rawState.rows, rawState.stats || null);
-    }
-    if ('rows' in rawState || 'hiddenIds' in rawState || 'prevHiddenIds' in rawState || 'stats' in rawState) {
-      setRawState(({ rows: _rows, hiddenIds: _hidden, prevHiddenIds: _prev, stats: _stats, ...rest }) => rest);
-    }
-  }, [datasets.length, loadQueryRows, rawState, setRawState]);
+    if (!requestedProject || project.loading || requestedProject === project.head?.projectId || attemptedProject.current === requestedProject) return;
+    attemptedProject.current = requestedProject;
+    let alive = true;
+    void (async () => {
+      try {
+        if (!workspaceState.readOnly && project.status !== 'saved') await project.saveNow();
+        if (alive) await project.reload(requestedProject);
+      } catch (failure) { if (alive) setOpenProjectError(`项目未打开，当前工作区保留：${String(failure)}`); }
+    })();
+    return () => { alive = false; };
+  }, [requestedProject, project.loading]);
+  const { spec } = workspaceState;
+  const rawState = useMemo(() => exploreConfig(spec), [spec]);
+  const setRawState = useCallback((update) => updateSpec((current) => {
+    const previous = exploreConfig(current);
+    const next = typeof update === 'function' ? update(previous) : update;
+    return { ...current, query_spec: { ...current.query_spec, filters: next.filters },
+      plot_limit: next.limit, chart: { ...current.chart,
+        type: next.chartType, x_fields: next.xFields, y_fields: next.yFields,
+        z_field: next.zField, z_mode: next.zMode, wafer_z: next.waferZ,
+        wafer_facet: next.waferFacet === NO_FACET ? null : next.waferFacet } };
+  }), [updateSpec]);
 
   // Normalize persisted axis selections against the current allowed field set.
   const state = useMemo(() => ({
@@ -283,12 +316,21 @@ export default function Explore() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [activeDevice, setActiveDevice] = useState(null);
+  const [showExport, setShowExport] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [showFilters, setShowFilters] = useState(true);
   const [showInspector, setShowInspector] = useState(true);
   const [fullscreen, setFullscreen] = useState(false);
   const [autorangeRequest, setAutorangeRequest] = useState(0);
-  const [showDataPoints, setShowDataPoints] = useState(true);
+  const [manualYRanges, setManualYRanges] = useState<{ datasetId?: string; ranges: YAxisRanges }>({ ranges: {} });
+  const yAxisRanges = manualYRanges.datasetId === chartDataset?.id ? manualYRanges.ranges : undefined;
+  const resetYRanges = useCallback(() => {
+    setManualYRanges({ datasetId: chartDataset?.id, ranges: {} });
+  }, [chartDataset?.id]);
+  const showDataPoints = spec.chart.show_data_points;
+  const setShowDataPoints = useCallback((update) => updateSpec((current) => ({ ...current,
+    chart: { ...current.chart, show_data_points: typeof update === 'function'
+      ? update(current.chart.show_data_points) : update } })), [updateSpec]);
   const [chartInteractionMode, setChartInteractionMode] = useState<
     (typeof CHART_INTERACTION_MODES)[number]['key']
   >('select');
@@ -317,6 +359,7 @@ export default function Explore() {
         .filter(Boolean),
     [yFields, fields],
   );
+  const automaticYRanges = useMemo(() => buildYDataRanges(rows, yMeta), [rows, yMeta]);
   const zMeta = useMemo(() => {
     if (!zField) return null;
     const m = enrichField(zField.name, fields);
@@ -364,7 +407,23 @@ export default function Explore() {
     return `Z 字段 "${zMeta.name}" 与 Y 字段重复，分组/编码与 Y 轴信息一致 — 建议改选其他 Z 字段`;
   }, [yMeta, zMeta]);
 
+  const requestSequence = useRef(new RequestSequence());
+  useEffect(() => {
+    requestSequence.current.invalidate();
+    setLoading(false);
+    return () => requestSequence.current.invalidate();
+  }, [filters, limit, chartType, xFields, yFields, zField, zMode, waferZ, waferFacet, project.head?.projectId]);
   const run = async () => {
+    const request = requestSequence.current.begin();
+    const current = () => requestSequence.current.current(request);
+    const installAggregate = (res, groupBy, metrics, flat) => {
+      if (!current()) return;
+      const querySpec = { filters, fields: [...new Set([...groupBy, ...metrics.map((m) => m.field)])], order_by: null };
+      const checked = validateQueryResult(res, querySpec, true);
+      updateSpec((value) => ({ ...value, query_spec: querySpec }));
+      loadQueryRows(flat, { total: checked.manifest.matched_total, returned: flat.length,
+        truncated: checked.manifest.truncated, aggregate: true }, checked.manifest);
+    };
     setLoading(true);
     setError(null);
     setChartWarnings([]);
@@ -384,7 +443,7 @@ export default function Explore() {
           }
           return row;
         });
-        loadQueryRows(flat, { total: flat.length, returned: flat.length, truncated: false });
+        installAggregate(res, groupBy, metrics, flat);
         return;
       }
 
@@ -444,7 +503,7 @@ export default function Explore() {
           }
           return row;
         });
-        loadQueryRows(flat, { total: flat.length, returned: flat.length, truncated: false });
+        installAggregate(res, groupBy, metrics, flat);
         return;
       }
 
@@ -470,17 +529,22 @@ export default function Explore() {
         skip_count: true,
         sampling: 'none',
       });
-      loadQueryRows(res.rows || [], {
-        total: res.total,
-        returned: res.returned,
-        truncated: res.truncated,
+      if (!current()) return;
+      const querySpec = { filters, fields: Array.from(fieldSet), order_by: null };
+      const checked = validateQueryResult(res, querySpec);
+      updateSpec((value) => ({ ...value, query_spec: querySpec }));
+      loadQueryRows(checked.rows, {
+        total: checked.manifest.matched_total,
+        returned: checked.manifest.returned,
+        truncated: checked.manifest.truncated,
         sampled: res.sampled,
         sample_rate: res.sample_rate,
-      });
+      }, checked.manifest);
     } catch (e) {
-      setError(e.message);
+      if (current()) setError(e.response?.data?.detail?.code === 'QUERY_SOURCE_CHANGED'
+        ? '查询期间来源版本变化，请重新查询；上一工作表保留。' : e.response?.data?.detail?.message ?? e.message);
     } finally {
-      setLoading(false);
+      if (current()) setLoading(false);
     }
   };
 
@@ -509,8 +573,8 @@ export default function Explore() {
     requestedSurface: AnalysisSurface,
   ) => {
     const targetDataset = requestedSurface === 'worksheet' ? activeDataset : chartDataset;
-    const selectedRows = targetDataset && selection.datasetId === targetDataset.id
-      ? targetDataset.rows.filter((row) => selection.rowIds.has(row.rowId))
+    const selectedRows = targetDataset
+      ? targetDataset.rows.filter((row) => selectedRowsForDataset(selection, targetDataset.id).has(row.rowId))
       : [];
     if (command === 'undo') {
       undo();
@@ -521,6 +585,7 @@ export default function Explore() {
       return;
     }
     if (command === 'deleteSelection') {
+      if (selection.byDataset) { deleteSelection(); return; }
       if (targetDataset && selectedRows.length > 0) {
         deleteRows(targetDataset.id, selectedRows.map((row) => row.rowId));
       }
@@ -567,9 +632,10 @@ export default function Explore() {
       return;
     }
     if (command === 'autorange' && requestedSurface === 'chart') {
+      resetYRanges();
       setAutorangeRequest((value) => value + 1);
     }
-  }, [activeDataset, chartDataset, deleteRows, redo, selectRows, selection, undo]);
+  }, [activeDataset, chartDataset, deleteRows, deleteSelection, redo, selectRows, selection, undo, resetYRanges]);
 
   useAnalysisCommandBridge({
     surface: selection.activeSurface || activeCommandSurface,
@@ -680,11 +746,8 @@ export default function Explore() {
 
   return (
     <>
-      <div className="toolbar">
-        <span className="crumb">
-          谐振器 <span style={{ color: 'var(--fg-4)' }}>›</span> <b>数据分析</b>
-        </span>
-        <div className="divider" />
+      <ProjectSaveBadge project={project} />
+      <div className="toolbar analysis-toolbar">
         <div className="group">
           {CHART_TYPES.map((c) => {
             const Icn = I[c.icon] || I.scatter;
@@ -700,81 +763,81 @@ export default function Explore() {
             );
           })}
         </div>
-        <div className="spacer" />
-        <button className={`btn${showFilters ? ' active' : ''}`} onClick={() => setShowFilters((v) => !v)}>
-          <I.filter size={13} /> 筛选
-        </button>
-        <button
-          className={`btn${showInspector ? ' active' : ''}`}
-          onClick={() => showInspector
-            ? setShowInspector(false)
-            : runAnalysisCommand('editStyle', activeCommandSurface)}
-        >
-          <I.settings size={13} /> 配置
-        </button>
-        <button
-          className="btn"
-          onClick={() => runAnalysisCommand('undo', activeCommandSurface)}
-          disabled={!canUndo}
-          title="撤销 (Ctrl/Cmd+Z)"
-        >
-          ↶
-        </button>
-        <button
-          className="btn"
-          onClick={() => runAnalysisCommand('redo', activeCommandSurface)}
-          disabled={!canRedo}
-          title="重做 (Ctrl/Cmd+Shift+Z)"
-        >
-          ↷
-        </button>
-        <button
-          className="btn"
-          onClick={() => runAnalysisCommand('deleteSelection', activeCommandSurface)}
-          disabled={selection.rowIds.size === 0}
-          title="删除选中行"
-        >
-          <I.trash size={13} /> {selection.rowIds.size || ''}
-        </button>
-        <button
-          className="btn"
-          onClick={() => runAnalysisCommand('copySelection', activeCommandSurface)}
-          disabled={selection.rowIds.size === 0}
-          title="复制所选数据 (Ctrl/Cmd+C)"
-        >
-          复制
-        </button>
-        {!isWafer && (
-          <button
-            className={`btn${showDataPoints ? ' active' : ''}`}
-            onClick={() => setShowDataPoints((value) => !value)}
-            title={showDataPoints ? '隐藏原始数据点' : '显示原始数据点'}
-          >
-            {showDataPoints ? '隐藏数据点' : '显示数据点'}
+        <div className="analysis-toolbar-actions">
+          <div className="spacer" />
+          <button className={`btn${showFilters ? ' active' : ''}`} onClick={() => setShowFilters((v) => !v)}>
+            <I.filter size={13} /> 筛选
           </button>
-        )}
-        <button className="btn" onClick={() => setFullscreen((v) => !v)} title={fullscreen ? '退出全屏分析' : '全屏分析'}>
-          <I.expand size={13} />
-        </button>
-        <button
-          className="btn"
-          onClick={onExportCsv}
-          disabled={exporting || !chartDataset}
-          title="导出当前图表引用的数据表（包含本地编辑和删除）"
-        >
-          <I.download size={13} /> {exporting ? '导出中…' : '导出 CSV'}
-        </button>
-        <button className="btn" disabled title="敬请期待">
-          <I.download size={13} /> 导出 Excel
-        </button>
-        <button
-          className="btn primary"
-          onClick={run}
-          disabled={loading || fLoading || (!isWafer && xFields.length === 0)}
-          title={!isWafer && xFields.length === 0 ? '请先选择 X 字段' : undefined}
-        >
-          <I.refresh size={13} /> {loading ? '查询中...' : '运行查询'}
-        </button>
+          <button
+            className={`btn${showInspector ? ' active' : ''}`}
+            onClick={() => showInspector
+              ? setShowInspector(false)
+              : runAnalysisCommand('editStyle', activeCommandSurface)}
+          >
+            <I.settings size={13} /> 配置
+          </button>
+          <button
+            className="btn"
+            onClick={() => runAnalysisCommand('undo', activeCommandSurface)}
+            disabled={!canUndo}
+            title="撤销 (Ctrl/Cmd+Z)"
+          >
+            ↶
+          </button>
+          <button
+            className="btn"
+            onClick={() => runAnalysisCommand('redo', activeCommandSurface)}
+            disabled={!canRedo}
+            title="重做 (Ctrl/Cmd+Shift+Z)"
+          >
+            ↷
+          </button>
+          <button
+            className="btn"
+            onClick={() => runAnalysisCommand('deleteSelection', activeCommandSurface)}
+            disabled={selection.rowIds.size === 0}
+            title="删除选中行"
+          >
+            <I.trash size={13} /> {selection.rowIds.size || ''}
+          </button>
+          <button
+            className="btn"
+            onClick={() => runAnalysisCommand('copySelection', activeCommandSurface)}
+            disabled={selection.rowIds.size === 0}
+            title="复制所选数据 (Ctrl/Cmd+C)"
+          >
+            复制
+          </button>
+          {!isWafer && (
+            <button
+              className={`btn${showDataPoints ? ' active' : ''}`}
+              onClick={() => setShowDataPoints((value) => !value)}
+              title={showDataPoints ? '隐藏原始数据点' : '显示原始数据点'}
+            >
+              {showDataPoints ? '隐藏数据点' : '显示数据点'}
+            </button>
+          )}
+          <button className="btn" onClick={() => setFullscreen((v) => !v)} title={fullscreen ? '退出全屏分析' : '全屏分析'}>
+            <I.expand size={13} />
+          </button>
+          <button
+            className="btn"
+            onClick={() => setShowExport(true)}
+            disabled={exporting || !chartDataset}
+            title="导出当前图表引用的数据表（包含本地编辑和删除）"
+          >
+            <I.download size={13} /> {exporting ? '导出中…' : '导出数据'}
+          </button>
+          {showExport && chartDataset && <ExportDialog dataset={chartDataset} onClose={() => setShowExport(false)} />}
+          <button
+            className="btn primary"
+            onClick={run}
+            disabled={loading || fLoading || (!isWafer && xFields.length === 0)}
+            title={!isWafer && xFields.length === 0 ? '请先选择 X 字段' : undefined}
+          >
+            <I.refresh size={13} /> {loading ? '查询中...' : '运行查询'}
+          </button>
+        </div>
       </div>
 
       <div
@@ -791,9 +854,7 @@ export default function Explore() {
             <div className="chart-head">
               <span className="title">{titleText}</span>
               <span className="axes">
-                {stats
-                  ? `${rows.length.toLocaleString()} 工作区行 · 查询 ${stats.returned}/${stats.total}${stats.truncated ? ' · 已截断' : ''}${stats.sampled ? ' · 已采样 (' + Math.round(Number(stats.sample_rate) * 100) + '%)' : ''}`
-                  : '尚未查询'}
+                <DataScopeBanner manifest={chartDataset?.manifest ?? null} rows={rows.length} aggregate={stats?.aggregate === true} />
               </span>
               <div className="right">
                 <div className="analysis-chart-tools" role="toolbar" aria-label="图表交互工具">
@@ -843,7 +904,10 @@ export default function Explore() {
                   字段加载失败：{fErr.message}
                 </div>
               )}
-              {error && (
+              {openProjectError && <p role="alert">{openProjectError}</p>}
+              <details className="comparison-settings"><summary>批次比较</summary><ComparisonSetup fields={fields?.all ?? null} /></details>
+              <ComparisonView fields={fields?.all ?? []} />
+      {error && (
                 <div style={{ padding: 14, color: 'var(--fail)' }}>
                   <I.alert size={12} /> {error}
                 </div>
@@ -896,10 +960,11 @@ export default function Explore() {
                       onPointClick={handlePointClick}
                       onSelection={handleSelection}
                       onDeselect={handleDeselect}
-                      selectedRowIds={selection.datasetId === chartDataset?.id
-                        ? selection.rowIds : EMPTY_SELECTION}
+                      selectedRowIds={chartDataset ? selectedRowsForDataset(selection, chartDataset.id) : EMPTY_SELECTION}
                       pointStyles={chartDataset ? pointStyles[chartDataset.id] : undefined}
                       autorangeRequest={autorangeRequest}
+                      yAxisRanges={yAxisRanges}
+                      onYAxisReset={resetYRanges}
                       revision={chartDataset?.id}
                       datasetRevision={chartDataset?.revision}
                       analysisLayout={!zMeta || zMode === 'facet'}
@@ -919,8 +984,7 @@ export default function Explore() {
                       // 不传 onPointClick 让 WaferMap 内部禁用点击。
                       onPointClick={useAggregate ? undefined : handlePointClick}
                       onSelection={handleSelection}
-                      selectedRowIds={selection.datasetId === chartDataset?.id
-                        ? selection.rowIds : EMPTY_SELECTION}
+                      selectedRowIds={chartDataset ? selectedRowsForDataset(selection, chartDataset.id) : EMPTY_SELECTION}
                       revision={chartDataset?.id}
                       interactionMode={chartInteractionMode}
                       autorangeRequest={autorangeRequest}
@@ -932,8 +996,7 @@ export default function Explore() {
           </div> : activeDataset ? (
             <WorksheetGrid
               dataset={activeDataset}
-              selectedRowIds={selection.datasetId === activeDataset.id
-                ? selection.rowIds : EMPTY_SELECTION}
+              selectedRowIds={selectedRowsForDataset(selection, activeDataset.id)}
               onSelection={(ids, mode) => selectRows(activeDataset.id, ids, mode, 'worksheet')}
               onEdit={(rowId, column, value) => editCell(activeDataset.id, rowId, column, value)}
               onDelete={() => runAnalysisCommand('deleteSelection', 'worksheet')}
@@ -979,11 +1042,23 @@ export default function Explore() {
           setLimit={setLimit}
           stats={stats}
         >
+          {!isWafer && <YAxisRangeControls
+            key={chartDataset?.id || 'empty'}
+            fields={yMeta}
+            ranges={{ ...automaticYRanges, ...yAxisRanges }}
+            onApply={(metric, range) => setManualYRanges({
+              datasetId: chartDataset?.id, ranges: { ...yAxisRanges, [metric]: range },
+            })}
+            onReset={() => runAnalysisCommand('autorange', 'chart')}
+          />}
+          <div className="section analysis-project-tools">
+            <ProjectMenu fields={fields?.all ?? null} />
+            <ReportDialog />
+          </div>
           {inspectorDataset && !isWafer && (
             <PointStyleInspector
               dataset={inspectorDataset}
-              selectedRowIds={selection.datasetId === inspectorDataset.id
-                ? selection.rowIds : EMPTY_SELECTION}
+              selectedRowIds={selectedRowsForDataset(selection, inspectorDataset.id)}
               anchorRowId={selection.datasetId === inspectorDataset.id
                 ? selection.anchorRowId : null}
               metrics={yMeta}

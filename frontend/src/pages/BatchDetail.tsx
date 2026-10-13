@@ -1,11 +1,15 @@
+import DeletionImpactDialog from '../lifecycle/DeletionImpactDialog';
+import TaskActions from '../tasks/TaskActions';
+import { activeTask, taskLabel } from '../tasks/taskStatus';
+import type { Task } from '../types';
 import React, { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
+import SyncStatusBadge from '../sync/SyncStatusBadge';
 import I from '../components/Icons';
 import FileManager from '../components/FileManager';
 import {
   getBatch,
   getTask,
-  cancelTask,
   listBatchDevices,
   listBatchFiles,
   exportCsv,
@@ -195,7 +199,12 @@ export default function BatchDetail() {
   const [devices, setDevices] = useState<{ items: Device[]; total: number }>({ items: [], total: 0 });
   const [size] = useState<number>(50);
   const [error, setError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [currentTask, setCurrentTask] = useState<Task | null>(null);
   const [taskStatus, setTaskStatus] = useState<string | null>(null);
+  // 远程副本批次的重处理任务在服务器上运行：detail.task_id 恒为空，
+  // 用代理响应取负后的 task_id 作为轮询键（/api/tasks/-N 由后端代理到服务器）。
+  const [activeTaskId, setActiveTaskId] = useState<number | string | null>(null);
   const [activeDevice, setActiveDevice] = useState<Device | null>(null);
   const [exporting, setExporting] = useState<boolean>(false);
   const [files, setFiles] = useState<FileEntry[]>([]);
@@ -233,17 +242,18 @@ export default function BatchDetail() {
   }, [batchNo]);
 
   // 轮询批次关联任务状态，进行中时禁用重处理按钮（静态版无任务，跳过）
+  const pollingTaskId = activeTaskId ?? detail?.task_id;
   useEffect(() => {
-    if (IS_STATIC || !detail?.task_id) return;
+    if (IS_STATIC || pollingTaskId == null) return;
     let cancelled = false;
     let timer: number | undefined;
 
     const fetchStatus = async () => {
       try {
-        const t = await getTask(detail.task_id as number | string);
+        const t = await getTask(pollingTaskId as number | string);
         if (cancelled) return;
-        setTaskStatus(t.status || null);
-        if (t.status === 'pending' || t.status === 'running') {
+        setTaskStatus(t.status || null); setCurrentTask(t);
+        if (activeTask(t.status)) {
           timer = window.setTimeout(fetchStatus, 2000);
         }
       } catch {
@@ -256,7 +266,7 @@ export default function BatchDetail() {
       cancelled = true;
       if (timer) window.clearTimeout(timer);
     };
-  }, [detail?.task_id]);
+  }, [pollingTaskId]);
 
   useEffect(() => {
     if (IS_STATIC || !batchNo) return; // 静态版无源文件
@@ -352,7 +362,7 @@ export default function BatchDetail() {
     }
   }, [batchNo]);
 
-  const isTaskActive = taskStatus === 'pending' || taskStatus === 'running';
+  const isTaskActive = activeTask(taskStatus);
 
   const handleRename = async (newBatchNo: string) => {
     if (!batchNo) return;
@@ -369,6 +379,7 @@ export default function BatchDetail() {
   return (
     <>
       <div className="toolbar">
+      {batchNo && <SyncStatusBadge batchNo={batchNo} />}
         <span className="crumb">
           <Link to="/batches" style={{ color: 'inherit', textDecoration: 'none' }}>
             批次管理
@@ -378,26 +389,13 @@ export default function BatchDetail() {
         <div className="spacer" />
         {isTaskActive && (
           <span className="dim" style={{ fontSize: 12, marginRight: 8 }}>
-            任务进行中 ({taskStatus === 'pending' ? '排队中' : '运行中'})
+            任务进行中 ({taskLabel(taskStatus ?? undefined)})
           </span>
         )}
-        {isTaskActive && detail?.task_id && (
-          <button
-            className="btn fail"
-            onClick={async () => {
-              if (!window.confirm(`取消任务将删除批次 ${detail.batch_no} 及上传文件，是否继续？`)) return;
-              try {
-                setError(null);
-                await cancelTask(detail.task_id);
-                navigate('/batches');
-              } catch (e: any) {
-                setError(formatApiError(e, '取消失败'));
-              }
-            }}
-          >
-            取消任务
-          </button>
-        )}
+        {!IS_STATIC && <button className="btn" onClick={() => setDeleting(true)}>删除影响 / 移除副本</button>}
+        {deleting && detail && <DeletionImpactDialog batchNo={detail.batch_no} onClose={() => setDeleting(false)} onChanged={() => navigate('/batches')} />}
+        {currentTask && <TaskActions task={currentTask} onUpdate={(task) => { setCurrentTask(task); setTaskStatus(task.status ?? null); }} />}
+
         <button
           className="btn"
           disabled={!batchNo || isTaskActive}
@@ -417,12 +415,14 @@ export default function BatchDetail() {
             </button>
             <button
               className="btn"
-              disabled={!detail || detail.raw_zip_deleted || isTaskActive}
+              disabled={!detail || (detail.raw_zip_deleted && detail.source !== 'server') || isTaskActive}
+              title={detail?.source === 'server' ? '在服务器上重新解压（原始数据在服务器）' : undefined}
               onClick={async () => {
                 if (!detail) return;
                 try {
                   setError(null);
-                  await reextractBatch(detail.batch_no);
+                  const r = await reextractBatch(detail.batch_no);
+                  setActiveTaskId(r.task_id ?? null);
                   setTaskStatus('pending');
                 } catch (e: any) {
                   setError(formatApiError(e, '重新解压失败'));
@@ -438,7 +438,8 @@ export default function BatchDetail() {
                 if (!detail) return;
                 try {
                   setError(null);
-                  await redeembedBatch(detail.batch_no);
+                  const r = await redeembedBatch(detail.batch_no);
+                  setActiveTaskId(r.task_id ?? null);
                   setTaskStatus('pending');
                 } catch (e: any) {
                   setError(formatApiError(e, '重新去嵌失败'));
@@ -609,7 +610,8 @@ export default function BatchDetail() {
           onSubmit={async (metrics) => {
             try {
               setError(null);
-              await recomputeBatch(detail.batch_no, metrics);
+              const r = await recomputeBatch(detail.batch_no, metrics);
+              setActiveTaskId(r.task_id ?? null);
               setShowRecomputeModal(false);
               setTaskStatus('pending');
             } catch (e: any) {

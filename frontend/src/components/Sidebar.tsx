@@ -42,10 +42,10 @@ export default function Sidebar() {
         <span className="label">滤波器（二期）</span>
       </button>
       <div className="sep" />
-      <button className="rail-btn" title="设置">
+      <NavLink to="/settings" className="rail-btn" title="设置">
         <I.settings size={18} />
         <span className="label">设置</span>
-      </button>
+      </NavLink>
     </div>
   );
 }

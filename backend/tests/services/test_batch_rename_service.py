@@ -20,9 +20,8 @@ from app.services.batch_rename_service import (
 
 @pytest.fixture
 def rename_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Settings:
-    """将重命名服务使用的 files_dir 指向临时目录。"""
+    """创建临时数据目录；重命名只改显示名称，不再依赖服务配置。"""
     settings = Settings(DATA_ROOT=tmp_path / "data")
-    monkeypatch.setattr("app.services.batch_rename_service.get_settings", lambda: settings)
     monkeypatch.setattr("app.config.get_settings", lambda: settings)
     return settings
 
@@ -67,11 +66,11 @@ def test_rename_batch_success(db, rename_settings):
     assert new_name == "B.02"
     db.refresh(batch)
     assert batch.batch_no == "B.02"
-    assert batch.file_path == str(new_dir)
-    assert batch.raw_zip_path.endswith("B.02.zip")
-    assert not old_dir.exists()
-    assert new_dir.exists()
-    assert (new_dir / "a.s1p").exists()
+    assert batch.file_path == str(old_dir)
+    assert batch.raw_zip_path.endswith("B.01.zip")
+    assert old_dir.exists()
+    assert not new_dir.exists()
+    assert (old_dir / "a.s1p").exists()
 
     task = db.get(UploadTask, batch.task_id)
     assert task.batch_no == "B.02"

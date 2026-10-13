@@ -8,17 +8,22 @@
 from __future__ import annotations
 
 import logging
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
+from sqlalchemy.orm import object_session
 
 from app.api.deps import DbSession
 from app.config import get_settings
 from app.core.curves import PARAM_CHOICES, compute_sparam_curve
 from app.models import Device
+from app.services.batch_scope import get_active_device
+from app.services.data_revision import cache_version
+from app.services.raw_download import raw_file_response
 
 log = logging.getLogger("aln")
 
@@ -31,20 +36,17 @@ _BODEQ_CACHE_SIZE = 32
 
 
 @lru_cache(maxsize=_NETWORK_CACHE_SIZE)
-def _load_network(path_str: str):
-    """缓存 skrf.Network 解析结果。
+def _load_network(path_str: str, version: tuple[int, int, tuple[str, int] | None] | None = None):
+    """按路径、修改时间及大小缓存，重提取覆盖文件后自动失效。"""
+    from app.api.files import _read_network
 
-    参数用 str 而非 Path，因为 Path 不可 hash 且 lru_cache 要求可 hash 参数。
-    S1P 文件一旦入库就不会修改，因此缓存不会过期是安全的。
-    """
-    import skrf
-
-    return skrf.Network(path_str)
+    return _read_network(Path(path_str))
 
 
 @lru_cache(maxsize=_BODEQ_CACHE_SIZE)
 def _calc_bodeq_cached(
     path_str: str,
+    version: tuple[int, int, tuple[str, int] | None] | None = None,
 ) -> dict[str, Any]:
     """缓存 BodeQ 计算结果，复用已缓存的 ``skrf.Network``。
 
@@ -53,8 +55,13 @@ def _calc_bodeq_cached(
     """
     from app.core.extract import calc_bodeq_curve
 
-    net = _load_network(path_str)
+    net = _load_network(path_str) if version is None else _load_network(path_str, version)
     return calc_bodeq_curve(net.s[:, 0, 0], net.f)
+
+
+def _device_cache_version(device: Device) -> tuple[str, int] | None:
+    db = object_session(device)
+    return cache_version(db) if db is not None else None
 
 
 def _resolve_sparam_path(rel_or_abs: str, batch_no: str | None = None) -> Path:
@@ -71,7 +78,16 @@ def _resolve_sparam_path(rel_or_abs: str, batch_no: str | None = None) -> Path:
 def resolve_device_sparam_path(device: Device) -> Path:
     """器件 snp 的绝对路径（batch_no 子目录 + 相对路径拼接）。调用方需先判空 s_param_path。"""
     batch_no = device.batch.batch_no if device.batch else None
-    return _resolve_sparam_path(device.s_param_path or "", batch_no=batch_no)
+    if device.batch and device.batch.deleted_at is not None:
+        raise HTTPException(410, "批次已删除")
+    from app.services.file_tree_service import batch_files_dir
+
+    stored = Path(device.s_param_path or "")
+    path = (
+        stored if stored.is_absolute() else batch_files_dir(device.batch) / stored
+    ) if device.batch else _resolve_sparam_path(str(stored), batch_no=batch_no)
+    gz_path = path.with_suffix(path.suffix + ".gz")
+    return gz_path if not path.exists() and gz_path.exists() else path
 
 
 def build_sparam_response(device: Device, device_id: int, param: str) -> dict[str, Any]:
@@ -82,7 +98,10 @@ def build_sparam_response(device: Device, device_id: int, param: str) -> dict[st
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"S 参数文件不存在: {path}")
     try:
-        net = _load_network(str(path))
+        stat = path.stat()
+        net = _load_network(
+            str(path), (stat.st_mtime_ns, stat.st_size, _device_cache_version(device))
+        )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"读取 S 参数失败: {exc!s}") from exc
     try:
@@ -107,7 +126,10 @@ def build_bodeq_response(device: Device, device_id: int) -> dict[str, Any]:
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"S 参数文件不存在: {path}")
     try:
-        result = _calc_bodeq_cached(str(path))
+        stat = path.stat()
+        result = _calc_bodeq_cached(
+            str(path), (stat.st_mtime_ns, stat.st_size, _device_cache_version(device))
+        )
     except HTTPException:
         raise
     except Exception as exc:
@@ -131,15 +153,19 @@ def device_sparam(
     if param not in PARAM_CHOICES:
         raise HTTPException(status_code=400, detail=f"param 必须是 {','.join(PARAM_CHOICES)} 之一")
 
-    device = db.get(Device, device_id)
+    device = get_active_device(db, device_id)
     if device is None:
         raise HTTPException(status_code=404, detail=f"器件 {device_id} 不存在")
 
     # --- PINN 快速路径（仅 s11_db）---
-    if fast and param == "s11_db":
-        from app.ml.inference import predict_s11_db
+    if fast and param == "s11_db" and os.environ.get("ALN_DISABLE_TORCH") != "1":
+        try:
+            from app.ml.inference import predict_s11_db
 
-        pinn_result = predict_s11_db(device)
+            pinn_result = predict_s11_db(device)
+        except Exception:  # noqa: BLE001 — torch 不可用（老 CPU 无 AVX）/模型损坏时回退 skrf
+            log.warning("PINN 快速路径不可用，回退 skrf", exc_info=True)
+            pinn_result = None
         if pinn_result is not None:
             freq_ghz, values = pinn_result
             return {
@@ -173,7 +199,7 @@ def device_sparam(
 @router.get("/{device_id}/bodeq")
 def device_bodeq(device_id: int, db: DbSession) -> dict[str, Any]:
     """读 .s1p → 计算 BodeQ raw/smooth/fitted 三条曲线 → 返回 JSON。"""
-    device = db.get(Device, device_id)
+    device = get_active_device(db, device_id)
     if device is None:
         raise HTTPException(status_code=404, detail=f"器件 {device_id} 不存在")
     return build_bodeq_response(device, device_id)
@@ -193,15 +219,18 @@ def device_sparam_sparse(
     """
     if param != "z_mag_db":
         raise HTTPException(status_code=400, detail="稀疏重建当前仅支持 z_mag_db")
+    if os.environ.get("ALN_DISABLE_TORCH") == "1":
+        raise HTTPException(
+            status_code=503, detail="当前系统的 PyTorch 运行检查未通过，稀疏重建已停用"
+        )
 
-    device = db.get(Device, device_id)
+    device = get_active_device(db, device_id)
     if device is None:
         raise HTTPException(status_code=404, detail=f"器件 {device_id} 不存在")
     if not device.s_param_path:
         raise HTTPException(status_code=404, detail="该器件没有 S 参数文件")
 
-    batch_no = device.batch.batch_no if device.batch else None
-    path = _resolve_sparam_path(device.s_param_path, batch_no=batch_no)
+    path = resolve_device_sparam_path(device)
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"S 参数文件不存在: {path}")
 
@@ -266,12 +295,11 @@ def download_device_s1p(
     db: DbSession,
 ) -> FileResponse:
     """下载该器件对应的原始 S1P/S2P 文件。"""
-    device = db.get(Device, device_id)
+    device = get_active_device(db, device_id)
     if device is None:
         raise HTTPException(status_code=404, detail=f"器件 {device_id} 不存在")
 
-    batch_no = device.batch.batch_no if device.batch else None
-    path = _resolve_sparam_path(device.s_param_path or "", batch_no=batch_no)
+    path = resolve_device_sparam_path(device)
     if not device.s_param_path:
         # 快照导入的器件不落 s_param_path：桌面模式下先尝试代理到服务器
         # 下载，未命中（非桌面/未配置）才抛 404。
@@ -302,8 +330,4 @@ def download_device_s1p(
             )
         raise HTTPException(status_code=404, detail=f"S 参数文件不存在: {path}")
 
-    return FileResponse(
-        path,
-        media_type="application/octet-stream",
-        filename=path.name,
-    )
+    return raw_file_response(path)

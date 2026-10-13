@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from threading import Lock
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -11,6 +12,8 @@ from app.api.deps import DbSession
 from app.config import get_settings
 from app.services import desktop_sync_service, server_client
 from app.services.server_client import ServerClient, ServerConfig, ServerError
+
+_sync_lock = Lock()
 
 router = APIRouter(prefix="/desktop-sync", tags=["desktop-sync"])
 
@@ -44,7 +47,7 @@ def status(db: DbSession) -> dict[str, Any]:
         else []
     )
     return {
-        "enabled": settings.is_desktop,
+        "enabled": settings.is_desktop and not settings.ALN_SERVER_MODE,
         "configured": config is not None,
         "server_url": config.server_url if config else None,
         "username": config.username if config else None,
@@ -86,6 +89,27 @@ def pull(db: DbSession) -> dict[str, int]:
 def push(batch_no: str, db: DbSession) -> dict[str, Any]:
     try:
         with _load_client() as client:
-            return desktop_sync_service.push_batch_to_server(db, client, batch_no)
+            from app.services.replication_v3 import validate_catalog
+            catalog = client.request_json('GET', '/sync/v3/catalog')
+            validate_catalog(catalog)
+            return desktop_sync_service.push_batch_to_server(
+                db, client, batch_no, preserve_source_identity=True)
     except ServerError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/synchronize")
+def synchronize(db: DbSession) -> dict:
+    from app.services.replica_service import synchronize_auto as run
+    if get_settings().ALN_SERVER_MODE:
+        raise HTTPException(400, "请在个人电脑上配置同步")
+    if not _sync_lock.acquire(blocking=False):
+        raise HTTPException(409, "正在同步，请稍后")
+    try:
+        with _load_client() as client:
+            return run(db, client)
+    except (ServerError, ValueError) as exc:
+        db.rollback()
+        raise HTTPException(502, str(exc)) from exc
+    finally:
+        _sync_lock.release()

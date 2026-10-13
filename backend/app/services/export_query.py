@@ -11,10 +11,15 @@ from fastapi import HTTPException
 from sqlalchemy import ColumnElement, select
 from sqlalchemy.orm import Session
 
-from app.api.deps import ALLOWED_QUERY_FIELDS
-from app.api.query import _build_filters, _resolve_column
 from app.models import Batch, Device
 from app.schemas.query import QueryRequest
+from app.services.batch_scope import active_batch_clause
+from app.services.query_spec import (
+    ALLOWED_QUERY_FIELDS,
+    _build_filters,
+    _resolve_column,
+    stable_order,
+)
 
 EXPORT_HARD_CAP = 200_000
 
@@ -48,19 +53,14 @@ def build_export_fields_and_stmt(
     fields = req.fields or list(DEFAULT_EXPORT_FIELDS)
     _validate_fields(fields)
 
-    where = _build_filters(req.filters)
+    where = [active_batch_clause(), Device.matched.is_(True), *_build_filters(req.filters)]
     select_cols: list[ColumnElement[Any]] = [_resolve_column(f).label(f) for f in fields]
     # 必须显式 select_from(Device)：当用户只选 Batch 表字段（如 batch_no）时，
     # SQLAlchemy 无法从 select_cols 推断左侧表，会抛 InvalidRequestError。
     stmt = select(*select_cols).select_from(Device).join(Batch, Device.batch_id == Batch.id)
     if where:
         stmt = stmt.where(*where)
-    if req.order_by is not None:
-        order_key = req.order_by.lstrip("-+")
-        if order_key not in ALLOWED_QUERY_FIELDS:
-            raise HTTPException(status_code=400, detail=f"未知排序字段: {order_key}")
-        order_col = _resolve_column(order_key)
-        stmt = stmt.order_by(order_col.desc() if req.order_by.startswith("-") else order_col.asc())
+    stmt = stmt.order_by(*stable_order(req.order_by))
     stmt = stmt.limit(min(req.limit, EXPORT_HARD_CAP))
     return fields, stmt
 

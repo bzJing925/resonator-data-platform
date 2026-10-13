@@ -17,8 +17,11 @@ from app.models import Batch, FileNode
 logger = logging.getLogger(__name__)
 
 
-def batch_files_dir(batch_no: str) -> Path:
-    return get_settings().files_dir / batch_no
+def batch_files_dir(batch: Batch) -> Path:
+    """Use the persisted result location, including legacy named directories."""
+    if batch.file_path:
+        return Path(batch.file_path)
+    return get_settings().files_dir / batch.batch_no
 
 
 def get_or_create_root_node(db: Session, batch: Batch) -> FileNode:
@@ -65,11 +68,19 @@ def scan_disk_files(base_dir: Path) -> list[tuple[Path, str]]:
     return found
 
 
-def build_file_tree_from_disk(db: Session, batch: Batch) -> None:
+def build_file_tree_from_disk(
+    db: Session,
+    batch: Batch,
+    *,
+    commit: bool = False,
+    manifest: list[tuple[Path, str]] | None = None,
+) -> None:
     """根据磁盘目录结构初始化 file_nodes 虚拟树。
 
     幂等：已存在的 file 节点不会被重复创建，只会被重新挂到正确的父级并恢复 is_deleted。
     """
+    # Publication passes a prescanned manifest; no filesystem calls occur on that path.
+    disk_files = scan_disk_files(batch_files_dir(batch)) if manifest is None else manifest
     root = get_or_create_root_node(db, batch)
 
     zip_name = zip_node_name(batch)
@@ -91,9 +102,6 @@ def build_file_tree_from_disk(db: Session, batch: Batch) -> None:
         )
         db.add(zip_node)
         db.flush()
-
-    base_dir = batch_files_dir(batch.batch_no)
-    disk_files = scan_disk_files(base_dir)
 
     folder_nodes: dict[str, FileNode] = {"": zip_node}
     folder_order = 0
@@ -144,4 +152,6 @@ def build_file_tree_from_disk(db: Session, batch: Batch) -> None:
         db.add(file_node)
         file_order += 1
 
-    db.commit()
+    db.flush()
+    if commit:
+        db.commit()

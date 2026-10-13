@@ -7,6 +7,7 @@ import {
 import { datumRowIds } from '../../src/features/analysis/chart/chartInteraction';
 import {
   ANALYSIS_Y_FIELDS,
+  STRUCTURE_TYPE_FIELD, AREA_REALITY_FIELD,
   buildPerformanceRows,
 } from '../../src/features/analysis/__fixtures__/analysisRows';
 
@@ -39,13 +40,14 @@ async function timed(operation: () => unknown | Promise<unknown>) {
 }
 
 async function measurePanFps(graphDiv: any) {
-  return new Promise<number>((resolve) => {
+  return new Promise<number>((resolve, reject) => {
     const started = performance.now();
     let frames = 0;
     const step = async (now: number) => {
       frames += 1;
       const shift = (frames % 20) * 0.005;
-      await Plotly.relayout(graphDiv, { 'xaxis.range': [-0.5 + shift, 1.5 + shift] });
+      try { await Plotly.relayout(graphDiv, { 'xaxis.range': [-0.5 + shift, 1.5 + shift] }); }
+      catch (error) { reject(error); return; }
       if (now - started < 1_000) requestAnimationFrame(step);
       else resolve(frames * 1000 / (performance.now() - started));
     };
@@ -58,6 +60,7 @@ window.runAnalysisBenchmark = async (rowCount) => {
   const sceneStarted = performance.now();
   const spec = buildJmpChartScene({
     chartType: 'scatter',
+    xFields: [STRUCTURE_TYPE_FIELD, AREA_REALITY_FIELD], zField: null,
     rows,
     yFields: ANALYSIS_Y_FIELDS,
     datasetRevision: 1,
@@ -79,6 +82,7 @@ window.runAnalysisBenchmark = async (rowCount) => {
   clearJmpChartSceneCache();
   const cachedArgs = {
     chartType: 'scatter',
+    xFields: [STRUCTURE_TYPE_FIELD, AREA_REALITY_FIELD], zField: null,
     rows,
     yFields: ANALYSIS_Y_FIELDS,
     datasetRevision: 1,
@@ -106,6 +110,7 @@ window.runAnalysisBenchmark = async (rowCount) => {
   const batchDeleteMs = await timed(async () => {
     const deletedSpec = buildJmpChartScene({
       chartType: 'scatter',
+    xFields: [STRUCTURE_TYPE_FIELD, AREA_REALITY_FIELD], zField: null,
       rows: rows.slice(deleteCount),
       yFields: ANALYSIS_Y_FIELDS,
       datasetRevision: 2,

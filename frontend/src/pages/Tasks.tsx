@@ -1,7 +1,8 @@
 import React, { memo, useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import I from '../components/Icons';
-import { listTasks, cancelTask } from '../api/endpoints';
+import { listTasks } from '../api/endpoints';
+import { taskLabel } from '../tasks/taskStatus';
 import type { Task } from '../types';
 
 interface BadgeProps {
@@ -15,7 +16,8 @@ const Badge = memo(function Badge({ status }: BadgeProps) {
     failed: ['err', '失败'],
     error: ['err', '错误'],
     pending: ['idle', '排队中'],
-    cancelled: ['idle', '已取消'],
+    cancelled: ['idle', '已停止'],
+    cancel_requested: ['idle', '正在停止'],
   };
   const [cls, txt] = map[status || ''] || ['idle', String(status || '').toUpperCase()];
   return <span className={`badge ${cls}`}>{txt}</span>;
@@ -28,10 +30,9 @@ function formatApiError(e: any, fallback: string): string {
 
 interface TaskRowProps {
   task: Task;
-  onCancel: (t: Task) => void;
 }
 
-const TaskRow = memo(function TaskRow({ task, onCancel }: TaskRowProps) {
+const TaskRow = memo(function TaskRow({ task }: TaskRowProps) {
   const t = task;
   return (
     <tr>
@@ -80,15 +81,7 @@ const TaskRow = memo(function TaskRow({ task, onCancel }: TaskRowProps) {
         <Link to={`/tasks/${t.id}`} className="btn ghost sm" style={{ textDecoration: 'none' }}>
           详情 ›
         </Link>
-        {(t.status === 'pending' || t.status === 'running') && (
-          <button
-            className="btn ghost sm fail"
-            onClick={() => onCancel(t)}
-            title="取消任务并删除上传文件"
-          >
-            取消
-          </button>
-        )}
+        <Link to={`/tasks/${t.id}`} className="btn ghost sm">{taskLabel(t.status)} · 操作</Link>
       </td>
     </tr>
   );
@@ -106,16 +99,6 @@ export default function Tasks() {
       .catch((e: Error) => setError(e.message));
   }, []);
 
-  const handleCancel = useCallback(async (t: Task) => {
-    if (!window.confirm(`取消任务 ${t.id} 将删除批次 ${t.batch_no || ''} 及上传文件，是否继续？`)) return;
-    try {
-      await cancelTask(t.id);
-      refresh();
-      setError(null);
-    } catch (e: any) {
-      setError(formatApiError(e, '取消失败'));
-    }
-  }, [refresh]);
 
   useEffect(() => {
     // cancelled 让组件卸载后或 effect 重跑时丢弃 in-flight 响应，
@@ -172,7 +155,7 @@ export default function Tasks() {
               </tr>
             )}
             {tasks.map((t) => (
-              <TaskRow key={t.id} task={t} onCancel={handleCancel} />
+              <TaskRow key={t.id} task={t} />
             ))}
           </tbody>
         </table>

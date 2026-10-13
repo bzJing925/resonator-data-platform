@@ -22,6 +22,7 @@ from app.db import SessionLocal, engine
 from app.models import Batch, Mapping, UploadTask
 from app.workers import celery_app
 from app.workers.process_batch import process_batch_task
+from tests.fixtures.platform_cases import _algorithm_samples
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -46,8 +47,8 @@ def clean_db():
 
 
 def _make_s2p(path: Path, npoints: int = 201, s_diag: complex = 0.5 + 0.0j) -> None:
-    """造一个简单 2 端口 s2p（覆盖谐振频段 14–16 GHz，避开 extract 算法的极端路径）。"""
-    freq = rf.Frequency(start=14.0, stop=16.0, npoints=npoints, unit="GHz")
+    """造一个与有效DUT同频段的常量校准2端口s2p。"""
+    freq = rf.Frequency(start=1.0, stop=5.0, npoints=npoints, unit="GHz")
     s = np.zeros((npoints, 2, 2), dtype=complex)
     s[:, 0, 0] = s_diag
     s[:, 1, 1] = s_diag
@@ -77,7 +78,8 @@ def _stage(
     src_dir = tmp_path / "src"
     src_dir.mkdir()
     # DUT: 用 mapping 里存在的 mark + 坐标，避免 extract 因找不到面积失败
-    _make_s2p(src_dir / "17_E6-1_X0Y0N18_Fail.s2p")
+    (src_dir / "17_E6-1_X0Y0N18_Fail.s2p").write_bytes(
+        _algorithm_samples(tmp_path)['dut_s2p_a'])
     if include_calibration:
         _make_s2p(src_dir / "OPEN.s2p", s_diag=0.99 + 0.0j)
         _make_s2p(src_dir / "SHORT.s2p", s_diag=-0.99 + 0.0j)
@@ -131,7 +133,7 @@ def test_deembed_with_calibration_writes_de_s1p(clean_db, tmp_path, sample_mappi
     batch_no = "T_DEEMBED_TEST.01"
     mapping_id, task_id = _seed_pending_rows(batch_no, staged_mapping)
 
-    # 触发任务（EAGER），即使 extract 个别失败也不抛——我们只看去嵌产物
+    # 有效共振DUT真实去嵌、提参并原子发布，不能以零成功结果完成任务。
     process_batch_task.apply(
         kwargs=dict(
             upload_task_id=task_id,
@@ -145,10 +147,10 @@ def test_deembed_with_calibration_writes_de_s1p(clean_db, tmp_path, sample_mappi
         )
     ).get()
 
-    # 期望 files_dir/<batch>/S11_de 和 S22_de 各有 1 个 *_de.s1p
-    from app.config import get_settings
-
-    files_dir = get_settings().files_dir / batch_no
+    # 读取已发布的持久结果目录，不再按批次显示名拼接路径。
+    with SessionLocal() as db:
+        batch = db.scalar(select(Batch).where(Batch.batch_no == batch_no))
+        files_dir = Path(batch.file_path)
     s11_de = list((files_dir / "S11_de").glob("*_de.s1p"))
     s22_de = list((files_dir / "S22_de").glob("*_de.s1p"))
     assert len(s11_de) == 1, f"S11_de 应有 1 个文件，实际 {[p.name for p in s11_de]}"
@@ -193,6 +195,7 @@ def test_deembed_without_calibration_fails_loudly(clean_db, tmp_path, sample_map
         task = db.get(UploadTask, task_id)
         assert task is not None
         assert task.status == "failed"
-        assert task.error_msg is not None and "OPEN/SHORT" in task.error_msg
+        assert task.error_msg == 'PROCESSING_FAILED'  # Public errors are stable, sanitized codes.
+        assert staged_zip.exists()
     finally:
         db.close()

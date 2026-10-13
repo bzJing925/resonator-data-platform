@@ -33,7 +33,10 @@ console.error = (...args: any[]) => {
 };
 
 const isPackaged = app.isPackaged;
-const isDev = !isPackaged;
+const nativeRoot = path.resolve(process.resourcesPath, '..', '..');
+const isNativeBundle = fs.existsSync(path.join(nativeRoot, 'native-bundle.json'));
+const isDev = !isPackaged && !isNativeBundle;
+if (isNativeBundle && !app.requestSingleInstanceLock()) app.quit();
 const e2eUrl = process.env.ALN_E2E_URL?.startsWith('http://127.0.0.1:')
   ? process.env.ALN_E2E_URL
   : undefined;
@@ -153,7 +156,7 @@ function waitForBackend(url: string, maxAttempts = 300, intervalMs = 200): Promi
 async function startBackend(): Promise<void> {
   // 上次崩溃/强退可能留下残留 aln-backend 进程，占着 SQLite 文件锁，
   // 不清理会导致新后端启动即 "database is locked"、/api/health 连接被拒绝。
-  await killStaleBackendProcesses();
+  if (!isNativeBundle) await killStaleBackendProcesses();
 
   const port = await findFreePort();
   const host = '127.0.0.1';
@@ -169,7 +172,11 @@ async function startBackend(): Promise<void> {
   let args: string[];
   let cwd: string;
 
-  if (isPackaged) {
+  if (isNativeBundle) {
+    command = path.join(nativeRoot, 'runtime', 'python.exe');
+    args = [path.join(nativeRoot, 'run_desktop_backend.py'), '--port', String(port)];
+    cwd = path.join(nativeRoot, 'backend');
+  } else if (isPackaged) {
     const backendDir = path.join(process.resourcesPath, 'backend');
     const exe = process.platform === 'win32' ? 'aln-backend.exe' : 'aln-backend';
     const oneDir = path.join(backendDir, 'aln-backend', exe);
@@ -190,6 +197,9 @@ async function startBackend(): Promise<void> {
     ...process.env,
     ALN_DESKTOP: '1',
     ALN_DESKTOP_MODE: 'true',
+    ALN_SERVER_MODE: 'false',
+    DOTENV_PATH: path.join(desktopDir, 'no-dotenv'),
+    DEBUG: 'false',
     ALN_DESKTOP_DIR: desktopDir,
     ALN_BACKEND_HOST: host,
     ALN_BACKEND_PORT: String(port),
@@ -197,7 +207,7 @@ async function startBackend(): Promise<void> {
     KEEP_RAW_ZIP: 'true',
     // PyInstaller onedir 的运行时代码与模型均在 _internal；不能指向
     // Resources/backend 顶层，否则桌面版会报告 surrogate_data/checkpoints_surrogate 缺失。
-    ...(isPackaged
+    ...(isPackaged && !isNativeBundle
       ? {
           SURROGATE_DATA_DIR: path.join(
             process.resourcesPath, 'backend', 'aln-backend', '_internal', 'surrogate_data'),
@@ -525,7 +535,7 @@ app.whenReady().then(async () => {
 
   // electron-updater 在开发环境下会 require('electron')，但本地 node_modules 里的 electron
   // npm 包会把它解析成路径字符串，导致 app 为 undefined。只在打包后启用自动更新。
-  if (app.isPackaged) {
+  if (app.isPackaged && !isNativeBundle) {
     const { setupUpdater } = await import('./updater.js');
     setupUpdater();
   } else {

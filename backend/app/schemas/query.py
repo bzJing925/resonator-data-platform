@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from app.schemas.result_manifest import ResultManifest
+
 AggOp = Literal["min", "max", "count", "p25", "p50", "p75", "avg", "sum"]
 
 
@@ -36,6 +38,9 @@ class QueryRequest(BaseModel):
 
 
 class QueryResponse(BaseModel):
+    manifest: ResultManifest | None = None
+    epoch: int | None = None
+    active_scope: Literal['active'] = 'active'
     total: int
     returned: int
     truncated: bool
@@ -52,4 +57,7 @@ class AggregateRequest(BaseModel):
 
 
 class AggregateResponse(BaseModel):
+    manifest: ResultManifest | None = None
+    epoch: int | None = None
+    active_scope: Literal['active'] = 'active'
     groups: list[dict[str, Any]]

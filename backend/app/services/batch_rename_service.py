@@ -8,7 +8,6 @@ import re
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.config import get_settings
 from app.models import Batch, FileNode, UploadTask
 
 logger = logging.getLogger(__name__)
@@ -55,10 +54,10 @@ def rename_batch(db: Session, old_batch_no: str, new_batch_no: str) -> str:
     """将批次从 old_batch_no 重命名为 new_batch_no。
 
     更新内容：
-    - batches.batch_no、file_path
+    - batches.batch_no
     - upload_tasks.batch_no（如果存在）
     - file_nodes 根节点 name
-    - 磁盘目录 DATA_ROOT/files/{old} → DATA_ROOT/files/{new}
+    磁盘目录与原始ZIP路径保持不变。
 
     异常：
     - BatchNotFoundError：原批次不存在
@@ -71,7 +70,7 @@ def rename_batch(db: Session, old_batch_no: str, new_batch_no: str) -> str:
         raise BatchRenameInvalidNameError("新批次号不能与旧批次号相同")
 
     batch = db.scalar(select(Batch).where(Batch.batch_no == old_batch_no))
-    if batch is None:
+    if batch is None or batch.deleted_at is not None:
         raise BatchNotFoundError(f"批次 {old_batch_no} 不存在")
 
     # 目标名称唯一性
@@ -80,34 +79,15 @@ def rename_batch(db: Session, old_batch_no: str, new_batch_no: str) -> str:
         raise BatchRenameDuplicateError(f"批次号 {new_batch_no} 已存在")
 
     # 检查进行中的任务
+    if batch.active_run_id is not None:
+        raise BatchRenameActiveTaskError(f"批次 {old_batch_no} 有进行中的任务")
     if batch.task_id is not None:
         task = db.get(UploadTask, batch.task_id)
-        if task is not None and task.status in ("pending", "running"):
+        if task is not None and task.status in ("pending", "running", "cancel_requested"):
             raise BatchRenameActiveTaskError(f"批次 {old_batch_no} 有进行中的任务")
-
-    settings = get_settings()
-    source_dir = settings.files_dir / old_batch_no
-    target_dir = settings.files_dir / new_batch_no
-
-    # 先重命名磁盘目录（数据库事务失败时仍可回滚磁盘）
-    dir_renamed = False
-    if source_dir.exists():
-        if target_dir.exists():
-            raise BatchRenameDuplicateError(f"目标目录 {target_dir} 已存在")
-        try:
-            source_dir.rename(target_dir)
-            dir_renamed = True
-        except OSError as exc:
-            logger.exception("重命名批次目录失败: %s -> %s", source_dir, target_dir)
-            raise BatchRenameError(f"重命名磁盘目录失败: {exc}") from exc
 
     try:
         batch.batch_no = new_batch_no
-        batch.file_path = str(target_dir)
-
-        # raw_zip_path 通常不含 batch_no，但若含则替换
-        if batch.raw_zip_path and old_batch_no in batch.raw_zip_path:
-            batch.raw_zip_path = batch.raw_zip_path.replace(old_batch_no, new_batch_no)
 
         if batch.task_id is not None:
             task = db.get(UploadTask, batch.task_id)
@@ -127,12 +107,6 @@ def rename_batch(db: Session, old_batch_no: str, new_batch_no: str) -> str:
         db.commit()
     except Exception:
         db.rollback()
-        # 如果已经重命名了磁盘目录，尽量回滚
-        if dir_renamed and target_dir.exists():
-            try:
-                target_dir.rename(source_dir)
-            except OSError:
-                logger.exception("回滚批次目录重命名失败: %s -> %s", target_dir, source_dir)
         raise
 
     return new_batch_no

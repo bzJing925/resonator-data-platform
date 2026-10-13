@@ -20,7 +20,9 @@ from sqlalchemy.exc import IntegrityError
 from app.api.deps import DbSession
 from app.config import get_settings
 from app.core.touchstone import detect_snp_type
-from app.schemas.upload import UploadAccepted
+from app.schemas.upload import DraftCommitRequest, UploadAccepted
+from app.services.batch_scope import get_active_batch
+from app.services.source_identity import batch_source_ref
 from app.services.upload_service import (
     MappingNotFoundError,
     TaskDispatchError,
@@ -29,6 +31,208 @@ from app.services.upload_service import (
 )
 
 router = APIRouter(prefix="/uploads", tags=["uploads"])
+
+
+def _draft_error(exc):
+    return HTTPException(
+        status_code=exc.status,
+        detail={
+            "code": exc.code,
+            "message": str(exc),
+            "retryable": exc.status == 503,
+            "context": exc.context,
+        },
+    )
+
+
+def _deliver_precheck(engine, draft_id):
+    from app.services.upload_draft_service import record_precheck_dispatch_failure
+    from app.workers.dispatch import ConfirmedDispatchError, dispatch_precheck_job
+
+    try:
+        if dispatch_precheck_job(draft_id) is None:
+            raise ConfirmedDispatchError("precheck not enqueued")
+    except Exception as exc:
+        record_precheck_dispatch_failure(
+            engine, draft_id, confirmed=isinstance(exc, ConfirmedDispatchError)
+        )
+        raise HTTPException(
+            503,
+            detail={
+                "code": "PRECHECK_DISPATCH_FAILED",
+                "message": "预检查投递未确认，输入已保留",
+                "retryable": True,
+                "context": {"draft_id": draft_id},
+            },
+        ) from exc
+
+
+@router.post("/prepare", status_code=202)
+def prepare_upload(
+    db: DbSession,
+    file: Annotated[UploadFile, File(...)],
+    request_key: Annotated[str, Form(...)],
+    group_id: Annotated[str, Form(...)],
+    mapping_id: Annotated[int, Form(...)],
+    f_start_ghz: Annotated[float | None, Form()] = None,
+    f_end_ghz: Annotated[float | None, Form()] = None,
+    process_type: Annotated[str, Form()] = "AUTO",
+    deembed: Annotated[bool, Form()] = False,
+    deembed_method: Annotated[str, Form()] = "default",
+    target_batch: Annotated[str, Form()] = "",
+):
+    from app.services.upload_draft_service import DraftError, prepare_draft
+    from app.services.upload_precheck import PrecheckError
+
+    name = Path(file.filename or "").name
+    if not name or name != file.filename or "\\" in name:
+        raise HTTPException(400, detail="文件名无效")
+    suffix = Path(name).suffix.lower()
+    if suffix not in {".zip", ".s1p", ".s2p", ".snp", ".xlsx", ".xls", ".csv"}:
+        raise HTTPException(400, detail="文件格式不支持")
+    directory = get_settings().uploads_dir / "drafts" / str(uuid.uuid4())
+    directory.mkdir(parents=True)
+    partial, saved = directory / "input.part", directory / name
+    try:
+        total = 0
+        with partial.open("wb") as output:
+            while chunk := file.file.read(8 * 1024 * 1024):
+                total += len(chunk)
+                if total > get_settings().UPLOAD_MAX_GB * 1024**3:
+                    raise HTTPException(413, detail="上传超过容量限制")
+                output.write(chunk)
+        partial.rename(saved)
+        engine = db.bind
+        db.rollback()
+        options = {
+            "mapping_id": mapping_id,
+            "f_start_ghz": f_start_ghz,
+            "f_end_ghz": f_end_ghz,
+            "process_type": process_type,
+            "deembed": deembed,
+            "deembed_method": deembed_method,
+            "target_batch": target_batch,
+        }
+        draft_id, created = prepare_draft(engine, saved, name, options, request_key, group_id)
+    except DraftError as exc:
+        shutil.rmtree(directory, ignore_errors=True)
+        raise _draft_error(exc) from exc
+    except PrecheckError as exc:
+        shutil.rmtree(directory, ignore_errors=True)
+        raise HTTPException(
+            422, detail={"code": exc.code, "message": str(exc), "retryable": False, "context": {}}
+        ) from exc
+    except Exception:
+        shutil.rmtree(directory, ignore_errors=True)
+        raise
+    if not created:
+        shutil.rmtree(directory, ignore_errors=True)
+    else:
+        _deliver_precheck(engine, draft_id)
+    return {
+        "draft_id": draft_id,
+        "status": "preparing",
+        "poll_url": f"/api/uploads/drafts/{draft_id}",
+    }
+
+
+@router.get("/groups/{group_id}")
+def upload_group(db: DbSession, group_id: str):
+    from sqlalchemy import select
+
+    from app.models import UploadDraft
+    from app.services.upload_draft_service import draft_public
+
+    return {
+        "group_id": group_id,
+        "drafts": [
+            draft_public(draft, db)
+            for draft in db.scalars(
+                select(UploadDraft)
+                .where(UploadDraft.group_id == group_id)
+                .order_by(UploadDraft.created_at, UploadDraft.id)
+            )
+        ],
+    }
+
+
+@router.get("/drafts/{draft_id}")
+def upload_draft(db: DbSession, draft_id: str):
+    from app.models import UploadDraft
+    from app.services.upload_draft_service import draft_public
+
+    draft = db.get(UploadDraft, draft_id)
+    if draft is None:
+        raise HTTPException(404, detail="草稿不存在")
+    return draft_public(draft, db)
+
+
+@router.post("/drafts/{draft_id}/commit")
+def commit_upload_draft(db: DbSession, draft_id: str, body: DraftCommitRequest):
+    from app.services.upload_draft_service import DraftError, commit_draft
+
+    engine = db.bind
+    db.rollback()
+    try:
+        return commit_draft(
+            engine,
+            draft_id,
+            body.request_key,
+            body.check_digest,
+            body.acknowledged_warning_codes,
+        )
+    except DraftError as exc:
+        raise _draft_error(exc) from exc
+
+
+@router.post("/drafts/{draft_id}/recheck", status_code=202)
+def recheck_upload_draft(db: DbSession, draft_id: str, body: dict):
+    from app.services.upload_draft_service import DraftError, recheck_draft
+    from app.services.upload_precheck import PrecheckError
+
+    allowed = {
+        "mapping_id",
+        "f_start_ghz",
+        "f_end_ghz",
+        "process_type",
+        "deembed",
+        "deembed_method",
+        "target_batch",
+    }
+    if set(body) - allowed:
+        raise HTTPException(
+            400,
+            detail={
+                "code": "INVALID_OPTIONS",
+                "message": "包含未知选项",
+                "retryable": False,
+                "context": {},
+            },
+        )
+    engine = db.bind
+    db.rollback()
+    try:
+        recheck_draft(engine, draft_id, body)
+        _deliver_precheck(engine, draft_id)
+    except DraftError as exc:
+        raise _draft_error(exc) from exc
+    except PrecheckError as exc:
+        raise HTTPException(
+            422, detail={"code": exc.code, "message": str(exc), "retryable": False, "context": {}}
+        ) from exc
+    return {"draft_id": draft_id, "status": "preparing"}
+
+
+@router.delete("/drafts/{draft_id}")
+def delete_upload_draft(db: DbSession, draft_id: str):
+    from app.services.upload_draft_service import DraftError, delete_draft
+
+    engine = db.bind
+    db.rollback()
+    try:
+        return delete_draft(engine, draft_id)
+    except DraftError as exc:
+        raise _draft_error(exc) from exc
 
 
 @router.post("", response_model=UploadAccepted, status_code=status.HTTP_202_ACCEPTED)
@@ -41,6 +245,7 @@ def create_upload(
     process_type: Annotated[str, Form()] = "AUTO",
     deembed: Annotated[bool, Form()] = False,
     deembed_method: Annotated[str, Form()] = "default",
+    target_batch: Annotated[str, Form()] = "",
 ) -> UploadAccepted:
     settings = get_settings()
 
@@ -78,6 +283,27 @@ def create_upload(
     batch_no = Path(file.filename).stem
     if not batch_no:
         raise HTTPException(status_code=400, detail="文件名为空，无法解析批次号")
+
+    # 表格关联目标必须是已同步的服务器副本：上传时即校验，避免落库后每次
+    # 同步都因目标不存在/非副本而 409 重放。
+    link_target = None
+    if is_table and target_batch.strip():
+        from sqlalchemy import select
+
+        from app.models import Batch, ReplicaBatch
+
+        link_target = db.scalar(select(Batch).where(Batch.batch_no == target_batch.strip()))
+        if link_target is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"关联目标批次 {target_batch.strip()} 不存在；留空则作为独立指标批次",
+            )
+        get_active_batch(db, target_batch.strip())
+        if db.get(ReplicaBatch, link_target.id) is None:
+            raise HTTPException(
+                status_code=400,
+                detail="关联目标必须是已同步的服务器批次（批次列表带 ☁️ 服务器标记），请先同步",
+            )
 
     month_dir = settings.uploads_dir / datetime.now(UTC).strftime("%Y-%m")
     try:
@@ -186,22 +412,39 @@ def create_upload(
                 deembed_method=deembed_method,
                 process_type=process_type,
             )
+        if is_table and task is not None and link_target is not None:
+            from sqlalchemy import select
+
+            from app.models import Batch, ReplicaBatch, SyncIdentity
+
+            imported = db.scalar(select(Batch).where(Batch.batch_no == task.batch_no))
+            replica = db.get(ReplicaBatch, link_target.id)
+            import json
+
+            db.add(
+                SyncIdentity(
+                    key=f"table-target:{imported.id}",
+                    value=json.dumps(
+                        {
+                            "batch_no": link_target.batch_no,
+                            "revision": replica.revision,
+                            "source_ref": batch_source_ref(db, link_target),
+                        }
+                    ),
+                )
+            )
+            db.commit()
         if task is None:
-            saved_path.unlink(missing_ok=True)
             raise HTTPException(status_code=500, detail="创建批次失败")
     except HTTPException:
         raise
     except IntegrityError:
-        saved_path.unlink(missing_ok=True)
         raise
     except MappingNotFoundError as exc:
-        saved_path.unlink(missing_ok=True)
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except TaskDispatchError as exc:
-        saved_path.unlink(missing_ok=True)
         raise HTTPException(status_code=503, detail=f"任务队列不可用: {exc}") from exc
     except Exception as exc:
-        saved_path.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail=f"创建批次失败: {exc!s}") from exc
 
     return UploadAccepted(

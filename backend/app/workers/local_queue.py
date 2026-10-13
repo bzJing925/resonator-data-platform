@@ -15,6 +15,8 @@ logger = logging.getLogger(__name__)
 @dataclass
 class LocalTask:
     task_id: int
+    run_id: str | None = None
+    lease_token: str | None = None
     zip_path: Path | None = None
     batch_no: str | None = None
     mapping_id: int | None = None
@@ -23,25 +25,46 @@ class LocalTask:
     deembed: bool = False
     deembed_method: str = "default"
     process_type: str = "AUTO"
-    kind: Literal["upload", "reextract", "redeembed", "recompute"] = "upload"
+    kind: Literal["upload", "reextract", "redeembed", "recompute", "table_import"] = "upload"
     metrics: list[str] | None = None
+
+
+@dataclass
+class LocalPrecheckTask:
+    draft_id: str
+    kind: Literal["precheck"] = "precheck"
+
+    @property
+    def task_id(self) -> str:
+        return self.draft_id
+
+
+@dataclass
+class LocalExportTask:
+    job_id: str
+    lease_token: str
+    kind: Literal["export"] = "export"
+
+    @property
+    def task_id(self) -> str:
+        return self.job_id
 
 
 class LocalTaskQueue:
     def __init__(self) -> None:
-        self._pending: deque[LocalTask] = deque()
-        self._cancelled_ids: set[int] = set()
+        self._pending: deque[LocalTask | LocalPrecheckTask | LocalExportTask] = deque()
+        self._cancelled_ids: set[int | str] = set()
         self._lock = threading.Lock()
         self._shutdown = threading.Event()
         self._worker: threading.Thread | None = None
         self._event = threading.Event()
 
-    def put(self, task: LocalTask) -> None:
+    def put(self, task: LocalTask | LocalPrecheckTask | LocalExportTask) -> None:
         with self._lock:
             self._pending.append(task)
         self._event.set()
 
-    def get(self, timeout: float = 0.5) -> LocalTask | None:
+    def get(self, timeout: float = 0.5) -> LocalTask | LocalPrecheckTask | LocalExportTask | None:
         if self._event.wait(timeout):
             with self._lock:
                 if self._pending:
@@ -52,11 +75,11 @@ class LocalTaskQueue:
             self._event.clear()
         return None
 
-    def list_pending(self) -> list[LocalTask]:
+    def list_pending(self) -> list[LocalTask | LocalPrecheckTask | LocalExportTask]:
         with self._lock:
             return list(self._pending)
 
-    def request_cancel(self, task_id: int) -> bool:
+    def request_cancel(self, task_id: int | str) -> bool:
         """请求取消任务。若任务仍在待处理队列中则移除，并标记为已请求取消。"""
         with self._lock:
             removed = False
@@ -68,11 +91,11 @@ class LocalTaskQueue:
             self._cancelled_ids.add(task_id)
             return removed
 
-    def is_cancelled(self, task_id: int) -> bool:
+    def is_cancelled(self, task_id: int | str) -> bool:
         with self._lock:
             return task_id in self._cancelled_ids
 
-    def clear_cancel(self, task_id: int) -> None:
+    def clear_cancel(self, task_id: int | str) -> None:
         with self._lock:
             self._cancelled_ids.discard(task_id)
 

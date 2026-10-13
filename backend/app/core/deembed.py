@@ -464,6 +464,18 @@ def _match_basic(
 # ─────────────────────────── 对外接口 ───────────────────────────
 
 
+def is_calibration_filename(name: str, method: DeembedMethod = DeembedMethod.DEFAULT) -> bool:
+    """Expose the same method-specific classification used by calibration matching."""
+    classifier = {
+        DeembedMethod.DEFAULT: _is_calibration_original,
+        DeembedMethod.ORIGINAL: _is_calibration_original,
+        DeembedMethod.GSG100: _is_calibration_gsg100,
+        DeembedMethod.VZ: _is_calibration_vz,
+        DeembedMethod.BASIC: _is_calibration_basic,
+    }[method]
+    return any(classifier(name))
+
+
 def match_calibration(
     dut_path: Path,
     cal_paths: list[Path],

@@ -224,3 +224,40 @@ def test_download_endpoint_proxies_when_desktop(client, db, monkeypatch, tmp_pat
     assert resp.status_code == 200, resp.text
     assert resp.content == b"# server side s1p"
     assert "remote.s1p" in resp.headers["content-disposition"]
+
+
+@pytest.mark.parametrize("disabled", [False, True])
+def test_pinn_fast_path_falls_back_when_torch_missing(client, db, monkeypatch, tmp_path, disabled):
+    """Torch 导入失败或安装自检失败时，fast 请求仍使用完整 skrf 曲线。"""
+    import shutil
+    from pathlib import Path
+
+    import skrf.data
+
+    from app.models import Batch, Device, Mapping
+
+    src = tmp_path / "dut.s1p"
+    shutil.copy(Path(skrf.data.__file__).parent / "ro,1.s1p", src)
+
+    mapping = Mapping(name="M", file_path="m.csv", entry_count=0)
+    db.add(mapping)
+    db.flush()
+    batch = Batch(batch_no="FB-1", mapping_id=mapping.id, file_path="f", device_count=1)
+    db.add(batch)
+    db.flush()
+    device = Device(batch_id=batch.id, original_filename="dut.s1p", s_param_port="S11",
+                    s_param_path=str(src), deembedded=False)
+    db.add(device)
+    db.commit()
+
+    def boom(_device):
+        if disabled:
+            raise AssertionError("PyTorch must not be imported after a failed native probe")
+        raise ImportError("DLL init failed")
+
+    monkeypatch.setattr("app.ml.inference.predict_s11_db", boom)
+    if disabled:
+        monkeypatch.setenv("ALN_DISABLE_TORCH", "1")
+    resp = client.get(f"/api/devices/{device.id}/sparam?param=s11_db&fast=true")
+    assert resp.status_code == 200
+    assert resp.json()["source"] == "skrf"

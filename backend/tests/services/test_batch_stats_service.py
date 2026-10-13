@@ -13,9 +13,11 @@ from app.services.batch_stats_service import get_batch_stats, refresh_mv_batch_s
 def test_refresh_mv_batch_stats_success() -> None:
     """刷新物化视图成功时提交。"""
     db = MagicMock(spec=Session)
+    db.scalar.return_value = 3
     refresh_mv_batch_stats(db)
-    db.execute.assert_called_once()
-    assert "REFRESH MATERIALIZED VIEW" in str(db.execute.call_args[0][0])
+    assert db.execute.call_count == 2
+    assert "REFRESH MATERIALIZED VIEW" in str(db.execute.call_args_list[0][0][0])
+    assert "UPDATE data_epoch" in str(db.execute.call_args_list[1][0][0])
     db.commit.assert_called_once()
 
 
@@ -24,10 +26,13 @@ def test_refresh_mv_batch_stats_failure_silent() -> None:
     db = MagicMock(spec=Session)
     db.execute.side_effect = RuntimeError("mv 不存在")
     refresh_mv_batch_stats(db)  # 不应抛异常
+    db.rollback.assert_called_once()
 
 
 def _make_mock_session(mv_result: dict[str, Any] | None = None) -> MagicMock:
     db = MagicMock(spec=Session)
+    from app.models import Batch
+    db.scalar.return_value = Batch(id=1, batch_no="active", deleted_at=None)
     if mv_result is not None:
         db.execute.return_value.mappings.return_value.all.return_value = [mv_result]
     else:
@@ -37,7 +42,7 @@ def _make_mock_session(mv_result: dict[str, Any] | None = None) -> MagicMock:
 
 def test_get_batch_stats_from_mv() -> None:
     """优先从物化视图读取统计。"""
-    db = _make_mock_session({"pass_count": 8, "fs_mean": 1.85, "fs_median": 1.86})
+    db = _make_mock_session({"pass_count": 8, "matched_total": 10, "fs_mean": 1.85, "fs_median": 1.86})
     stats = get_batch_stats(db, batch_id=1, total_dev=10)
     assert stats["fs_ghz_mean"] == 1.85
     assert stats["fs_ghz_median"] == 1.86
@@ -46,7 +51,7 @@ def test_get_batch_stats_from_mv() -> None:
 
 def test_get_batch_stats_zero_devices() -> None:
     """device 数为 0 时 pass_rate 为 None。"""
-    db = _make_mock_session({"pass_count": 0, "fs_mean": None, "fs_median": None})
+    db = _make_mock_session({"pass_count": 0, "matched_total": 0, "fs_mean": None, "fs_median": None})
     stats = get_batch_stats(db, batch_id=1, total_dev=0)
     assert stats["fs_ghz_mean"] is None
     assert stats["pass_rate"] is None

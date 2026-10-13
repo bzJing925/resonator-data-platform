@@ -2,15 +2,7 @@
 
 from __future__ import annotations
 
-import pytest
 from fastapi.testclient import TestClient
-
-from app.main import app
-
-
-@pytest.fixture(scope="module")
-def client() -> TestClient:
-    return TestClient(app)
 
 
 def test_export_csv_returns_header_only_when_no_data(client: TestClient) -> None:

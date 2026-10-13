@@ -28,26 +28,32 @@ const SWARM_Y_BINS = 40;
 const SWARM_BASE_STEP = 0.1;
 const SWARM_MAX_HALF_WIDTH = 0.45;
 
-function assignSwarmOffsets(points: Array<{ slotIndex: number; offset: number; y: number; rowId: string }>) {
-  if (points.length === 0) return;
-  let yMin = Infinity;
-  let yMax = -Infinity;
-  for (const point of points) {
-    if (point.y < yMin) yMin = point.y;
-    if (point.y > yMax) yMax = point.y;
-  }
-  const binSize = (yMax - yMin) / SWARM_Y_BINS || 1;
-  const bins = new Map<string, typeof points>();
-  for (const point of points) {
-    const key = `${point.slotIndex}:${Math.floor((point.y - yMin) / binSize)}`;
-    const bin = bins.get(key);
-    if (bin) bin.push(point);
-    else bins.set(key, [point]);
+type SwarmPoint = { slotIndex: number; offset: number; y: number; rowId: string };
+
+function assignSwarmOffsets(series: SwarmPoint[][]) {
+  const allBins: SwarmPoint[][] = [];
+  for (const points of series) {
+    if (points.length === 0) continue;
+    let yMin = Infinity;
+    let yMax = -Infinity;
+    for (const point of points) {
+      if (point.y < yMin) yMin = point.y;
+      if (point.y > yMax) yMax = point.y;
+    }
+    const binSize = (yMax - yMin) / SWARM_Y_BINS || 1;
+    const bins = new Map<string, typeof points>();
+    for (const point of points) {
+      const key = `${point.slotIndex}:${Math.floor((point.y - yMin) / binSize)}`;
+      const bin = bins.get(key);
+      if (bin) bin.push(point);
+      else bins.set(key, [point]);
+    }
+    allBins.push(...bins.values());
   }
   let widest = 1;
-  for (const bin of bins.values()) widest = Math.max(widest, bin.length);
+  for (const bin of allBins) widest = Math.max(widest, bin.length);
   const step = Math.min(SWARM_BASE_STEP, (SWARM_MAX_HALF_WIDTH * 2) / widest);
-  for (const bin of bins.values()) {
+  for (const bin of allBins) {
     bin.sort((left, right) => left.rowId.localeCompare(right.rowId, undefined, { numeric: true }));
     bin.forEach((point, index) => {
       point.offset = (index - (bin.length - 1) / 2) * step;
@@ -91,7 +97,8 @@ export function buildRawPointTraces({
 }) {
   const datasetIds = new Map(rows.map((row) => [rowIdOf(row), row.datasetId]));
   const datasetRef = (id: string) => typeof datasetIds.get(id) === 'string' ? { datasetId: datasetIds.get(id) } : {};
-  return yFields.map((field, metricIndex) => {
+  const swarmSeries: SwarmPoint[][] = [];
+  const traces = yFields.map((field, metricIndex) => {
     const grouped = new Map<number, Array<{ rowId: string; y: number }>>();
     for (const row of rows) {
       const rowId = rowIdOf(row);
@@ -127,7 +134,7 @@ export function buildRawPointTraces({
         });
       }
     }
-    if (chartType === 'swarm') assignSwarmOffsets(points);
+    if (chartType === 'swarm') swarmSeries.push(points);
 
     const traceKey = `analysis:${chartType}:${field.name}:raw`;
     const overlay = chartType === 'box' || chartType === 'violin' || chartType === 'line';
@@ -191,4 +198,16 @@ export function buildRawPointTraces({
       },
     };
   });
+  if (chartType === 'swarm') {
+    assignSwarmOffsets(swarmSeries);
+    traces.forEach((trace, index) => {
+      trace.x = swarmSeries[index].map((point) => point.slotIndex + point.offset);
+    });
+  }
+  // SVG cost grows with the whole figure, even when each metric is small.
+  const renderedPointCount = traces.reduce((sum, trace) => sum + trace.x.length, 0);
+  if (renderedPointCount >= GL_POINT_THRESHOLD) {
+    traces.forEach((trace) => { trace.type = 'scattergl'; });
+  }
+  return traces;
 }

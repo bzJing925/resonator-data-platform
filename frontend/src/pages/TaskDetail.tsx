@@ -1,7 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
+import TaskActions from '../tasks/TaskActions';
+import { taskLabel } from '../tasks/taskStatus';
+import IngestionReport from '../upload/IngestionReport';
 import I from '../components/Icons';
-import { getTask, cancelTask, reextractBatch, redeembedBatch, recomputeBatch } from '../api/endpoints';
+import { getTask, reextractBatch, redeembedBatch, recomputeBatch } from '../api/endpoints';
 import useSSE from '../hooks/useSSE';
 import type { Task } from '../types';
 import StageProgressBars from '../components/StageProgressBars';
@@ -34,6 +37,8 @@ export default function TaskDetail() {
 
   return (
     <>
+      {taskId && <IngestionReport taskId={taskId} status={sse.status} />}
+      {task && <TaskActions task={{ ...task, status: sse.status !== 'pending' ? sse.status : task.status }} onUpdate={setTask} />}
       <div className="toolbar">
         <span className="crumb">
           <Link to="/tasks" style={{ color: 'inherit', textDecoration: 'none' }}>
@@ -47,24 +52,7 @@ export default function TaskDetail() {
             <I.batches size={13} /> 批次详情
           </Link>
         )}
-        {(status === 'pending' || status === 'running') && taskId && (
-          <button
-            className="btn fail"
-            onClick={async () => {
-              if (!window.confirm(`取消任务将删除批次 ${task?.batch_no || ''} 及上传文件，是否继续？`)) return;
-              try {
-                setError(null);
-                await cancelTask(taskId);
-                const updated = await getTask(taskId);
-                setTask(updated);
-              } catch (e: any) {
-                setError(formatApiError(e, '取消失败'));
-              }
-            }}
-          >
-            取消任务
-          </button>
-        )}
+
       </div>
       <div style={{ flex: 1, overflow: 'auto', padding: 14 }}>
         {error && (
@@ -88,14 +76,7 @@ export default function TaskDetail() {
                     : 'idle'
                 }`}
               >
-                {{
-                  pending: '排队中',
-                  running: '运行中',
-                  success: '成功',
-                  failed: '失败',
-                  error: '错误',
-                  cancelled: '已取消',
-                }[status || 'pending']}
+                {taskLabel(status)}
               </span>
             </div>
           </div>

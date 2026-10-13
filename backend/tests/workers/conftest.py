@@ -10,12 +10,14 @@ from app.models.base import Base
 
 
 @pytest.fixture
-def db(monkeypatch) -> Session:
-    """基于内存 SQLite 的会话，并替换 cancel 模块使用的 SessionLocal。"""
-    engine = create_engine("sqlite://", future=True)
+def db(monkeypatch, tmp_path) -> Session:
+    """Temporary file SQLite supports the worker's fresh lease sessions."""
+    engine = create_engine(f"sqlite:///{tmp_path / 'worker.sqlite'}", future=True)
     Base.metadata.create_all(bind=engine)
     session_local = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
     monkeypatch.setattr("app.workers.cancel.SessionLocal", session_local)
+    monkeypatch.setattr("app.db.SessionLocal", session_local)
+    monkeypatch.setattr("app.db.engine", engine)
     session = session_local()
     try:
         yield session

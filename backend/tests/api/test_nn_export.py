@@ -55,6 +55,7 @@ def sample_batch_and_device(db: Session, tmp_path: Path, monkeypatch: pytest.Mon
 
     batch_dir = settings.files_dir / "TEST001"
     batch_dir.mkdir(parents=True, exist_ok=True)
+    batch.file_path = str(batch_dir)
     s1p_path = batch_dir / "dut.s1p"
     _make_s1p(s1p_path, n=101)
 

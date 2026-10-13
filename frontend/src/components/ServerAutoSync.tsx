@@ -1,40 +1,24 @@
 import { useEffect, useState } from 'react';
-import { getServerSyncStatus, pullFromServer } from '../api/endpoints';
+import { syncCoordinator } from '../sync/useSyncCoordinator';
 
-// 模块级标记：每次应用启动只自动同步一次（StrictMode 双挂载/路由切换不重复触发）
-let attempted = false;
-
-/** 启动时探测内网服务器：可达则自动下行同步一次并提示结果；不可达/未配置/失败均静默。
- * 上行回传涉及删除本地文件，仍由批次页面板手动触发。 */
+// 开启软件、重新联网、窗口回到前台及每分钟尝试同步；请求不重叠。
 export default function ServerAutoSync() {
   const [text, setText] = useState<string | null>(null);
   const [persistent, setPersistent] = useState(false);
 
   useEffect(() => {
-    if (attempted) return;
-    attempted = true;
-    let alive = true;
-    (async () => {
-      try {
-        const s = await getServerSyncStatus();
-        if (!s.enabled || !s.configured || !s.reachable) return;
-        const r = await pullFromServer();
-        if (!alive) return;
-        const fresh =
-          r.batches_added === 0 && r.mappings_added === 0 && r.devices_added === 0;
-        setText(
-          fresh
-            ? '服务器已连接，数据已是最新'
-            : `已从服务器同步：新增批次 ${r.batches_added}、器件 ${r.devices_added}`
-        );
-        setPersistent(!fresh);
-      } catch {
-        // 自动同步失败静默处理；批次页"内网服务器同步"面板可查看状态并手动重试
-      }
-    })();
-    return () => {
-      alive = false;
-    };
+    const unsubscribe = syncCoordinator.subscribe(() => {
+      const r = syncCoordinator.snapshot.result;
+      if (!r) return;
+      const changed = r.batches_added + (r.mappings_added || 0) + (r.batches_updated || 0) +
+        (r.batches_deleted || 0) + (r.tables_pushed || 0) + (r.mappings_pushed || 0) + (r.raw_pushed || 0);
+      setText(r.errors?.length ? `部分同步未完成：${r.errors.join('；')}` : changed
+        ? `同步完成：新增 ${r.batches_added}、更新 ${r.batches_updated || 0}、删除 ${r.batches_deleted || 0}、表格回传 ${r.tables_pushed || 0}、原始批次回传 ${r.raw_pushed || 0}、对照表上传 ${r.mappings_pushed || 0}、对照表收到 ${r.mappings_added || 0}`
+        : '服务器已连接，数据已是最新');
+      setPersistent(!!changed || !!r.errors?.length);
+    });
+    const stop = syncCoordinator.start();
+    return () => { unsubscribe(); stop(); };
   }, []);
 
   // "已是最新"提示 8 秒后自动消失；有新数据的提示保留到手动关闭
@@ -61,6 +45,7 @@ export default function ServerAutoSync() {
       }}
     >
       <span style={{ flex: 1 }}>{text}</span>
+      {persistent && <button onClick={() => window.location.reload()}>刷新显示</button>}
       <button
         aria-label="关闭"
         style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--fg-3)' }}

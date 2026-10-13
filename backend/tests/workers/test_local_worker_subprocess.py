@@ -147,7 +147,10 @@ def test_worker_loop_terminates_subprocess_on_cancel(monkeypatch):
     marked: list[int] = []
 
     monkeypatch.setattr(local_worker, "_run_recompute", slow_runner)
-    monkeypatch.setattr(local_worker, "_mark_task_cancelled", lambda tid: marked.append(tid))
+    monkeypatch.setattr(
+        local_worker, "_mark_task_cancelled", lambda tid, process_pid=None: marked.append(tid)
+    )
+    monkeypatch.setattr("app.config.get_settings", lambda: SimpleNamespace(CANCEL_GRACE_SECONDS=0))
     monkeypatch.setattr(local_worker, "get_local_queue", lambda: queue)
     monkeypatch.setattr(local_worker, "multiprocessing", SimpleNamespace(Process=_FakeProcess))
     _FakeProcess.instances.clear()

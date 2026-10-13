@@ -30,6 +30,7 @@ class BatchRenameResponse(BaseModel):
 
 
 class ReprocessResponse(BaseModel):
+    run_id: str | None = None
     task_id: str
     batch_no: str
     stream_url: str

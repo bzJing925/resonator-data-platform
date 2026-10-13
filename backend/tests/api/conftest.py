@@ -26,7 +26,7 @@ def settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     )
     monkeypatch.setattr("app.config.get_settings", lambda: test_settings)
     monkeypatch.setattr("app.api.tasks.get_settings", lambda: test_settings)
-    monkeypatch.setattr("app.services.cleanup_service.get_settings", lambda: test_settings)
+    monkeypatch.setattr("app.services.artifact_lifecycle.get_settings", lambda: test_settings)
     monkeypatch.setattr("app.api.sync.get_settings", lambda: test_settings)
     monkeypatch.setattr("app.api.desktop_sync.get_settings", lambda: test_settings)
     return test_settings
@@ -64,10 +64,17 @@ def db(engine) -> Session:
 
 
 @pytest.fixture
-def client(engine) -> TestClient:
+def client(engine, settings, monkeypatch) -> TestClient:
     """FastAPI TestClient，每个请求从同一引擎新建会话。"""
     from app.db import get_db
     from app.main import app
+
+    # The lifespan opens fresh sessions independently of get_db. Keep startup
+    # and HTTP requests on the same isolated database and temporary settings.
+    monkeypatch.setattr("app.db.engine", engine)
+    monkeypatch.setattr("app.db.SessionLocal", sessionmaker(bind=engine))
+    monkeypatch.setattr("app.main.get_settings", lambda: settings)
+    previous = dict(app.dependency_overrides)
 
     def _override_get_db():
         session_local = sessionmaker(
@@ -85,3 +92,4 @@ def client(engine) -> TestClient:
             yield test_client
     finally:
         app.dependency_overrides.clear()
+        app.dependency_overrides.update(previous)

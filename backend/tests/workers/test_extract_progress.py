@@ -40,3 +40,42 @@ def test_zipfile_cancellation_aborts_extraction(tmp_path, monkeypatch):
         _extract_zip(zip_path, target_dir, upload_task_id=1)
     # 只应完成部分解压（zipfile 在 extract 成员前检查取消）
     assert len(list(target_dir.rglob("*.s1p"))) < 5
+
+
+@pytest.mark.parametrize("extractor", ["7z", "unzip"])
+@pytest.mark.parametrize("source", ["checkpoint", "progress"])
+def test_callback_exception_stops_real_external_writer(tmp_path, monkeypatch, extractor, source):
+    import subprocess
+    import sys
+
+    from app.workers import extract_batch as worker
+
+    archive = tmp_path / "sample.zip"
+    with zipfile.ZipFile(archive, "w") as output:
+        output.writestr("file.txt", "input")
+    processes = []
+    real_popen = subprocess.Popen
+
+    def spawn(*args, **kwargs):
+        # Real child remains alive until terminated; no 7-Zip dependency in this test.
+        proc = real_popen([sys.executable, "-c", "import time; time.sleep(30)"], **kwargs)
+        processes.append(proc)
+        return proc
+
+    def stop(*args):
+        raise InterruptedError("cancelled precheck")
+
+    monkeypatch.setattr(worker.subprocess, "Popen", spawn)
+    callbacks = {"cancel_check" if source == "checkpoint" else "progress_callback": stop}
+    try:
+        with pytest.raises(InterruptedError):
+            if extractor == "7z":
+                worker._extract_with_7z(archive, tmp_path / "out", "7z", **callbacks)
+            else:
+                worker._extract_with_unzip(archive, tmp_path / "out", **callbacks)
+        assert len(processes) == 1 and processes[0].poll() is not None
+    finally:
+        for proc in processes:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()

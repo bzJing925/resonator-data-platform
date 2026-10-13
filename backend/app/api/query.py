@@ -12,15 +12,49 @@ import logging
 from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Query
-from sqlalchemy import ColumnElement, and_, distinct, func, null, or_, select
+from sqlalchemy import ColumnElement, distinct, func, null, select
 
-from app.api.deps import ALLOWED_QUERY_FIELDS, DEVICE_COLUMNS, DbSession
+from app.api.deps import ALLOWED_QUERY_FIELDS, DbSession
 from app.models import Batch, Device
 from app.schemas.query import (
     AggregateRequest,
     AggregateResponse,
     QueryRequest,
     QueryResponse,
+)
+from app.services.batch_scope import active_batch_clause
+from app.services.data_revision import cache_version
+from app.services.field_metadata import NUMERIC_UNITS
+from app.services.query_manifest import (
+    make_manifest,
+    matching_sources,
+    scope_version,
+    snapshot_query,
+)
+from app.services.query_spec import (
+    FILTER_MAX_DEPTH as FILTER_MAX_DEPTH,
+)
+from app.services.query_spec import (
+    _build_filter_clause as _build_filter_clause,
+)
+from app.services.query_spec import (
+    _build_filters,
+    _resolve_column,
+    _validate_field_set,
+    query_spec,
+    stable_order,
+)
+from app.services.query_spec import (
+    _build_node as _build_node,
+)
+from app.services.query_spec import (
+    _escape_like as _escape_like,
+)
+from app.services.query_spec import (
+    _is_tree_filter as _is_tree_filter,
+)
+from app.services.query_spec import (
+    _leaf_clause as _leaf_clause,
 )
 from app.services.redis_service import get_redis_client
 
@@ -30,17 +64,19 @@ router = APIRouter(prefix="/query", tags=["query"])
 LIMIT_HARD_CAP = 200_000
 # filter 树深度上限。一个真实 UI 极少超过 ~5 层；32 给手写 JSON 留充足余量，
 # 又能挡住恶意嵌套（Python 默认递归上限约 1000）触发 RecursionError → 500。
-FILTER_MAX_DEPTH = 32
 
 # 查询缓存 TTL（秒）
 _QUERY_CACHE_TTL = 300
 
 
-def _query_cache_key(prefix: str, req: QueryRequest | AggregateRequest) -> str:
+def _query_cache_key(
+    prefix: str, req: QueryRequest | AggregateRequest, version: tuple[str, int] | None = None,
+) -> str:
     """生成查询缓存 key。基于请求体 JSON 的 SHA256 前 16 位。"""
     payload = req.model_dump_json()
     h = hashlib.sha256(payload.encode()).hexdigest()[:16]
-    return f"aln:query:{prefix}:{h}"
+    suffix = f":{version[0]}:{version[1]}" if version is not None else ""
+    return f"aln:query:{prefix}:{h}{suffix}"
 
 
 def _cache_get(key: str) -> dict[str, Any] | None:
@@ -66,133 +102,6 @@ def _cache_set(key: str, value: dict[str, Any], ttl: int = _QUERY_CACHE_TTL) -> 
         log.warning("查询缓存写入失败: %s", exc)
 
 
-def _resolve_column(name: str) -> ColumnElement[Any]:
-    if name == "batch_no":
-        return Batch.batch_no
-    if name in DEVICE_COLUMNS:
-        return getattr(Device, name)
-    raise HTTPException(status_code=400, detail=f"未知字段: {name}")
-
-
-def _escape_like(val: str) -> str:
-    """转义 SQL LIKE 通配符 % 和 _ 与转义符 \\，防止用户输入被解释为通配模式。"""
-    return val.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-
-
-def _leaf_clause(field: str, op: str, val: Any) -> ColumnElement[bool]:
-    col = _resolve_column(field)
-    if op == "in":
-        if not isinstance(val, list) or not val:
-            raise HTTPException(status_code=400, detail=f"{field}.in 必须是非空列表")
-        return col.in_(val)
-    if op == "not_in":
-        if not isinstance(val, list) or not val:
-            raise HTTPException(status_code=400, detail=f"{field}.not_in 必须是非空列表")
-        return ~col.in_(val)
-    if op == "eq":
-        return col == val
-    if op == "neq":
-        return col != val
-    if op == "gte":
-        return col >= val
-    if op == "gt":
-        return col > val
-    if op == "lte":
-        return col <= val
-    if op == "lt":
-        return col < val
-    if op == "between":
-        if not isinstance(val, list) or len(val) != 2:
-            raise HTTPException(
-                status_code=400, detail=f"{field}.between 必须为长度 2 的列表 [lo, hi]"
-            )
-        lo, hi = val
-        return and_(col >= lo, col <= hi)
-    if op == "is_null":
-        return col.is_(None)
-    if op == "not_null":
-        return col.isnot(None)
-    if op == "like":
-        if not isinstance(val, str):
-            raise HTTPException(status_code=400, detail=f"{field}.like 必须为字符串")
-        return col.like(_escape_like(val), escape="\\")
-    if op == "contains":
-        if not isinstance(val, str):
-            raise HTTPException(status_code=400, detail=f"{field}.contains 必须为字符串")
-        return col.like(f"%{_escape_like(val)}%", escape="\\")
-    raise HTTPException(status_code=400, detail=f"不支持的操作符: {field}.{op}")
-
-
-def _build_filter_clause(name: str, spec: Any) -> ColumnElement[bool]:
-    """旧版按字段聚合的格式：
-    - list  →  IN
-    - dict  →  多操作符 AND
-    - 标量  →  等值
-    """
-    if isinstance(spec, list):
-        if not spec:
-            raise HTTPException(status_code=400, detail=f"过滤器 {name} 列表不能为空")
-        return _leaf_clause(name, "in", spec)
-    if isinstance(spec, dict):
-        clauses = [_leaf_clause(name, op, val) for op, val in spec.items()]
-        return and_(*clauses) if len(clauses) > 1 else clauses[0]
-    return _resolve_column(name) == spec
-
-
-def _build_node(node: dict[str, Any], depth: int = 0) -> ColumnElement[bool]:
-    """新版树形格式：
-       - 组节点  {"op": "and"|"or", "children": [...]}
-       - 叶节点  {"field": str, "op": str, "value": Any}
-
-    depth 上限防止深度嵌套触发 Python RecursionError → 500 DoS。
-    """
-    if depth > FILTER_MAX_DEPTH:
-        raise HTTPException(
-            status_code=400,
-            detail=f"filter 树嵌套过深（上限 {FILTER_MAX_DEPTH} 层）",
-        )
-    if not isinstance(node, dict):
-        raise HTTPException(status_code=400, detail="filter 节点必须是对象")
-    if "field" in node:
-        field = node["field"]
-        op = node.get("op", "eq")
-        val = node.get("value")
-        return _leaf_clause(field, op, val)
-    if "children" in node:
-        op = (node.get("op") or "and").lower()
-        children = node["children"]
-        if not isinstance(children, list):
-            raise HTTPException(status_code=400, detail="children 必须是列表")
-        if not children:
-            # 空组视作恒真，方便 UI 在用户尚未配置任何条件时也能发请求。
-            return null().is_(None)
-        clauses = [_build_node(c, depth + 1) for c in children]
-        if op == "or":
-            return or_(*clauses)
-        if op == "and":
-            return and_(*clauses)
-        raise HTTPException(status_code=400, detail=f"不支持的组合操作符: {op}")
-    raise HTTPException(status_code=400, detail="filter 节点必须含 field 或 children")
-
-
-def _is_tree_filter(filters: Any) -> bool:
-    return (
-        isinstance(filters, dict)
-        and "children" in filters
-        and isinstance(filters.get("children"), list)
-    )
-
-
-def _build_filters(filters: Any) -> list[ColumnElement[bool]]:
-    if not filters:
-        return []
-    if _is_tree_filter(filters):
-        return [_build_node(filters)]
-    if isinstance(filters, dict):
-        return [_build_filter_clause(k, v) for k, v in filters.items()]
-    raise HTTPException(status_code=400, detail="filters 必须是字典")
-
-
 def _aggregate_expr(field: str, op: str, *, dialect: str | None = None) -> ColumnElement[Any]:
     col = _resolve_column(field)
     if op == "count":
@@ -216,25 +125,21 @@ def _aggregate_expr(field: str, op: str, *, dialect: str | None = None) -> Colum
     raise HTTPException(status_code=400, detail=f"不支持的聚合操作: {op}")
 
 
-def _validate_field_set(fields: list[str]) -> None:
-    for f in fields:
-        if f not in ALLOWED_QUERY_FIELDS:
-            raise HTTPException(status_code=400, detail=f"未知字段: {f}")
-
-
 # 超过该阈值时进行系统采样，减轻前端渲染压力。
 _SAMPLE_THRESHOLD = 20000
 
 
 @router.post("/devices", response_model=QueryResponse)
+@snapshot_query
 def query_devices(req: QueryRequest, db: DbSession) -> QueryResponse:
     if req.limit < 1:
         raise HTTPException(status_code=400, detail="limit 必须 >= 1")
     limit = min(req.limit, LIMIT_HARD_CAP)
 
     # ── 尝试读缓存 ──────────────────────────────────────────────
-    cache_key = _query_cache_key("devices", req)
-    cached = _cache_get(cache_key)
+    version = cache_version(db)
+    cache_key = _query_cache_key("devices", req, version) + ":" + scope_version(db)[1]
+    cached = _cache_get(cache_key) if version is not None else None
     if cached is not None:
         log.debug("query_devices 命中缓存 key=%s", cache_key)
         return QueryResponse(**cached)
@@ -256,20 +161,18 @@ def query_devices(req: QueryRequest, db: DbSession) -> QueryResponse:
         if order_key not in ALLOWED_QUERY_FIELDS:
             raise HTTPException(status_code=400, detail=f"未知排序字段: {order_key}")
 
-    where = _build_filters(req.filters)
+    where = [active_batch_clause(), Device.matched.is_(True), *_build_filters(req.filters)]
 
     select_cols: list[ColumnElement[Any]] = [_resolve_column(f).label(f) for f in fields]
+    select_cols.extend([Device.batch_id.label('_source_batch_id'),
+                        Device.source_device_key.label('_source_device_key')])
     # 必须显式 select_from(Device)，否则用户只选 Batch 字段（如 batch_no）时
     # SQLAlchemy 无法从 select_cols 推断左侧表 → InvalidRequestError 500。
     stmt = select(*select_cols).select_from(Device).join(Batch, Device.batch_id == Batch.id)
     if where:
         stmt = stmt.where(*where)
 
-    if req.order_by is not None:
-        order_key = req.order_by.lstrip("-+")
-        order_col = _resolve_column(order_key)
-        stmt = stmt.order_by(order_col.desc() if req.order_by.startswith("-") else order_col.asc())
-
+    stmt = stmt.order_by(*stable_order(req.order_by))
     # ── COUNT 优化 ──────────────────────────────────────────────
     # skip_count=True 时避免精确 COUNT(*)，用 LIMIT+1 判断 truncated。
     # 适合大数据量探索分析，可减少 ~50% DB 往返。
@@ -292,7 +195,15 @@ def query_devices(req: QueryRequest, db: DbSession) -> QueryResponse:
         rows = db.execute(stmt).mappings().all()
         truncated = int(total) > limit
 
-    rows_out = [dict(r) for r in rows]
+    sources, verified = matching_sources(db, where)
+    rows_out = []
+    for row in rows:
+        item = dict(row)
+        ref = sources.get(item.pop('_source_batch_id'))
+        device_key = item.pop('_source_device_key')
+        item['_source_ref'] = {**ref, 'source_device_key': device_key} if ref else None
+        verified = verified and device_key is not None
+        rows_out.append(item)
 
     # ── 应用层降采样 ────────────────────────────────────────────
     # 当返回行数超过阈值时，均匀采样到阈值以下，减轻前端渲染负担。
@@ -317,23 +228,29 @@ def query_devices(req: QueryRequest, db: DbSession) -> QueryResponse:
         rows=rows_out,
         sampled=sampled,
         sample_rate=sample_rate,
+        manifest=make_manifest(query_spec(req.filters, fields, req.order_by), sources, verified,
+            None if req.skip_count and truncated else int(total), len(rows_out),
+            truncated, sample_rate), epoch=version[1] if version else None,
+        active_scope='active',
     )
 
     # ── 写入缓存（仅缓存非截断结果，避免缓存不完整数据） ──────────
-    if not resp.truncated and resp.returned > 0:
+    if version is not None and not resp.truncated and resp.returned > 0:
         _cache_set(cache_key, resp.model_dump())
 
     return resp
 
 
 @router.post("/aggregate", response_model=AggregateResponse)
+@snapshot_query
 def aggregate(req: AggregateRequest, db: DbSession) -> AggregateResponse:
     if not req.metrics:
         raise HTTPException(status_code=400, detail="metrics 不能为空")
 
     # ── 尝试读缓存 ──────────────────────────────────────────────
-    cache_key = _query_cache_key("aggregate", req)
-    cached = _cache_get(cache_key)
+    version = cache_version(db)
+    cache_key = _query_cache_key("aggregate", req, version) + ":" + scope_version(db)[1]
+    cached = _cache_get(cache_key) if version is not None else None
     if cached is not None:
         log.debug("aggregate 命中缓存 key=%s", cache_key)
         return AggregateResponse(**cached)
@@ -343,7 +260,7 @@ def aggregate(req: AggregateRequest, db: DbSession) -> AggregateResponse:
         if m.field not in ALLOWED_QUERY_FIELDS:
             raise HTTPException(status_code=400, detail=f"未知字段: {m.field}")
 
-    where = _build_filters(req.filters)
+    where = [active_batch_clause(), Device.matched.is_(True), *_build_filters(req.filters)]
 
     dialect = db.bind.dialect.name if db.bind is not None else None
 
@@ -365,6 +282,7 @@ def aggregate(req: AggregateRequest, db: DbSession) -> AggregateResponse:
         stmt = stmt.where(*where)
     if group_cols:
         stmt = stmt.group_by(*[_resolve_column(g) for g in req.group_by])
+        stmt = stmt.order_by(func.min(Device.id))
 
     rows = db.execute(stmt).mappings().all()
     groups: list[dict[str, Any]] = []
@@ -378,10 +296,17 @@ def aggregate(req: AggregateRequest, db: DbSession) -> AggregateResponse:
             item[field][op] = float(val) if val is not None and op != "count" else val
         groups.append(item)
 
-    resp = AggregateResponse(groups=groups)
+    sources, verified = matching_sources(db, where)
+    total = db.scalar(select(func.count()).select_from(Device)
+        .join(Batch, Device.batch_id == Batch.id).where(*where)) or 0
+    resp = AggregateResponse(groups=groups, active_scope='active',
+        epoch=version[1] if version else None,
+        manifest=make_manifest(query_spec(req.filters,
+            list(dict.fromkeys([*req.group_by, *[m.field for m in req.metrics]]))),
+            sources, verified, int(total), len(groups)))
 
     # ── 写入缓存 ────────────────────────────────────────────────
-    if groups:
+    if version is not None and groups:
         _cache_set(cache_key, resp.model_dump())
 
     return resp
@@ -393,6 +318,7 @@ _DISTINCT_CACHE_TTL = 600  # 10 分钟（distinct 结果变化极慢）
 
 
 @router.get("/distinct")
+@snapshot_query
 def distinct_values(
     db: DbSession,
     field: Annotated[str, Query(...)],
@@ -401,38 +327,58 @@ def distinct_values(
     # 大 text 列限制更小，避免全表扫描 + 排序拖垮 DB
     effective_limit = 100 if field in _DISTINCT_SLOW_FIELDS else limit
 
-    cache_key = f"aln:distinct:{field}:{effective_limit}"
-    cached = _cache_get(cache_key)
+    version = cache_version(db)
+    cache_key = f"aln:distinct:{field}:{effective_limit}:{version}:{scope_version(db)[1]}"
+    cached = _cache_get(cache_key) if version is not None else None
     if cached is not None:
         log.debug("distinct 命中缓存 field=%s", field)
         return cached
 
+    has_null = False
     if field == "batch_no":
-        stmt = select(distinct(Batch.batch_no)).order_by(Batch.batch_no).limit(effective_limit + 1)
+        stmt = (select(distinct(Batch.batch_no)).where(active_batch_clause())
+                .order_by(Batch.batch_no).limit(effective_limit + 1))
     else:
         col = _resolve_column(field)
-        stmt = select(distinct(col)).order_by(col).limit(effective_limit + 1)
+        matched_only = (active_batch_clause(), Device.matched.is_(True))
+        has_null = db.scalar(select(Device.id).join(Batch, Device.batch_id == Batch.id)
+            .where(*matched_only, col.is_(None)).limit(1)) is not None
+        stmt = (select(distinct(col)).select_from(Device)
+                .join(Batch, Device.batch_id == Batch.id)
+                .where(*matched_only, col.is_not(None))
+                .order_by(col).limit(effective_limit + 1))
     rows = db.execute(stmt).all()
     raw = [r[0] for r in rows]
-    has_null = any(v is None for v in raw)
-    values = [v for v in raw if v is not None]
-    truncated = len(values) > effective_limit or (has_null and len(raw) > effective_limit)
+    values = raw
+    truncated = len(values) > effective_limit
     if truncated:
         values = values[:effective_limit]
 
+    sources, verified = matching_sources(db, [active_batch_clause()])
+    if field == 'batch_no':
+        from app.services.source_identity import batch_source_ref
+        sources = {batch.id: batch_source_ref(db, batch) for batch in
+                   db.scalars(select(Batch).where(active_batch_clause()).order_by(Batch.id))}
+        verified = verified and all(ref and ref['source_revision'] is not None
+                                    for ref in sources.values())
     result = {
+        "manifest": make_manifest(query_spec({}, [field], field), sources, verified,
+            None if truncated else len(values), len(values), truncated).model_dump(mode='json'),
+        "epoch": version[1] if version else None,
+        "active_scope": "active",
         "field": field,
         "values": values,
         "has_null": has_null,
         "truncated": truncated,
     }
-    _cache_set(cache_key, result, ttl=_DISTINCT_CACHE_TTL)
+    if version is not None:
+        _cache_set(cache_key, result, ttl=_DISTINCT_CACHE_TTL)
     return result
 
 
 @router.get("/fields")
 def fields_metadata() -> dict[str, Any]:
-    return {
+    metadata = {
         "categorical": [
             {
                 "name": "batch_no",
@@ -521,3 +467,8 @@ def fields_metadata() -> dict[str, Any]:
             },
         ],
     }
+
+    for field in metadata['numeric'] + metadata['process']:
+        if field['name'] in NUMERIC_UNITS:
+            field['unit'] = NUMERIC_UNITS[field['name']]
+    return metadata

@@ -10,3 +10,9 @@ class UploadAccepted(BaseModel):
     batch_no: str
     status: str
     stream_url: str
+
+
+class DraftCommitRequest(BaseModel):
+    request_key: str
+    check_digest: str
+    acknowledged_warning_codes: list[str] = []

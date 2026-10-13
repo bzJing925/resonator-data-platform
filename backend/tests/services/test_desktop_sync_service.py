@@ -10,7 +10,7 @@ import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
-from app.models import Base, Batch, Mapping
+from app.models import Base, Batch, Mapping, UploadTask
 from app.services import desktop_sync_service as svc
 from app.services.server_client import ServerError
 
@@ -43,6 +43,14 @@ def _files(settings_dir: Path, batch_no: str, gz: bool = True) -> Path:
     return d
 
 
+def test_downloaded_mapping_reuses_original_server_name():
+    mapping = Mapping(name='server-12345678-42-Lab-Map',
+                      file_path='server://12345678-aaaa', entry_count=0)
+    assert svc.mapping_server_name(mapping) == 'Lab-Map'
+    mapping.file_path = 'local.xlsx'
+    assert svc.mapping_server_name(mapping) == mapping.name
+
+
 def test_list_unsynced_batches(tmp_path, monkeypatch):
     monkeypatch.setattr(svc, "_files_root", lambda: tmp_path / "files")
     db = _session()
@@ -55,6 +63,13 @@ def test_list_unsynced_batches(tmp_path, monkeypatch):
     _batch(db, "DONE-1", synced=datetime.now(UTC))  # 已同步不推送
     _batch(db, "EMPTY-1", count=0)                # 未完成入库不推送
     _batch(db, "NOFILES-1")                        # 文件目录不存在不推送
+    running = _batch(db, "RUNNING-1")
+    task = UploadTask(batch_no="RUNNING-1", status="running", kind="upload")
+    db.add(task)
+    db.flush()
+    running.task_id = task.id
+    db.commit()
+    _files(tmp_path, "RUNNING-1")                  # 部分提取完成时不得提前推送
     # uploaded_at 是秒级 server_default，同秒插入顺序不定，按集合断言
     assert sorted(b.batch_no for b in svc.list_unsynced_batches(db)) == ["L-1", "W-1"]
 
@@ -178,7 +193,7 @@ def test_push_success_deletes_local_files(tmp_path, monkeypatch):
 
     result = svc.push_batch_to_server(db, client, "OK-1")
     assert result["status"] == "synced"
-    assert not files_dir.exists()
+    assert files_dir.exists()  # Count equality never authorizes deleting raw files.
     assert db.scalar(select(Batch).where(Batch.batch_no == "OK-1")).synced_at is not None
 
 
@@ -193,10 +208,10 @@ def test_push_accepted_waits_task_then_syncs(tmp_path, monkeypatch):
     client = _StubClient({"status": "accepted", "task_id": 7}, batch_count=4)
 
     result = svc.push_batch_to_server(db, client, "A-1")
-    assert result == {"status": "synced", "device_count": 4}
+    assert result == {"status": "synced", "device_count": 4, "sync_state": "unknown"}
     assert client.ensure_calls == 1
     assert client.polled_task_ids == [7]
-    assert not files_dir.exists()
+    assert files_dir.exists()  # Count equality never authorizes deleting raw files.
     assert db.scalar(select(Batch).where(Batch.batch_no == "A-1")).synced_at is not None
 
 
@@ -266,7 +281,7 @@ def test_push_task_failure_keeps_files(tmp_path, monkeypatch):
     assert db.scalar(select(Batch).where(Batch.batch_no == "F-1")).synced_at is None
 
 
-def test_push_already_synced_skips_ensure_and_push(tmp_path, monkeypatch):
+def test_synced_at_without_receipt_does_not_skip_push(tmp_path, monkeypatch):
     monkeypatch.setattr(svc, "_files_root", lambda: tmp_path / "files")
     monkeypatch.setattr(svc, "_zip_staging_dir", lambda: tmp_path / "staging")
     db = _session()
@@ -276,8 +291,9 @@ def test_push_already_synced_skips_ensure_and_push(tmp_path, monkeypatch):
 
     result = svc.push_batch_to_server(db, client, "S-1")
     assert result["status"] == "synced"
-    assert client.ensure_calls == 0
-    assert client.pushed_metas == []
+    assert client.ensure_calls == 1
+    assert len(client.pushed_metas) == 1
+    assert result["sync_state"] == "unknown"
 
 
 def test_wait_task_timeout_mentions_task_id(monkeypatch):

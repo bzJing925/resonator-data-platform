@@ -8,10 +8,10 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select, text, update
 from sqlalchemy.orm import Session
 
-from app.models import Device
+from app.models import DataEpoch, Device
 
 logger = logging.getLogger(__name__)
 
@@ -33,12 +33,12 @@ def _sqlite_median(db: Session, batch_id: int) -> float | None:
         WITH counts AS (
             SELECT COUNT(*) AS n
             FROM devices
-            WHERE batch_id = :batch_id AND fs_ghz IS NOT NULL
+            WHERE batch_id = :batch_id AND fs_ghz IS NOT NULL AND matched = 1
         ),
         sorted AS (
             SELECT fs_ghz, ROW_NUMBER() OVER (ORDER BY fs_ghz) AS rn
             FROM devices
-            WHERE batch_id = :batch_id AND fs_ghz IS NOT NULL
+            WHERE batch_id = :batch_id AND fs_ghz IS NOT NULL AND matched = 1
         )
         SELECT AVG(sorted.fs_ghz)
         FROM sorted, counts
@@ -50,9 +50,16 @@ def _sqlite_median(db: Session, batch_id: int) -> float | None:
 def refresh_mv_batch_stats(db: Session) -> None:
     """刷新 mv_batch_stats 物化视图；失败仅记录日志。"""
     try:
+        epoch = db.scalar(select(DataEpoch.epoch).where(DataEpoch.id == 1))
         db.execute(text("REFRESH MATERIALIZED VIEW CONCURRENTLY mv_batch_stats"))
+        db.execute(
+            update(DataEpoch)
+            .where(DataEpoch.id == 1, DataEpoch.epoch == epoch)
+            .values(stats_epoch=epoch)
+        )
         db.commit()
     except Exception:
+        db.rollback()
         logger.exception("刷新物化视图 mv_batch_stats 失败（非致命）")
 
 
@@ -61,28 +68,38 @@ def get_batch_stats(
     batch_id: int,
     total_dev: int,
 ) -> dict[str, Any]:
-    """获取批次统计：fs 均值 / 中位数 / 合格率。
+    """获取批次统计：fs 均值 / 中位数 / 合格率（仅统计命中对照表的器件）。
 
     PostgreSQL 优先从 mv_batch_stats 读取；失败时回退到 devices 表实时聚合。
     SQLite 桌面端直接走 devices 表实时聚合（无物化视图与 percentile_cont）。
+    total_dev 仅作分母兜底；正常情况下分母为命中对照表的器件数。
     """
-    fs_mean: float | None = None
-    fs_median: float | None = None
-    pass_rate: float | None = None
-    pass_count = 0
+    from app.services.batch_scope import get_active_batch
 
-    if _is_sqlite(db):
-        fs_mean = db.scalar(select(func.avg(Device.fs_ghz)).where(Device.batch_id == batch_id))
-        fs_median = _sqlite_median(db, batch_id)
-        pass_count = (
+    get_active_batch(db, batch_id=batch_id)
+
+    def _matched_total() -> int:
+        return (
             db.scalar(
                 select(func.count())
                 .select_from(Device)
-                .where(Device.batch_id == batch_id, Device.pf == "Y")
+                .where(Device.batch_id == batch_id, Device.matched.is_(True))
             )
             or 0
         )
-        pass_rate = (pass_count / total_dev) if total_dev > 0 else None
+
+    if _is_sqlite(db):
+        matched_filter = (Device.batch_id == batch_id, Device.matched.is_(True))
+        fs_mean = db.scalar(select(func.avg(Device.fs_ghz)).where(*matched_filter))
+        fs_median = _sqlite_median(db, batch_id)
+        pass_count = (
+            db.scalar(
+                select(func.count()).select_from(Device).where(*matched_filter, Device.pf == "Y")
+            )
+            or 0
+        )
+        total = _matched_total() or total_dev
+        pass_rate = (pass_count / total) if total > 0 else None
         return {
             "fs_ghz_mean": float(fs_mean) if fs_mean is not None else None,
             "fs_ghz_median": float(fs_median) if fs_median is not None else None,
@@ -90,27 +107,33 @@ def get_batch_stats(
         }
 
     try:
-        mv_rows = (
-            db.execute(
-                text("""
+        with db.begin_nested():
+            mv_rows = (
+                db.execute(
+                    text("""
                 SELECT
                     COALESCE(SUM(pass_count), 0) AS pass_count,
+                    COALESCE(SUM(total_count), 0) AS matched_total,
                     AVG(avg_fs_ghz) AS fs_mean,
                     AVG(median_fs_ghz) AS fs_median
                 FROM mv_batch_stats
-                WHERE batch_id = :batch_id
+                WHERE batch_id = :batch_id AND EXISTS (
+                    SELECT 1 FROM data_epoch WHERE id=1 AND epoch=stats_epoch
+                )
+                HAVING COUNT(*) > 0
             """),
-                {"batch_id": batch_id},
+                    {"batch_id": batch_id},
+                )
+                .mappings()
+                .all()
             )
-            .mappings()
-            .all()
-        )
         if mv_rows:
             mv = mv_rows[0]
             pass_count = int(mv["pass_count"] or 0)
             fs_mean = mv["fs_mean"]
             fs_median = mv["fs_median"]
-            pass_rate = (pass_count / total_dev) if total_dev > 0 else None
+            total = int(mv["matched_total"] or 0) or total_dev
+            pass_rate = (pass_count / total) if total > 0 else None
             return {
                 "fs_ghz_mean": float(fs_mean) if fs_mean is not None else None,
                 "fs_ghz_median": float(fs_median) if fs_median is not None else None,
@@ -120,21 +143,19 @@ def get_batch_stats(
         logger.exception("读取 mv_batch_stats 失败，回退到 devices 实时聚合")
 
     # 物化视图无数据或查询失败时回退到实时聚合
-    fs_mean = db.scalar(select(func.avg(Device.fs_ghz)).where(Device.batch_id == batch_id))
+    matched_filter = (Device.batch_id == batch_id, Device.matched.is_(True))
+    fs_mean = db.scalar(select(func.avg(Device.fs_ghz)).where(*matched_filter))
     fs_median = db.scalar(
-        select(func.percentile_cont(0.5).within_group(Device.fs_ghz.asc())).where(
-            Device.batch_id == batch_id
-        )
+        select(func.percentile_cont(0.5).within_group(Device.fs_ghz.asc())).where(*matched_filter)
     )
     pass_count = (
         db.scalar(
-            select(func.count())
-            .select_from(Device)
-            .where(Device.batch_id == batch_id, Device.pf == "Y")
+            select(func.count()).select_from(Device).where(*matched_filter, Device.pf == "Y")
         )
         or 0
     )
-    pass_rate = (pass_count / total_dev) if total_dev > 0 else None
+    total = _matched_total() or total_dev
+    pass_rate = (pass_count / total) if total > 0 else None
 
     return {
         "fs_ghz_mean": float(fs_mean) if fs_mean is not None else None,

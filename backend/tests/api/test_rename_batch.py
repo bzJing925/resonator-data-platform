@@ -15,7 +15,6 @@ from app.models import Batch, Mapping, UploadTask
 def rename_api_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Settings:
     """将重命名服务使用的 files_dir 指向临时目录。"""
     settings = Settings(DATA_ROOT=tmp_path / "data")
-    monkeypatch.setattr("app.services.batch_rename_service.get_settings", lambda: settings)
     monkeypatch.setattr("app.config.get_settings", lambda: settings)
     monkeypatch.setattr("app.api.tasks.get_settings", lambda: settings)
     return settings
@@ -54,8 +53,11 @@ def test_rename_batch_success(client: TestClient, db, rename_api_settings):
 
     old_dir = rename_api_settings.files_dir / "B.01"
     new_dir = rename_api_settings.files_dir / "B.02"
-    assert not old_dir.exists()
-    assert new_dir.exists()
+    assert old_dir.exists()
+    assert not new_dir.exists()
+    db.expire_all()
+    batch = db.query(Batch).filter_by(batch_no="B.02").one()
+    assert batch.file_path == str(old_dir)
 
 
 def test_rename_batch_missing(client: TestClient, db, rename_api_settings):

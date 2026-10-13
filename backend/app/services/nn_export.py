@@ -21,6 +21,7 @@ from app.config import get_settings
 from app.core.sparse_sampler import fixed_rule_sample, partition_regions, read_z_mag_db
 from app.models import Batch, Device
 from app.schemas.nn_export import NNExportRequest
+from app.services.batch_scope import active_batch_clause
 
 log = logging.getLogger("aln")
 
@@ -108,7 +109,9 @@ def _build_nn_export_row(
 
     batch_no = device_row.get("batch_no")
     port = device_row.get("s_param_port") or "S11"
-    path = _resolve_sparam_path(s_param_path, batch_no=batch_no)
+    path = (Path(device_row["batch_file_path"]) / s_param_path
+            if device_row.get("batch_file_path") and not Path(s_param_path).is_absolute()
+            else _resolve_sparam_path(s_param_path, batch_no=batch_no))
     if not path.exists():
         log.warning("S 参数文件不存在，跳过 device_id=%s: %s", device_row.get("id"), path)
         return None
@@ -171,11 +174,12 @@ def build_nn_export_stmt(req: NNExportRequest) -> tuple[list[str], Any]:
 
     返回 (fields, stmt)，stmt 已包含 select_from/join/where/order_by/limit。
     """
-    fields = [*_SCALAR_COLUMNS, "batch_no"]
+    fields = [*_SCALAR_COLUMNS, "batch_no", "batch_file_path"]
     select_cols = [getattr(Device, c).label(c) for c in _SCALAR_COLUMNS]
     select_cols.append(Batch.batch_no.label("batch_no"))
+    select_cols.append(Batch.file_path.label("batch_file_path"))
 
-    where = _build_filters(req.filters)
+    where = [active_batch_clause(), *_build_filters(req.filters)]
     stmt = select(*select_cols).select_from(Device).join(Batch, Device.batch_id == Batch.id)
     if where:
         stmt = stmt.where(*where)

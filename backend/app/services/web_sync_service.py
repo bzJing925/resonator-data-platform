@@ -114,7 +114,7 @@ def _mapping_json(mapping: Mapping) -> dict:
 
 def push_batch_to_web(db: Session, batch_no: str, token: str) -> dict[str, str | int]:
     """把本机已完成批次生成分享包并直接写入网站数据仓 main 分支。"""
-    batch = db.scalar(select(Batch).where(Batch.batch_no == batch_no))
+    batch = db.scalar(select(Batch).where(Batch.batch_no == batch_no, Batch.deleted_at.is_(None)))
     if batch is None:
         raise WebSyncError(f"本机没有批次 {batch_no}")
     if batch.device_count <= 0:
@@ -125,6 +125,13 @@ def push_batch_to_web(db: Session, batch_no: str, token: str) -> dict[str, str |
     device_rows = db.execute(select(Device).where(Device.batch_id == batch.id)).scalars().all()
     if not device_rows:
         raise WebSyncError("批次没有可同步的数据点")
+    from app.services import sync_status
+    from app.services.replica_service import export_batch
+    from app.services.source_identity import batch_source_ref
+    packet = export_batch(db, batch.id)
+    reference = batch_source_ref(db, batch)
+    db.rollback()
+    operation = sync_status.begin(db.bind, reference, 'web', packet)
     shared_columns = _DEVICE_COLUMNS - {"id", "batch_id", "s_param_path"}
     rows = [
         {column: getattr(device, column) for column in shared_columns}
@@ -137,6 +144,8 @@ def push_batch_to_web(db: Session, batch_no: str, token: str) -> dict[str, str |
         write_pack(
             rows,
             {
+                **reference,
+                "sync_digest": sync_status.packet_digest(packet),
                 "batch_no": batch.batch_no,
                 "mapping_name": mapping.name,
                 "f_start_ghz": batch.f_start_ghz,
@@ -162,11 +171,19 @@ def push_batch_to_web(db: Session, batch_no: str, token: str) -> dict[str, str |
                 "branch": "main",
             },
         )
+        sync_status.transition(db.bind, operation, 'pending', 'PUBLICATION_PENDING', retryable=True)
+        db.rollback()
         return {
+            "sync_state": "pending",
             "batch_no": batch.batch_no,
             "device_count": len(rows),
             "commit_url": str((result.get("commit") or {}).get("html_url") or ""),
             "message": "已写入网页版数据仓，网站将在 CI 合并并发布后更新（通常数分钟）。",
         }
+    except Exception:
+        db.rollback()
+        sync_status.transition(db.bind, operation, 'unknown',
+                               'WEB_WRITE_UNAVAILABLE', retryable=True)
+        raise
     finally:
         pack_path.unlink(missing_ok=True)

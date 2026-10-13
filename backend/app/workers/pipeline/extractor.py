@@ -51,11 +51,9 @@ def zip_contains_calibration(
 
 
 def _find_7z() -> str | None:
-    for name in ("7z", "7za", "p7zip"):
-        path = shutil.which(name)
-        if path:
-            return path
-    return None
+    from app.workers.extract_batch import _find_7z as find_decoder
+
+    return find_decoder()
 
 
 class StreamingExtractor:
@@ -83,6 +81,9 @@ class StreamingExtractor:
         实现：启动解压子进程，主线程轮询 target_dir 发现新文件；
         子进程结束后做最终扫描确保无遗漏。
         """
+        from app.services.archive_validation import validate_archive_members
+
+        validate_archive_members(self.zip_path, self.target_dir)
         self.target_dir.mkdir(parents=True, exist_ok=True)
         seen: set[str] = set()
 

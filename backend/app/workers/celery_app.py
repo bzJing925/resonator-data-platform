@@ -23,6 +23,10 @@ celery_app.conf.update(
     timezone="Asia/Shanghai",
     enable_utc=True,
     task_track_started=True,
+    beat_schedule={"artifact-cleanup": {
+        "task": "app.workers.maintenance.purge_artifacts",
+        "schedule": settings.CLEANUP_INTERVAL_SECONDS,
+    }},
     worker_prefetch_multiplier=1,
     task_acks_late=True,
     task_reject_on_worker_lost=True,

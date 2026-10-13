@@ -18,6 +18,7 @@ from app.api.deps import DEVICE_COLUMNS
 from app.core.extract import ExtractError, extract_resonator_params
 from app.core.mapping import load_mapping
 from app.models import Batch, Device, Mapping
+from app.services.source_identity import identity_for_result_path, validate_uuid
 
 logger = logging.getLogger(__name__)
 
@@ -45,8 +46,20 @@ def _upsert_device(
     batch: Batch,
     relpath: str,
     row: dict[str, Any],
+    *,
+    commit: bool = False,
 ) -> Device:
     """根据计算结果插入或更新 Device 行。"""
+    row = dict(row)
+    source_key = identity_for_result_path(
+        db, batch.id, relpath, row.get("s_param_port", DEFAULT_S_PARAM_PORT)
+    )
+    if source_key is not None:
+        if row.get("source_device_key") not in {None, source_key}:
+            raise ComputeServiceError("计算结果与登记来源UUID不一致")
+        row["source_device_key"] = source_key
+    if row.get("source_device_key") is not None:
+        validate_uuid(row["source_device_key"])
     existing = db.scalar(
         select(Device).where(
             Device.batch_id == batch.id,
@@ -55,6 +68,8 @@ def _upsert_device(
         )
     )
     if existing is not None:
+        if row.get("source_device_key") is None:
+            row.pop("source_device_key", None)
         for col in DEVICE_COLUMNS:
             if col == "id":
                 continue
@@ -64,8 +79,10 @@ def _upsert_device(
     else:
         device = Device(**{col: row.get(col) for col in DEVICE_COLUMNS if col != "id"})
         db.add(device)
-    db.commit()
-    db.refresh(device)
+    db.flush()
+    if commit:
+        db.commit()
+        db.refresh(device)
     return device
 
 
@@ -77,6 +94,8 @@ def compute_single_device(
     f_start_ghz: float | None = None,
     f_end_ghz: float | None = None,
     deembedded: bool = False,
+    *,
+    commit: bool = False,
 ) -> Device:
     """对单个文件执行指标计算并写入/更新 devices 表。
 
@@ -114,12 +133,14 @@ def compute_single_device(
         raise ComputeServiceError(f"计算异常: {exc}") from exc
 
     row["batch_id"] = batch.id
-    return _upsert_device(db, batch, relpath, row)
+    return _upsert_device(db, batch, relpath, row, commit=commit)
 
 
-def sync_batch_device_count(db: Session, batch_id: int) -> int:
+def sync_batch_device_count(db: Session, batch_id: int, *, commit: bool = False) -> int:
     """重新统计 batch 下 device 数量并更新 batches 表。"""
     device_count = db.scalar(select(func.count(Device.id)).where(Device.batch_id == batch_id)) or 0
     db.execute(update(Batch).where(Batch.id == batch_id).values(device_count=device_count))
-    db.commit()
+    db.flush()
+    if commit:
+        db.commit()
     return int(device_count)

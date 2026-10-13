@@ -94,6 +94,7 @@ export default function Mappings() {
     setUploading(true);
     try {
       await createMapping(fd);
+      window.dispatchEvent(new Event('aln-local-data-changed'));
       setName('');
       if (fileRef.current) fileRef.current.value = '';
       await loadMappings();

@@ -31,6 +31,15 @@ function buildScene(args: Omit<ChartSceneArgs, 'xFields' | 'zField'> & {
 }
 
 describe('JMP analysis chart scene', () => {
+  it('uses WebGL for the total figure size even when each metric has fewer than 5000 points', () => {
+    const scene = buildScene({ chartType: 'swarm', rows: buildPerformanceRows(2000),
+      yFields: ANALYSIS_Y_FIELDS });
+    const raw = scene.allTraces.filter((trace) => trace.meta.analysisLayer === 'raw-points');
+    expect(raw.map((trace) => trace.type)).toEqual(['scattergl', 'scattergl', 'scattergl']);
+    expect(raw.map((trace) => trace.customdata.length)).toEqual([2000, 2000, 2000]);
+    expect(scene.allTraces.filter((trace) => trace.meta.analysisLayer === 'swarm-median'))
+      .toHaveLength(6);
+  });
   it('builds selected X/Z hierarchy with vertically stacked shared-X metrics', () => {
     const scene = buildScene({
       chartType: 'scatter',
@@ -221,6 +230,21 @@ describe('JMP analysis chart scene', () => {
 });
 
 describe('蜂群图（swarm）绘制规约', () => {
+  it('不同指标使用同一横向步长，密集指标不会把稀疏指标的密度比例归一化', () => {
+    const rows = Array.from({ length: 30 }, (_, index) => ({
+      rowId: `r${index}`, tier: 'A', dense: 1, sparse: index < 3 ? 1 : index * 10,
+    }));
+    const scene = buildJmpChartScene({
+      chartType: 'swarm', rows, xFields: [{ name: 'tier' }],
+      yFields: [{ name: 'dense' }, { name: 'sparse' }],
+    });
+    const [dense, sparse] = scene.allTraces.filter((trace) => trace.meta.analysisLayer === 'raw-points');
+    const denseStep = dense.x[1] - dense.x[0];
+    const sparseStep = sparse.x[1] - sparse.x[0];
+    expect(sparseStep).toBeCloseTo(denseStep, 10);
+    expect(Math.max(...dense.x) - Math.min(...dense.x)).toBeGreaterThan(0.8);
+    expect(Math.max(...sparse.x) - Math.min(...sparse.x)).toBeLessThan(0.2);
+  });
   const SWARM_X_FIELDS = [{ name: 'tier', label: '面积档位', isCategorical: true }];
   const SWARM_Y_FIELDS = [{ name: 'v', label: 'Vs', isCategorical: false }];
   // T1 档：a/b/c 同 y=1（应横向堆叠），d 在 y=2（独占一层居中）；T2 档：e 单点

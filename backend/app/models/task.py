@@ -41,7 +41,7 @@ class UploadTask(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "status IN ('pending','running','success','failed','cancelled')",
+            "status IN ('pending','running','success','failed','cancel_requested','cancelled')",
             name="ck_uptask_status",
         ),
         CheckConstraint(

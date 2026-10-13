@@ -7,16 +7,19 @@
 from __future__ import annotations
 
 import logging
+import os
 import queue
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import zipfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 try:
     import zipfile_deflate64  # noqa: F401  注册 Deflate64 压缩支持
@@ -24,7 +27,7 @@ except ImportError:  # 该包为纯源码分发，无编译器的环境（Window
     import logging
 
     logging.getLogger("aln").warning(
-        "zipfile_deflate64 未安装：Deflate64 压缩的 zip 无法解压（罕见格式，标准 zip 不受影响）"
+        "zipfile_deflate64 未安装：Deflate64 ZIP 将使用随包或系统 7-Zip 解压"
     )
 from celery import Task
 
@@ -34,21 +37,32 @@ from app.core.filename import parse_filename
 from app.core.touchstone import detect_snp_type, split_s2p_to_s1p
 from app.db import SessionLocal
 from app.models import Batch, Mapping
-from app.services.file_tree_service import build_file_tree_from_disk
 from app.workers.cancel import TaskCancelledError, is_task_cancelled, raise_if_cancelled
 from app.workers.celery_app import celery_app
 from app.workers.local_queue import get_local_queue
 from app.workers.progress import ProgressPublisher
+from app.workers.run_execution import current_run, leased_stage
 
 logger = logging.getLogger(__name__)
 
 
 def _find_7z() -> str | None:
-    """查找 7z / 7za / p7zip 可执行文件。"""
-    for name in ("7z", "7za", "p7zip"):
+    """Prefer the offline Windows decoder, then discover an installed decoder."""
+    if sys.platform == "win32":
+        bundled = Path(__file__).resolve().parents[3] / "tools" / "7zip" / "7za.exe"
+        if bundled.is_file():
+            return str(bundled)
+    for name in ("7z", "7za", "7zz", "p7zip"):
         path = shutil.which(name)
         if path:
             return path
+    if sys.platform == "win32":
+        for variable in ("ProgramFiles", "ProgramFiles(x86)"):
+            directory = os.environ.get(variable)
+            if directory:
+                installed = Path(directory) / "7-Zip" / "7z.exe"
+                if installed.is_file():
+                    return str(installed)
     return None
 
 
@@ -74,6 +88,17 @@ def _read_stream_into_queue(stream, q: queue.Queue[str]) -> None:
         q.put(line)
 
 
+def _stop_extractor(proc) -> None:
+    """Wait for the external writer even when a progress/checkpoint callback raises."""
+    if proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+
+
 def _extract_with_7z(
     zip_path: Path,
     target_dir: Path,
@@ -97,10 +122,12 @@ def _extract_with_7z(
     stdout_q: queue.Queue[str] = queue.Queue()
 
     proc = subprocess.Popen(
-        [exe, "x", "-y", "-bsp1", "-bb0", "-o" + str(target_dir), str(zip_path)],
+        [exe, "x", "-y", "-bsp1", "-bb0", "-sccUTF-8", "-o" + str(target_dir), str(zip_path)],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         bufsize=1,
     )
 
@@ -138,6 +165,7 @@ def _extract_with_7z(
             time.sleep(0.5)
         proc.wait()
     finally:
+        _stop_extractor(proc)
         stop.set()
         monitor.join(timeout=2.0)
         stdout_thread.join(timeout=2.0)
@@ -201,6 +229,7 @@ def _extract_with_unzip(
             time.sleep(0.5)
         proc.wait()
     finally:
+        _stop_extractor(proc)
         stop.set()
         monitor.join(timeout=2.0)
         stderr_thread.join(timeout=2.0)
@@ -220,14 +249,20 @@ def _extract_zip(
     progress_callback: Callable[[int, int], None] | None = None,
     upload_task_id: int | None = None,
     cancel_check: Callable[[], bool] | None = None,
+    validation_progress: Callable[[int, int], None] | None = None,
 ) -> tuple[str, float, int, int]:
     """解压 ZIP；返回 (extractor_name, elapsed_seconds, files_count, total_bytes).
 
     策略：
-    1. 若系统安装了 7z/p7zip，优先使用它（支持 Deflate64 / ZIP64 大文件，速度通常更快）；
-    2. 否则使用 Python zipfile（自带 Deflate64 补丁），可提供逐文件进度；
+    1. 优先使用随包或系统 7-Zip（支持 Deflate64 / ZIP64 大文件）；
+    2. 否则使用 Python zipfile（Deflate64 扩展可选），可提供逐文件进度；
     3. Python 不支持时回退到系统 unzip。
     """
+    from app.services.archive_validation import validate_archive_members
+
+    validate_archive_members(zip_path, target_dir, progress_callback=validation_progress)
+    if validation_progress and progress_callback:
+        progress_callback(0, 100)
     if cancel_check is None and upload_task_id is not None:
 
         def _cancel_check() -> bool:
@@ -258,6 +293,8 @@ def _extract_zip(
             total = len(members)
             start = time.perf_counter()
             for i, member in enumerate(members, start=1):
+                if cancel_check and cancel_check():
+                    raise TaskCancelledError()
                 if upload_task_id is not None:
                     raise_if_cancelled(upload_task_id)
                 zf.extract(member, target_dir)
@@ -342,13 +379,15 @@ def _run_deembed_for_batch(
     )
 
     all_files: list[dict[str, Any]] = []
-    for s11_de, s22_de in de_pairs:
+    for original, (s11_de, s22_de) in zip(dut_s2p, de_pairs, strict=True):
         all_files.append(
             {
                 "path": str(s11_de),
                 "deembedded": True,
                 "port": 0,
                 "s_param_relpath": str(s11_de.relative_to(target_dir)),
+                "source_member": str(original.relative_to(target_dir)),
+                "source_port": "S11",
             }
         )
         all_files.append(
@@ -357,6 +396,8 @@ def _run_deembed_for_batch(
                 "deembedded": True,
                 "port": 1,
                 "s_param_relpath": str(s22_de.relative_to(target_dir)),
+                "source_member": str(original.relative_to(target_dir)),
+                "source_port": "S22",
             }
         )
         if upload_task_id is not None:
@@ -365,6 +406,7 @@ def _run_deembed_for_batch(
 
 
 @celery_app.task(bind=True, name="aln.extract_batch")
+@leased_stage("extract")
 def extract_batch_task(
     self: Task,
     upload_task_id: int,
@@ -376,6 +418,8 @@ def extract_batch_task(
     deembed_enabled: bool = False,
     deembed_method: str = "default",
     process_type: str = "AUTO",
+    run_id: str | None = None,
+    lease_token: str | None = None,
 ) -> dict[str, Any]:
     """解压并整理出所有待计算文件项。
 
@@ -423,16 +467,37 @@ def extract_batch_task(
             raise RuntimeError(f"mappings 表无 id={mapping_id}")
 
         # 1. 解压并记录耗时
-        target_dir = settings.files_dir / batch_no
-        if target_dir.exists():
-            shutil.rmtree(target_dir)
-        target_dir.mkdir(parents=True, exist_ok=True)
-        extractor, elapsed, extracted_count, raw_bytes = _extract_zip(
-            Path(zip_path),
-            target_dir,
-            progress_callback=_update_extract_pct,
-            upload_task_id=upload_task_id,
-        )
+        prepared_dir = None
+        run_config = {}
+        approved = None
+        if run_id is not None:
+            from app.models import ProcessingRun
+
+            run_config = db.get(ProcessingRun, run_id).config_json
+            prepared_dir = run_config.get("prepared_dir")
+            if prepared_dir:
+                approved = set(run_config.get("prepared_file_names", []))
+        ticket = current_run.get()
+        if ticket:
+            from app.services.result_publish import prepare_stage_directory
+
+            target_dir = prepare_stage_directory(db, ticket, copy_from=prepared_dir)
+        if prepared_dir:
+            target_dir = target_dir if ticket else Path(prepared_dir)
+            if not target_dir.is_dir():
+                raise RuntimeError("预检查目录不存在")
+            extractor, elapsed = "precheck", 0.0
+            extracted = [p for p in target_dir.rglob("*") if p.is_file()]
+            extracted_count, raw_bytes = len(extracted), sum(p.stat().st_size for p in extracted)
+        else:
+            target_dir = target_dir if ticket else settings.files_dir / str(uuid4())
+            target_dir.mkdir(parents=True, exist_ok=True)
+            extractor, elapsed, extracted_count, raw_bytes = _extract_zip(
+                Path(zip_path),
+                target_dir,
+                progress_callback=_update_extract_pct,
+                upload_task_id=upload_task_id,
+            )
         mb = raw_bytes / 1024 / 1024
         speed = mb / elapsed if elapsed > 0 else 0.0
         logger.info(
@@ -445,17 +510,77 @@ def extract_batch_task(
         )
 
         # 2. .snp 通用扩展名自动识别并重命名
+        ticket = current_run.get()
+        if ticket and not run_config.get("precheck_report"):
+            from app.services.processing_report import record_issue, record_item_result
+
+            for path in sorted(target_dir.rglob("*")):
+                if not path.is_file():
+                    continue
+                member = str(path.relative_to(target_dir))
+                if path.suffix.lower() in {".s1p", ".s2p", ".snp"}:
+                    status = "success" if parse_filename(path.name).is_calibration else "pending"
+                    if status == "pending":
+                        from app.services.source_identity import register_source_input
+                        from app.services.upload_precheck import file_digest
+
+                        ports = (
+                            ["S11", "S22"]
+                            if path.suffix.lower() in {".s2p", ".snp"}
+                            else [parse_filename(path.name).port or "S11"]
+                        )
+                        for port in ports:
+                            register_source_input(
+                                db,
+                                batch.id,
+                                member,
+                                port,
+                                input_digest=file_digest(path),
+                                current_relpath=None,
+                                original_filename=path.name,
+                            )
+                else:
+                    status = "skipped"
+                item = record_item_result(db, ticket.run_id, "file", member, status)
+                if status == "skipped":
+                    record_issue(
+                        db,
+                        ticket.run_id,
+                        "UNRELATED_FILE",
+                        "无关文件已排除",
+                        severity="warning",
+                        item_id=item.id,
+                        details={"source_member": member},
+                    )
+            db.commit()
+        original_members = {}
         for snp_file in target_dir.rglob("*.snp"):
+            if approved is not None and str(snp_file.relative_to(target_dir)) not in approved:
+                continue
             try:
                 detected = detect_snp_type(snp_file)
                 new_ext = ".s1p" if detected == "S1P" else ".s2p"
-                snp_file.rename(snp_file.with_suffix(new_ext))
+                renamed = snp_file.with_suffix(new_ext)
+                original_members[str(renamed.relative_to(target_dir))] = str(
+                    snp_file.relative_to(target_dir)
+                )
+                snp_file.rename(renamed)
+                if approved is not None:
+                    approved.add(str(renamed.relative_to(target_dir)))
             except Exception as exc:
                 logger.warning("识别 .snp 失败 %s: %s", snp_file.name, exc)
 
         # 3. 扫描（区分 DUT 与校准件）
-        s2p_files = sorted(p for p in target_dir.rglob("*.s2p") if p.is_file())
-        s1p_files = sorted(p for p in target_dir.rglob("*.s1p") if p.is_file())
+        s2p_files = sorted(
+            p
+            for p in target_dir.rglob("*.s2p")
+            if p.is_file() and (approved is None or str(p.relative_to(target_dir)) in approved)
+        )
+        s1p_files = sorted(
+            p
+            for p in target_dir.rglob("*.s1p")
+            if p.is_file() and (approved is None or str(p.relative_to(target_dir)) in approved)
+        )
 
         dut_s2p: list[Path] = []
         cal_open: dict[str, Path] = {}
@@ -539,11 +664,19 @@ def extract_batch_task(
             all_files.append(
                 {
                     "path": str(s1p),
-                    "deembedded": bool(deembed_enabled),
+                    "deembedded": False,
                     "port": 0,
                     "s_param_relpath": str(s1p.relative_to(target_dir)),
+                    "source_port": parse_filename(s1p.name).port or "S11",
                 }
             )
+
+        transferred = {entry['current_relpath']: entry['member_key']
+                       for entry in run_config.get('source_transfer_inputs', [])}
+        for item in all_files:
+            member = item.get("source_member") or item["s_param_relpath"]
+            original = original_members.get(member, member)
+            item["source_member"] = transferred.get(original, original)
 
         if not all_files:
             raise RuntimeError("ZIP 解压后未发现可处理的 DUT 文件（.s1p 或 .s2p）")
@@ -558,27 +691,7 @@ def extract_batch_task(
 
         wafer = _wafer_from_batch_no(batch_no)
 
-        # 记录解压目录，供 compute_batch 使用
-        batch.file_path = str(target_dir)
-        db.commit()
-
-        # 初始化虚拟文件树
-        try:
-            build_file_tree_from_disk(db, batch)
-        except Exception:
-            logger.exception("初始化虚拟文件树失败（非致命）")
-
-        # 按配置清理原 zip，避免 raw zip + 解压文件双重占盘
-        if not settings.KEEP_RAW_ZIP:
-            try:
-                raw_zip = Path(zip_path)
-                if raw_zip.exists():
-                    raw_zip.unlink()
-                    batch.raw_zip_path = None
-                    db.commit()
-            except Exception:
-                logger.exception("删除原 zip 失败: %s", zip_path)
-
+        # The active directory/tree/raw input remain untouched until publication.
         return {
             "upload_task_id": upload_task_id,
             "batch_id": batch.id,
@@ -587,6 +700,7 @@ def extract_batch_task(
             "f_start_ghz": f_start_ghz,
             "f_end_ghz": f_end_ghz,
             "all_files": all_files,
+            "target_dir": str(target_dir),
         }
 
     except Exception as exc:

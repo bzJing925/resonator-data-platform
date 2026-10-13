@@ -29,6 +29,7 @@ def test_upsert_device_insert() -> None:
     """不存在 Device 时插入新行。"""
     db = MagicMock(spec=Session)
     db.scalar.return_value = None
+    db.scalars.return_value.all.return_value = []
 
     batch = MagicMock(spec=Batch)
     batch.id = 7
@@ -43,8 +44,8 @@ def test_upsert_device_insert() -> None:
 
     _upsert_device(db, batch, "test.s1p", row)
     db.add.assert_called_once()
-    db.commit.assert_called_once()
-    db.refresh.assert_called_once()
+    db.commit.assert_not_called()
+    db.flush.assert_called_once()
 
 
 def test_upsert_device_update() -> None:
@@ -53,6 +54,7 @@ def test_upsert_device_update() -> None:
     existing = MagicMock(spec=Device)
     existing.id = 42
     db.scalar.return_value = existing
+    db.scalars.return_value.all.return_value = []
 
     batch = MagicMock(spec=Batch)
     batch.id = 7
@@ -68,7 +70,7 @@ def test_upsert_device_update() -> None:
     _upsert_device(db, batch, "test.s1p", row)
     assert existing.fs_ghz == 1.9
     db.add.assert_not_called()
-    db.commit.assert_called_once()
+    db.commit.assert_not_called()
 
 
 def test_compute_single_device_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -84,6 +86,7 @@ def test_compute_single_device_happy_path(monkeypatch: pytest.MonkeyPatch) -> No
     db = MagicMock(spec=Session)
     db.get.return_value = mapping
     db.scalar.return_value = None  # 无 existing device
+    db.scalars.return_value.all.return_value = []
 
     def _fake_extract(*_args, **_kwargs):
         return {
@@ -103,7 +106,7 @@ def test_compute_single_device_happy_path(monkeypatch: pytest.MonkeyPatch) -> No
         target_path=Path("/tmp/test.s1p"),
     )
     assert device is not None
-    db.commit.assert_called()
+    db.commit.assert_not_called()
 
 
 def test_compute_single_device_extract_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -135,4 +138,4 @@ def test_sync_batch_device_count() -> None:
     db.scalar.return_value = 15
     count = sync_batch_device_count(db, batch_id=7)
     assert count == 15
-    db.commit.assert_called_once()
+    db.commit.assert_not_called()

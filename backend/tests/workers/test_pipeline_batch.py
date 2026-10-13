@@ -6,17 +6,20 @@
 from __future__ import annotations
 
 import shutil
+import sys
 import zipfile
 from pathlib import Path
 
 import numpy as np
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import select
+from sqlalchemy.orm import sessionmaker
 
-from app.db import SessionLocal, engine
+from app.db import SessionLocal
 from app.models import Batch, Device, Mapping, UploadTask
 from app.workers import celery_app
 from app.workers.pipeline_batch import pipeline_batch_task, should_use_pipeline
+from tests.fixtures.platform_db import DATABASES, platform_database
 
 
 class TestShouldUsePipeline:
@@ -53,17 +56,22 @@ def _eager_mode():
     celery_app.conf.task_eager_propagates = False
 
 
-@pytest.fixture
-def clean_db():
-    """每个测试跑前清理 devices/batches/upload_tasks/mappings。"""
-    with engine.begin() as conn:
-        conn.execute(
-            text(
-                "TRUNCATE devices, batches, upload_tasks, mapping_entries, mappings "
-                "RESTART IDENTITY CASCADE"
-            )
-        )
-    yield
+@pytest.fixture(params=DATABASES)
+def clean_db(request, tmp_path, monkeypatch):
+    from app import db as database
+    from app.workers import pipeline_batch
+
+    with platform_database(request.param, tmp_path) as (db, batch):
+        mapping = db.get(Mapping, batch.mapping_id)
+        db.delete(batch)
+        db.delete(mapping)
+        db.commit()
+        factory = sessionmaker(bind=db.bind)
+        for module in (sys.modules[__name__], database, pipeline_batch):
+            monkeypatch.setattr(module, "SessionLocal", factory)
+        monkeypatch.setattr("app.workers.cancel.SessionLocal", factory)
+        monkeypatch.setattr(database, "engine", db.bind)
+        yield
 
 
 @pytest.fixture

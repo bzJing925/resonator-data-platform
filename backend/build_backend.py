@@ -57,6 +57,11 @@ def run(onefile: bool = False):
         f"--add-data={ROOT / 'alembic'}{os.pathsep}alembic",
         f"--add-data={ROOT / 'alembic.ini'}{os.pathsep}.",
         f"--add-data={ROOT / 'pyproject.toml'}{os.pathsep}.",
+        # algorithm_digest()（app/services/processing_retry.py）运行时读取算法源码
+        # 计算指纹；冻结包内 __file__ 指向 _internal/app/，这些源文件必须随包带上，
+        # 否则启动入库会在创建 ProcessingRun 时 FileNotFoundError（500）
+        f"--add-data={ROOT / 'app' / 'core'}{os.pathsep}app/core",
+        f"--add-data={ROOT / 'app' / 'share_pack.py'}{os.pathsep}app",
         # 注意：不要在这里打包根目录 .env。桌面版应使用默认配置或用户本机环境变量，
         # 否则构建机上的 DATABASE_URL/端口会覆盖用户本机配置。
     ]

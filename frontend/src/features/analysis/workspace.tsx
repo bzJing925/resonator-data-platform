@@ -1,3 +1,8 @@
+import type { JsonValue } from './model/provenance';
+import { migrateLegacyExplore, parseAnalysisSpec, restoreWorkspace } from './project/projectCodec';
+import { MIGRATED_PROJECT, useProjectAutosave } from './project/useProjectAutosave';
+import type { ProjectVersionWithRows } from './project/projectTypes';
+import type { AnalysisSpec, ResultManifest } from '../../types/platformContracts';
 import React, { createContext, useCallback, useContext, useMemo, useReducer } from 'react';
 import {
   commandLabel,
@@ -47,10 +52,17 @@ export type {
 };
 
 export interface WorkspaceState extends WorkspacePresent {
+  spec: AnalysisSpec;
+  notes: string;
+  readOnly: boolean;
+  projectExtras?: Record<string, JsonValue>;
   history: HistoryState<WorkspacePresent>;
 }
 
 export const INITIAL_WORKSPACE_STATE: WorkspaceState = {
+  notes: '',
+  readOnly: false,
+  spec: migrateLegacyExplore({ xFields: ['eg'], yFields: ['qs'], limit: 50000 }),
   registry: createDatasetRegistry(),
   activeTabId: CHART_PAGE_ID,
   selection: createSelectionState(),
@@ -59,16 +71,26 @@ export const INITIAL_WORKSPACE_STATE: WorkspaceState = {
 };
 
 export type WorkspaceAction =
+  | { type: 'restoreProject'; project: ProjectVersionWithRows; restored?: WorkspaceState }
+  | { type: 'updateNotes'; notes: string }
+  | { type: 'updateSpec'; spec: AnalysisSpec | ((current: AnalysisSpec) => AnalysisSpec) }
   | { type: 'execute'; command: AnalysisCommand }
   | { type: 'undo' }
   | { type: 'redo' };
 
 function workspacePresent(state: WorkspaceState): WorkspacePresent {
-  const { history: _history, ...present } = state;
+  const { history: _history, spec: _spec, notes: _notes, projectExtras: _extras, readOnly: _readOnly, ...present } = state;
   return present;
 }
 
 export function workspaceReducer(state: WorkspaceState, action: WorkspaceAction): WorkspaceState {
+  if (action.type === 'restoreProject') return action.restored ?? { ...restoreWorkspace(action.project),
+    spec: parseAnalysisSpec(action.project.version.spec) };
+  if (state.readOnly && (action.type === 'updateNotes' || action.type === 'updateSpec'
+    || action.type === 'undo' || action.type === 'redo'
+    || (action.type === 'execute' && isUndoableCommand(action.command)))) return state;
+  if (action.type === 'updateNotes') return { ...state, notes: action.notes };
+  if (action.type === 'updateSpec') return { ...state, spec: parseAnalysisSpec(typeof action.spec === 'function' ? action.spec(state.spec) : action.spec) };
   if (action.type === 'execute') {
     const before = workspacePresent(state);
     const after = executeAnalysisCommand(before, action.command);
@@ -76,21 +98,24 @@ export function workspaceReducer(state: WorkspaceState, action: WorkspaceAction)
     const history = isUndoableCommand(action.command)
       ? pushHistory(state.history, { label: commandLabel(action.command), before, after })
       : state.history;
-    return { ...after, history };
+    return { ...after, spec: after.spec ?? state.spec, notes: state.notes, readOnly: state.readOnly, projectExtras: state.projectExtras, history };
   }
   const before = workspacePresent(state);
   if (action.type === 'undo') {
     const result = undoHistory(before, state.history);
-    return result.present === before ? state : { ...result.present, history: result.history };
+    return result.present === before ? state : { ...result.present, spec: result.present.spec ?? state.spec, notes: state.notes, readOnly: state.readOnly, projectExtras: state.projectExtras, history: result.history };
   }
   const result = redoHistory(before, state.history);
-  return result.present === before ? state : { ...result.present, history: result.history };
+  return result.present === before ? state : { ...result.present, spec: result.present.spec ?? state.spec, notes: state.notes, readOnly: state.readOnly, projectExtras: state.projectExtras, history: result.history };
 }
 
 let datasetSequence = 1;
 
 interface WorkspaceApi {
   state: WorkspaceState;
+  project: ReturnType<typeof useProjectAutosave>;
+  updateNotes: (notes: string) => void;
+  updateSpec: (spec: AnalysisSpec | ((current: AnalysisSpec) => AnalysisSpec)) => void;
   datasets: AnalysisDataset[];
   chartDataset: AnalysisDataset | null;
   chartDatasetId: DatasetId | null;
@@ -99,7 +124,8 @@ interface WorkspaceApi {
   pointStyles: PointStyleState;
   canUndo: boolean;
   canRedo: boolean;
-  loadQueryRows: (rows: Record<string, unknown>[], stats?: Record<string, unknown> | null) => void;
+  loadQueryRows: (rows: Record<string, unknown>[], stats?: Record<string, unknown> | null,
+    manifest?: ResultManifest | null) => DatasetId;
   addDataset: (name?: string) => DatasetId;
   closeDataset: (datasetId: DatasetId, replacementDatasetId?: DatasetId | null) => void;
   duplicateDataset: (datasetId?: DatasetId) => void;
@@ -134,11 +160,29 @@ const WorkspaceContext = createContext<WorkspaceApi | null>(null);
 function nextDatasetIdentity() {
   const number = datasetSequence;
   datasetSequence += 1;
-  return { id: `analysis-${number}`, name: `数据表${number}` };
+  return { id: crypto.randomUUID(), name: `数据表${number}` };
 }
 
 export function AnalysisWorkspaceProvider({ children }: { children: React.ReactNode }) {
-  const [state, dispatch] = useReducer(workspaceReducer, INITIAL_WORKSPACE_STATE);
+  const [state, dispatch] = useReducer(workspaceReducer, INITIAL_WORKSPACE_STATE, (initial) => {
+    try {
+      if (localStorage.getItem(MIGRATED_PROJECT) !== '1') {
+        const legacy = JSON.parse(localStorage.getItem('aln_page_state_v1') ?? '{}');
+        if (legacy?.explore) return { ...initial, spec: migrateLegacyExplore(legacy.explore) };
+      }
+    } catch { /* Invalid or unavailable legacy preferences do not block a new session. */ }
+    return initial;
+  });
+  const restore = useCallback((loaded: ProjectVersionWithRows) => {
+    const restored = { ...restoreWorkspace(loaded), spec: loaded.version.spec };
+    dispatch({ type: 'restoreProject', project: loaded, restored });
+    return restored;
+  }, []);
+  const project = useProjectAutosave(state, restore);
+  const updateNotes = useCallback((notes: string) => dispatch({ type: 'updateNotes', notes }), []);
+  const updateSpec = useCallback((next: AnalysisSpec | ((current: AnalysisSpec) => AnalysisSpec)) => {
+    dispatch({ type: 'updateSpec', spec: next });
+  }, []);
   const datasets = useMemo(() => selectDatasets(state), [state]);
   const chartDataset = selectChartDataset(state);
   const activeDataset = selectActiveDataset(state);
@@ -151,13 +195,15 @@ export function AnalysisWorkspaceProvider({ children }: { children: React.ReactN
   const loadQueryRows = useCallback((
     rows: Record<string, unknown>[],
     stats: Record<string, unknown> | null = null,
+    manifest: ResultManifest | null = null,
   ) => {
     const identity = nextDatasetIdentity();
     execute({
       type: 'addDataset',
-      dataset: createAnalysisDataset({ ...identity, kind: 'query', rows, stats }),
+      dataset: createAnalysisDataset({ ...identity, kind: 'query', rows, stats, manifest }),
       activate: 'chart',
     });
+    return identity.id;
   }, [execute]);
 
   const addDataset = useCallback((name?: string) => {
@@ -225,8 +271,11 @@ export function AnalysisWorkspaceProvider({ children }: { children: React.ReactN
   );
   const deleteSelection = useCallback(() => {
     if (!state.selection.datasetId || state.selection.rowIds.size === 0) return;
-    deleteRows(state.selection.datasetId, [...state.selection.rowIds]);
-  }, [deleteRows, state.selection]);
+    if (state.selection.byDataset) {
+      execute({ type: 'batch', label: '排除两组所选器件', commands: Object.entries(state.selection.byDataset)
+        .filter(([, ids]) => ids.size).map(([datasetId, ids]) => ({ type: 'deleteRows', datasetId, rowIds: [...ids] })) });
+    } else deleteRows(state.selection.datasetId, [...state.selection.rowIds]);
+  }, [deleteRows, execute, state.selection]);
   const updatePointStyle = useCallback((
     datasetId: DatasetId,
     rowIds: RowId[],
@@ -238,6 +287,9 @@ export function AnalysisWorkspaceProvider({ children }: { children: React.ReactN
 
   const api = useMemo<WorkspaceApi>(() => ({
     state,
+    project,
+    updateSpec,
+    updateNotes,
     datasets,
     chartDataset,
     chartDatasetId,
@@ -262,13 +314,14 @@ export function AnalysisWorkspaceProvider({ children }: { children: React.ReactN
     undo,
     redo,
   }), [
-    state, datasets, chartDataset, chartDatasetId, activeDataset, loadQueryRows,
+    state, project, updateSpec, updateNotes, datasets, chartDataset, chartDatasetId, activeDataset, loadQueryRows,
     addDataset, closeDataset, duplicateDataset, renameDataset, setActiveTab, setChartDataset,
     selectRows, updateRows, editCell, deleteRows, deleteSelection, updatePointStyle,
     undo, redo,
   ]);
 
-  return <WorkspaceContext.Provider value={api}>{children}</WorkspaceContext.Provider>;
+  return <WorkspaceContext.Provider value={api}>{project.loading
+    ? <div role="status">正在恢复分析项目…</div> : children}</WorkspaceContext.Provider>;
 }
 
 export function useAnalysisWorkspace() {

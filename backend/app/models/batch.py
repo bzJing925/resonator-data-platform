@@ -14,6 +14,7 @@ from sqlalchemy import (
     Index,
     Integer,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -49,6 +50,14 @@ class Batch(Base):
     uploaded_by: Mapped[str] = mapped_column(Text, default="anonymous", nullable=False)
     synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     task_id: Mapped[int | None] = mapped_column(ForeignKey("upload_tasks.id", ondelete="SET NULL"))
+    origin_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_batch_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    active_run_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    result_revision: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    purge_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     mapping: Mapped[Mapping] = relationship(back_populates="batches")
 
@@ -68,6 +77,8 @@ class Batch(Base):
             "process_type IN ('AUTO','S1P','S2P','BOTH')",
             name="ck_batch_proc_type",
         ),
+        UniqueConstraint("origin_id", "source_batch_id", name="uq_batch_source_identity"),
         Index("idx_batches_uploaded_at", "uploaded_at"),
         Index("idx_batches_mapping", "mapping_id"),
+        Index("idx_batches_deleted_at", "deleted_at"),
     )
