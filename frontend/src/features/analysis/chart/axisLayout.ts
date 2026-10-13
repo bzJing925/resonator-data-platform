@@ -138,6 +138,13 @@ const axisStyle = {
   tickfont: { color: '#8A919D', size: 10 },
 };
 
+// 蜂群图每个档位的目标物理宽度：约 10 个点径（marker size 5px × 10）。
+// 档数多时图宽度随档数增长，容器横向滚动（Explore 图表容器 overflow:auto）；
+// 档数少时不设宽度，交给 plotly autosize 填满容器。ponytail: width 为空时
+// 容器实际像素不可得，1100 是按桌面端典型图表区宽度的保守估计。
+const SWARM_SLOT_MIN_PX = 50;
+const SWARM_ASSUMED_CONTAINER_PX = 1100;
+
 export function buildAxisLayout(
   hierarchy: ChartHierarchy,
   xFields: ChartField[],
@@ -146,7 +153,9 @@ export function buildAxisLayout(
   datasetRevision: number | string | undefined,
   panelHeight: number,
   width: number | null,
+  chartType?: string,
 ) {
+  const isSwarm = chartType === 'swarm';
   const metricCount = yFields.length;
   const bottomAxis = `x${axisSuffix(Math.max(0, metricCount - 1))}`;
   const layout: any = {
@@ -160,7 +169,8 @@ export function buildAxisLayout(
       columns: 1,
       pattern: 'independent',
       roworder: 'top to bottom',
-      ygap: Math.min(0.12, 0.3 / Math.max(1, metricCount)),
+      // 蜂群图要求子图纵向紧密堆叠、留白极小（间隙同时要容纳顶部中位数标注）
+      ygap: isSwarm ? 0.03 : Math.min(0.12, 0.3 / Math.max(1, metricCount)),
     },
     showlegend: false,
     boxmode: 'overlay',
@@ -179,6 +189,14 @@ export function buildAxisLayout(
     },
   };
   if (width) layout.width = width;
+  // 蜂群图：档位物理宽度不足 10 个点径时加宽整图（容器横向滚动）
+  if (isSwarm) {
+    const swarmMinWidth = hierarchy.slots.length * SWARM_SLOT_MIN_PX
+      + layout.margin.l + layout.margin.r;
+    if (swarmMinWidth > (width ?? SWARM_ASSUMED_CONTAINER_PX)) {
+      layout.width = swarmMinWidth;
+    }
+  }
 
   const tickvals = hierarchy.slots.map((slot) => slot.index);
   const ticktext = hierarchy.slots.map((slot) => slot.label);
@@ -191,6 +209,8 @@ export function buildAxisLayout(
     const isBottom = index === metricCount - 1;
     layout[xKey] = {
       ...axisStyle,
+      // 蜂群图用档位间虚线分隔区间，刻度处的竖网格线会与之打架，关掉
+      showgrid: !isSwarm,
       type: 'linear',
       tickmode: 'array',
       tickvals,
@@ -221,7 +241,8 @@ export function buildAxisLayout(
       showarrow: false,
       font: { size: 11, color: '#C4C8D0' },
     });
-    if (group.end < hierarchy.slots.length - 1) {
+    // 蜂群图改用档位间竖向实线框线（见下），组界线会与档位线重合，跳过
+    if (!isSwarm && group.end < hierarchy.slots.length - 1) {
       layout.shapes = [...(layout.shapes || []), {
         type: 'line',
         xref: bottomAxis,
@@ -231,6 +252,21 @@ export function buildAxisLayout(
         y0: 0,
         y1: 1,
         line: { color: 'rgba(196,200,208,0.18)', width: 1 },
+      }];
+    }
+  }
+  // 蜂群图：相邻档位区间之间画竖向实线框线，贯穿所有子图
+  if (isSwarm) {
+    for (let boundary = 0; boundary < hierarchy.slots.length - 1; boundary += 1) {
+      layout.shapes = [...(layout.shapes || []), {
+        type: 'line',
+        xref: bottomAxis,
+        yref: 'paper',
+        x0: boundary + 0.5,
+        x1: boundary + 0.5,
+        y0: 0,
+        y1: 1,
+        line: { color: 'rgba(196,200,208,0.28)', width: 1, dash: 'solid' },
       }];
     }
   }

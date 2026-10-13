@@ -192,8 +192,43 @@ describe('buildUnifiedSpec facetZ 分面模式', () => {
       xFields: [X_CAT], yFields: [Y_QS], zField: Z_CAT, facetZ: true,
     });
     expect(spec.layout.grid.rows).toBe(3);
-    expect(spec.allTraces).toHaveLength(3);
-    expect(spec.allTraces.every((t) => t.type === 'scattergl')).toBe(true);
+    const raw = spec.allTraces.filter((t) => t.mode === 'markers');
+    expect(raw).toHaveLength(3);
+    expect(raw.every((t) => t.type === 'scattergl')).toBe(true);
+    // 统一风格：每块附一条带亮描边的中位数折线
+    expect(spec.allTraces.filter((t) => t.mode === 'lines+markers')).toHaveLength(3);
+    expect(spec.allTraces.filter((t) => t.mode === 'lines')).toHaveLength(3);
+  });
+
+  it('swarm 着色模式统一风格：不透明散点、每 Z 组中位数折线+顶部标注、档位实线框线', () => {
+    const spec = buildUnifiedSpec({
+      chartType: 'swarm', rows: ROWS, xFields: [X_CAT], yFields: [Y_QS], zField: Z_CAT,
+    });
+    const raw = spec.allTraces.filter((t) => t.mode === 'markers');
+    expect(raw).toHaveLength(3); // fl = 0 / 0.5 / ∅
+    expect(raw.every((t) => t.marker.opacity === 1 && t.marker.line === undefined)).toBe(true);
+
+    const halo = spec.allTraces.filter((t) => t.mode === 'lines');
+    const main = spec.allTraces.filter((t) => t.mode === 'lines+markers');
+    expect(halo).toHaveLength(3);
+    expect(main).toHaveLength(3);
+    expect(halo.every((t) => t.line.width > 2.5 && t.hoverinfo === 'skip')).toBe(true);
+    // 每档位中位数：fl=0.5 组覆盖 A/B 两档（错位中心恰为档中心）
+    const fl05 = main.find((t) => t.name === '0.5 中位数');
+    expect(fl05.y).toEqual([600, 700]);
+    expect(fl05.x[0]).toBeCloseTo(0, 10);
+    expect(fl05.x[1]).toBeCloseTo(1, 10);
+
+    const notes = spec.layout.annotations.filter((a) => a.font?.size === 9);
+    expect(notes).toHaveLength(4); // 仅有数据的 (档位 × Z) 组合
+    expect(notes.every((a) => a.yanchor === 'top' && a.yref === 'y domain')).toBe(true);
+
+    const frames = (spec.layout.shapes ?? []).filter((s) => s.line?.dash === 'solid');
+    expect(frames).toHaveLength(1); // A|B 两档 → 1 条框线
+    expect(frames[0].x0).toBe(0.5);
+    expect(frames[0].yref).toBe('paper');
+    expect(spec.layout.xaxis.showgrid).toBe(false);
+    expect(spec.layout.width).toBeUndefined(); // 2 档 × 50px + 边距 < 假定容器宽
   });
 
   it('分面时重复警告按内容去重（3 块只发 1 条）', () => {

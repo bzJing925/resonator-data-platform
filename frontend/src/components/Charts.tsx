@@ -7,6 +7,7 @@ import {
   buildYAxisAutorangeUpdate,
 } from '../features/analysis/chart/chartInteraction';
 import { buildPointStyleRestyles } from '../features/analysis/pointStyle';
+import { formatMedianLabel, medianOf } from '../features/analysis/chart/buildSwarmMedianTraces';
 import type { PointStyleOverride } from '../features/analysis/model/commands';
 import type { ChartField } from '../types';
 
@@ -911,32 +912,25 @@ function buildViolinTraces({ rows, xField, yField, zField, axisRef, zCategoryVal
 
 // Swarm (beeswarm) plot for one cell.
 //
-// Each X tick owns a horizontal "slot" of width 1 on the (forced) category
-// axis. Within a slot we lay every sample out as a point: same Y as the
-// data, but X is jittered DETERMINISTICALLY so points fan out by local
-// density — visually similar to a violin's silhouette, but every dot is a
-// real sample.
+// Each X tick owns a horizontal "slot" of width 1 on the (forced) linear
+// axis. Within a slot every sample is placed at its true Y; X is offset
+// DETERMINISTICALLY by local density — same-Y points stack side by side in
+// ~1-dot steps, so dense regions fan out into a violin-like silhouette
+// while every dot stays a real sample. Slots target ~10 dot diameters of
+// physical width (see the swarm width rule in buildUnifiedSpec).
 //
 // Above SWARM_GL_THRESHOLD rows we render via scattergl (WebGL) instead of
 // scatter (SVG) — pan/zoom/hover stops thrashing the DOM tree once the
-// total marker count climbs into the tens of thousands. scattergl ignores
-// most marker.line settings, so we drop the white outline in that mode
-// (it would just render as fuzz anyway).
-const SWARM_GL_THRESHOLD = 5000;
+// total marker count climbs into the tens of thousands.
 //
-// Algorithm (histogram-binned beeswarm):
-//   1. Bin Y values into K equal-width buckets across the global Y range.
-//   2. Within each bucket, points are placed at offsets 0, +d, -d, +2d,
-//      -2d, ... around the slot center.
-//   3. d is chosen per "column" (X category × Z subgroup) so the densest
-//      bucket fits inside that column's allowed width.
-//
-// On a category axis Plotly accepts numeric X values, interpreting them as
-// fractional tick indices — that's how we can offset points off their
-// tick without breaking the categorical axis.
+// Points are opaque with no outline: overlapping dots must not darken the
+// color. Per-Z-group median lines (same color, bold, with a light halo
+// casing so the line stays readable over dense point clouds) are drawn on
+// top, and each slot's median value is annotated at the top of the cell.
 //
 // First version: only numeric Y. Categorical Y is reported via a warning
 // so the caller can prompt the user to switch chart.
+const SWARM_GL_THRESHOLD = 5000;
 function buildSwarmTraces({ rows, totalRowCount, xField, yField, zField, axisRef, zCategoryValues, showLegend, xCategoryArray }) {
   const xKey = xField.name;
   const yKey = yField.name;
@@ -944,18 +938,18 @@ function buildSwarmTraces({ rows, totalRowCount, xField, yField, zField, axisRef
   const yref = `y${axisRef}`;
   const yIsCat = !!yField.isCategorical;
   const traces = [];
+  // 顶部中位数标注由调用方并入 layout.annotations（builder 契约只回 traces 数组）
+  (traces as any).annotations = [];
 
   if (yIsCat) return traces;
 
   // 阈值按全量行数判定：分面时 rows 只是块内子集，用错会让 N 块各退化成 SVG。
   const useGl = (totalRowCount ?? rows.length) >= SWARM_GL_THRESHOLD;
   const traceType = useGl ? 'scattergl' : 'scatter';
-  const markerLine = useGl ? undefined : { width: 0.5, color: '#ffffff80' };
 
   const xCats = xCategoryArray || [];
   const xIndexOf = new Map(xCats.map((v, i) => [v, i]));
 
-  const SLOT_PAD = 0.8;
   const N_BINS = 30;
 
   let yMin = Infinity, yMax = -Infinity;
@@ -971,37 +965,29 @@ function buildSwarmTraces({ rows, totalRowCount, xField, yField, zField, axisRef
 
   // Place a group of rows at (cx, slotW): returns swarmed coordinates +
   // original rows kept aligned so customdata still resolves on hover.
+  // 居中对称堆叠：同一 y 箱内的点以约一个点径的步长横向铺开（档位目标
+  // 宽度 50px ≈ 10 点径），最宽不超过 (子)槽位的 90%。
   const swarmGroup = (group, cx, slotW) => {
     const xs = new Array(group.length);
     const ys = new Array(group.length);
     if (group.length === 0) return { xs, ys };
-    const binIdxs = new Array(group.length);
-    const binCounts = new Map();
+    const bins = new Map();
     for (let i = 0; i < group.length; i++) {
       const v = group[i][yKey];
-      if (!Number.isFinite(v)) { binIdxs[i] = -1; continue; }
+      ys[i] = v;
+      if (!Number.isFinite(v)) { xs[i] = cx; continue; }
       let b = Math.floor((v - yMin) / binWidth);
       if (b >= N_BINS) b = N_BINS - 1;
       if (b < 0) b = 0;
-      binIdxs[i] = b;
-      binCounts.set(b, (binCounts.get(b) || 0) + 1);
+      const bin = bins.get(b);
+      if (bin) bin.push(i);
+      else bins.set(b, [i]);
     }
     let maxBin = 1;
-    for (const c of binCounts.values()) if (c > maxBin) maxBin = c;
-    // Spread the densest bucket across the available width. Divide by
-    // (maxBin - 1) so the outermost points sit on the slot edges; clamp
-    // to avoid 1/0 for singleton buckets.
-    const d = (maxBin > 1) ? (slotW * SLOT_PAD) / (maxBin - 1) : 0;
-    const binProgress = new Map();
-    for (let i = 0; i < group.length; i++) {
-      ys[i] = group[i][yKey];
-      const b = binIdxs[i];
-      if (b < 0) { xs[i] = cx; continue; }
-      const k = binProgress.get(b) || 0;
-      binProgress.set(b, k + 1);
-      const sign = (k % 2 === 0) ? 1 : -1;
-      const mag = Math.ceil(k / 2);
-      xs[i] = cx + sign * mag * d;
+    for (const idxs of bins.values()) if (idxs.length > maxBin) maxBin = idxs.length;
+    const step = Math.min(0.1, (slotW * 0.9) / maxBin);
+    for (const idxs of bins.values()) {
+      idxs.forEach((i, j) => { xs[i] = cx + (j - (idxs.length - 1) / 2) * step; });
     }
     return { xs, ys };
   };
@@ -1024,9 +1010,64 @@ function buildSwarmTraces({ rows, totalRowCount, xField, yField, zField, axisRef
     arr.push(r);
   }
 
+  const zVals = hasZ ? (zCategoryValues || distinctSortedValues(rows, zKey, { includeNull: true })) : ['__all__'];
+  const nZ = zVals.length || 1;
+  // 中位数数值标注：标注位过多时转竖排，超过 200 个直接省略（hover 仍可读）
+  const labelMode = xCats.length * nZ > 200 ? 'off'
+    : xCats.length * nZ > 40 ? 'rotated' : 'flat';
+
+  // 每 Z 组一条中位数折线：同色加粗 + 亮色描边，把趋势线从点云中分离出来
+  const pushMedianLayer = (medians, color, extra) => {
+    if (!medians.length) return;
+    const mx = medians.map((m) => m.x);
+    const my = medians.map((m) => m.y);
+    traces.push({
+      type: 'scatter',
+      mode: 'lines',
+      x: mx,
+      y: my,
+      xaxis: xref,
+      yaxis: yref,
+      name: `${extra} 中位数描边`,
+      showlegend: false,
+      connectgaps: true,
+      line: { color: 'rgba(232,235,240,0.55)', width: 4.5 },
+      hoverinfo: 'skip',
+    });
+    traces.push({
+      type: 'scatter',
+      mode: 'lines+markers',
+      x: mx,
+      y: my,
+      xaxis: xref,
+      yaxis: yref,
+      name: `${extra} 中位数`,
+      showlegend: false,
+      connectgaps: true,
+      customdata: medians.map((m) => ({ count: m.count })),
+      line: { color, width: 2.5 },
+      marker: { color, size: 5, symbol: 'circle' },
+      hovertemplate: `<b>${axisTitle(yField)} 中位数</b>: %{y}<br>n=%{customdata.count}<extra>${extra}</extra>`,
+    });
+    if (labelMode === 'off') return;
+    for (const m of medians) {
+      (traces as any).annotations.push({
+        xref,
+        yref: `${yref} domain`,
+        x: m.x,
+        y: 0.995,
+        yanchor: 'top',
+        textangle: labelMode === 'rotated' ? -90 : 0,
+        text: formatMedianLabel(m.y),
+        showarrow: false,
+        font: { size: 9, color },
+        bgcolor: 'rgba(24,27,33,0.65)',
+        borderpad: 1,
+      });
+    }
+  };
+
   if (hasZ) {
-    const zVals = zCategoryValues || distinctSortedValues(rows, zKey, { includeNull: true });
-    const nZ = zVals.length || 1;
     const subSlotW = 1 / nZ;
     let i = 0;
     for (const zv of zVals) {
@@ -1035,6 +1076,7 @@ function buildSwarmTraces({ rows, totalRowCount, xField, yField, zField, axisRef
       const allXs = [];
       const allYs = [];
       const allCustom = [];
+      const medians = [];
       for (const xc of xCats) {
         const grp = groups.get(groupKey(xc, zv)) || [];
         const tickIdx = xIndexOf.get(xc);
@@ -1043,6 +1085,10 @@ function buildSwarmTraces({ rows, totalRowCount, xField, yField, zField, axisRef
         allXs.push(...xs);
         allYs.push(...ys);
         allCustom.push(...grp);
+        const vals = grp.map((r) => r[yKey]).filter((v) => Number.isFinite(v));
+        if (vals.length) {
+          medians.push({ x: (tickIdx as number) + (zCenter as number), y: medianOf(vals), count: vals.length });
+        }
       }
       traces.push({
         type: traceType,
@@ -1054,15 +1100,11 @@ function buildSwarmTraces({ rows, totalRowCount, xField, yField, zField, axisRef
         name: String(zv),
         legendgroup: String(zv),
         showlegend: showLegend,
-        marker: {
-          size: 5,
-          color: c,
-          opacity: 0.78,
-          line: markerLine,
-        },
+        marker: { size: 5, color: c, opacity: 1 },
         customdata: allCustom,
         hovertemplate: `<b>${axisTitle(xField)}</b>=%{customdata.${xKey}}<br>${axisTitle(yField)}=%{y}<extra>${zv}</extra>`,
       });
+      pushMedianLayer(medians, c, String(zv));
       i++;
     }
   } else {
@@ -1070,6 +1112,7 @@ function buildSwarmTraces({ rows, totalRowCount, xField, yField, zField, axisRef
     const allXs = [];
     const allYs = [];
     const allCustom = [];
+    const medians = [];
     for (const xc of xCats) {
       const grp = groups.get(groupKey(xc, '__all__')) || [];
       const tickIdx = xIndexOf.get(xc);
@@ -1078,6 +1121,8 @@ function buildSwarmTraces({ rows, totalRowCount, xField, yField, zField, axisRef
       allXs.push(...xs);
       allYs.push(...ys);
       allCustom.push(...grp);
+      const vals = grp.map((r) => r[yKey]).filter((v) => Number.isFinite(v));
+      if (vals.length) medians.push({ x: tickIdx, y: medianOf(vals), count: vals.length });
     }
     traces.push({
       type: traceType,
@@ -1088,15 +1133,11 @@ function buildSwarmTraces({ rows, totalRowCount, xField, yField, zField, axisRef
       yaxis: yref,
       name: axisTitle(yField),
       showlegend: false,
-      marker: {
-        size: 5,
-        color: c,
-        opacity: 0.78,
-        line: markerLine,
-      },
+      marker: { size: 5, color: c, opacity: 1 },
       customdata: allCustom,
       hovertemplate: `<b>${axisTitle(xField)}</b>=%{customdata.${xKey}}<br>${axisTitle(yField)}=%{y}<extra></extra>`,
     });
+    pushMedianLayer(medians, c, '');
   }
 
   return traces;
@@ -1415,6 +1456,8 @@ export function buildUnifiedSpec({
             xLayout.categoryorder = 'array';
             xLayout.categoryarray = xCategoryArray;
           }
+          // 蜂群图用档位间实线框线分隔区间，刻度处的竖网格线会与之打架，关掉
+          if (chartType === 'swarm') xLayout.showgrid = false;
         }
 
         // 分面 small-multiples：X 刻度与轴标题只显示在最底部一块；数值 X
@@ -1477,6 +1520,11 @@ export function buildUnifiedSpec({
           xCategoryArray,
         });
         outTraces.push(...cellTraces);
+        // 蜂群图的顶部中位数标注挂在返回数组的 annotations 属性上（builder 契约只回 traces）
+        const cellAnnotations = (cellTraces as any).annotations;
+        if (Array.isArray(cellAnnotations) && cellAnnotations.length) {
+          outLayout.annotations.push(...cellAnnotations);
+        }
       }
     }
 
@@ -1495,6 +1543,35 @@ export function buildUnifiedSpec({
         showarrow: false,
         font: { size: 13, color: '#E7E9ED' },
       });
+    }
+  }
+
+  // 蜂群图统一风格：档位间竖向实线框线贯穿整列子图；档位物理宽度目标约
+  // 10 个点径（marker 5px × 10 = 50px），档数多时加宽整图交由容器横向滚动。
+  // ponytail: width 为空时容器实际像素不可得，1100 是按桌面端典型图表区宽度的保守估计。
+  if (chartType === 'swarm' && !placeholder && cols > 0) {
+    const numericRow = yFields.findIndex((f) => !f.isCategorical);
+    if (numericRow >= 0) {
+      const slotCounts = xFields.map((f) => Math.min(categoriesFor(f).length, X_CATEGORY_TICK_LIMIT));
+      slotCounts.forEach((slotCount, c) => {
+        if (slotCount < 2) return;
+        const frameAxis = `x${axisSuffix(((nZ - 1) * nRows + numericRow) * cols + c + 1)}`;
+        for (let boundary = 0; boundary < slotCount - 1; boundary += 1) {
+          outLayout.shapes = [...(outLayout.shapes || []), {
+            type: 'line',
+            xref: frameAxis,
+            yref: 'paper',
+            x0: boundary + 0.5,
+            x1: boundary + 0.5,
+            y0: 0,
+            y1: 1,
+            line: { color: 'rgba(196,200,208,0.28)', width: 1, dash: 'solid' },
+          }];
+        }
+      });
+      const maxSlots = Math.max(0, ...slotCounts);
+      const swarmMinWidth = cols * maxSlots * 50 + outLayout.margin.l + outLayout.margin.r;
+      if (swarmMinWidth > (width ?? 1100)) outLayout.width = swarmMinWidth;
     }
   }
 
