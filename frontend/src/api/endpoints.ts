@@ -32,13 +32,6 @@ export const listBatchFiles = (batchNo: string, includeSnp = false) =>
     .get(`/files?batch_no=${encodeURIComponent(batchNo)}&include_snp=${includeSnp}`)
     .then((r: AxiosResponse<FileEntry[]>) => r.data);
 
-export const getFileCurve = (batchNo: string, relpath: string, param = 'z_mag_db', port = 'S11') =>
-  api
-    .get('/files/curve', {
-      params: { batch_no: batchNo, relpath, param, port },
-    })
-    .then((r: AxiosResponse<{ relpath: string; port: string; freq_ghz: number[]; values: number[] }>) => r.data);
-
 const httpListMappings = () => api.get('/mappings').then((r: AxiosResponse<Mapping[] | PagedList<Mapping>>) => r.data);
 export const createMapping = (formData: FormData) =>
   api

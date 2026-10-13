@@ -23,7 +23,6 @@ const Mappings     = React.lazy(() => import('./pages/Mappings'));
 const Explore      = React.lazy(() => import('./pages/Explore'));
 const Tasks        = React.lazy(() => import('./pages/Tasks'));
 const TaskDetail   = React.lazy(() => import('./pages/TaskDetail'));
-const Impedance    = React.lazy(() => import('./pages/Impedance'));
 const Process      = React.lazy(() => import('./pages/Process'));
 const Surrogate    = React.lazy(() => import('./pages/Surrogate'));
 
@@ -148,14 +147,12 @@ export default function App() {
                         <Route path="/upload" element={<Navigate to="/" replace />} />
                         <Route path="/tasks" element={<Navigate to="/" replace />} />
                         <Route path="/tasks/:taskId" element={<Navigate to="/" replace />} />
-                        <Route path="/impedance" element={<Navigate to="/" replace />} />
                       </>
                     ) : (
                       <>
                         <Route path="/upload" element={<Upload />} />
                         <Route path="/tasks" element={<Tasks />} />
                         <Route path="/tasks/:taskId" element={<TaskDetail />} />
-                        <Route path="/impedance" element={<Impedance />} />
                       </>
                     )}
                     <Route path="/process" element={<Process />} />

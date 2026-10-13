@@ -6,7 +6,6 @@ import { IS_STATIC } from '../config';
 const NAV = [
   { to: '/', icon: I.dashboard, label: '仪表盘', end: true },
   { to: '/explore', icon: I.scatter, label: '数据分析' },
-  { to: '/impedance', icon: I.curve, label: '阻抗曲线' },
   { to: '/surrogate', icon: I.scatter, label: '代理模型' },
   { to: '/batches', icon: I.batches, label: '批次管理' },
   { to: '/mappings', icon: I.table, label: '对照表' },
@@ -15,8 +14,8 @@ const NAV = [
   { to: '/tasks', icon: I.cpu, label: '任务' },
 ];
 
-// 静态网页版：无上传/任务/阻抗曲线（原文件查看依赖后端）
-const STATIC_HIDDEN = new Set(['/upload', '/tasks', '/impedance']);
+// 静态网页版：无上传/任务（依赖后端）
+const STATIC_HIDDEN = new Set(['/upload', '/tasks']);
 const VISIBLE_NAV = IS_STATIC ? NAV.filter((n) => !STATIC_HIDDEN.has(n.to)) : NAV;
 
 export default function Sidebar() {
