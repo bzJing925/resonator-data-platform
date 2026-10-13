@@ -109,3 +109,7 @@ tmp/
 # 服务器部署包产物
 dist-server-pack/
 /dist-server-pack.zip
+
+# 离线单文件代理模型页的生成产物（vendor 拷贝 + 导出资产）
+surrogate-html/vendor/
+surrogate-html/assets/
