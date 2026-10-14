@@ -184,7 +184,8 @@ def test_real_postgresql_stats_reject_stale_materialized_view(tmp_path):
         db.commit()
         db.execute(
             text("""CREATE MATERIALIZED VIEW mv_batch_stats AS
-            SELECT batch_id, wafer, COUNT(*) AS total_count, COUNT(*) FILTER (WHERE pf='Y') AS pass_count,
+            SELECT batch_id, wafer, COUNT(*) AS total_count,
+            COUNT(*) FILTER (WHERE pf='Y') AS pass_count,
             AVG(fs_ghz) AS avg_fs_ghz,
             percentile_cont(0.5) WITHIN GROUP (ORDER BY fs_ghz) AS median_fs_ghz
             FROM devices GROUP BY batch_id,wafer""")

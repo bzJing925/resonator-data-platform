@@ -42,7 +42,9 @@ def _make_mock_session(mv_result: dict[str, Any] | None = None) -> MagicMock:
 
 def test_get_batch_stats_from_mv() -> None:
     """优先从物化视图读取统计。"""
-    db = _make_mock_session({"pass_count": 8, "matched_total": 10, "fs_mean": 1.85, "fs_median": 1.86})
+    db = _make_mock_session({
+        "pass_count": 8, "matched_total": 10, "fs_mean": 1.85, "fs_median": 1.86,
+    })
     stats = get_batch_stats(db, batch_id=1, total_dev=10)
     assert stats["fs_ghz_mean"] == 1.85
     assert stats["fs_ghz_median"] == 1.86
@@ -51,7 +53,9 @@ def test_get_batch_stats_from_mv() -> None:
 
 def test_get_batch_stats_zero_devices() -> None:
     """device 数为 0 时 pass_rate 为 None。"""
-    db = _make_mock_session({"pass_count": 0, "matched_total": 0, "fs_mean": None, "fs_median": None})
+    db = _make_mock_session({
+        "pass_count": 0, "matched_total": 0, "fs_mean": None, "fs_median": None,
+    })
     stats = get_batch_stats(db, batch_id=1, total_dev=0)
     assert stats["fs_ghz_mean"] is None
     assert stats["pass_rate"] is None
