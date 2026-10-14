@@ -205,16 +205,6 @@ async function startBackend(): Promise<void> {
     ALN_BACKEND_PORT: String(port),
     MPLCONFIGDIR: mplDir,
     KEEP_RAW_ZIP: 'true',
-    // PyInstaller onedir 的运行时代码与模型均在 _internal；不能指向
-    // Resources/backend 顶层，否则桌面版会报告 surrogate_data/checkpoints_surrogate 缺失。
-    ...(isPackaged && !isNativeBundle
-      ? {
-          SURROGATE_DATA_DIR: path.join(
-            process.resourcesPath, 'backend', 'aln-backend', '_internal', 'surrogate_data'),
-          SURROGATE_CKPT_DIR: path.join(
-            process.resourcesPath, 'backend', 'aln-backend', '_internal', 'checkpoints_surrogate'),
-        }
-      : {}),
   };
 
   const backendLogDir = path.join(desktopDir, 'logs');

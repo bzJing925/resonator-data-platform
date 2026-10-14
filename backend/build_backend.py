@@ -119,18 +119,10 @@ def run(onefile: bool = False):
     # psycopg 需要完整打包，否则 PyInstaller 中可能出现编码/bytes 解析错误
     args.extend(["--collect-all", "psycopg", "--hidden-import", "psycopg_binary"])
 
-    # 代理模型推理：torch 体量大但页面实时推理必需（推理链路为懒加载导入，
-    # PyInstaller 静态分析发现不了，必须显式收集）
+    # 器件级稀疏重建（DeviceModal 稀疏谱，app.ml.sparse.reconstructor）走 torch 懒加载，
+    # PyInstaller 静态分析发现不了，必须显式收集
     args.extend(["--collect-all", "torch"])
-    # Zp 校正器（zp_corrector.joblib，ExtraTrees）推理时需要 sklearn/joblib/threadpoolctl
-    args.extend(["--collect-all", "sklearn", "--collect-all", "joblib"])
-    hidden.append("threadpoolctl")
-    hidden.extend([
-        "app.ml.surrogate.infer",
-        "app.ml.surrogate.model",
-        "app.ml.surrogate.baseline",
-        "app.ml.sparse.reconstructor",
-    ])
+    hidden.append("app.ml.sparse.reconstructor")
 
     for imp in hidden:
         args.append(f"--hidden-import={imp}")
@@ -154,27 +146,6 @@ def run(onefile: bool = False):
         else:
             raise FileNotFoundError(f"PyInstaller 未生成 onedir 目录: {src}")
         print(f"后端 onedir 目录已输出: {dst}")
-
-    # 代理模型产物：只并入推理必需文件（b3 joblib 35MB、训练 history 等不带进安装包）
-    surr_data = ROOT / "surrogate_data"
-    surr_ckpt = ROOT / "checkpoints_surrogate"
-    if surr_data.exists() and surr_ckpt.exists():
-        # 冻结后运行时代码以 __file__ 解析（app/api/surrogate.py 的 parents[2]
-        # 在冻结包里指向 aln-backend/_internal/），所以 onedir 必须并到
-        # _internal/ 内 —— 放在 FRONTEND_BUILD 顶层（Resources/backend/）会被
-        # 运行时报"产物缺失"。onefile（已弃用）保持旧行为。
-        dest_base = FRONTEND_BUILD if onefile else FRONTEND_BUILD / "aln-backend" / "_internal"
-        shutil.copytree(surr_data, dest_base / "surrogate_data", dirs_exist_ok=True)
-        (dest_base / "checkpoints_surrogate").mkdir(exist_ok=True)
-        for f in ("stage1.pt", "stage2.pt", "stage2_ft.pt", "stage2_config.json",
-                  "zp_corrector.joblib"):
-            src_f = surr_ckpt / f
-            if src_f.exists():
-                shutil.copy2(src_f, dest_base / "checkpoints_surrogate" / f)
-        print("代理模型产物已并入安装包")
-    else:
-        print("警告：代理模型产物缺失（backend/surrogate_data 或 checkpoints_surrogate），"
-              "安装包内代理模型页将显示未部署")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="打包后端为桌面可执行文件")

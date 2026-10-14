@@ -64,12 +64,6 @@ class Settings(BaseSettings):
     # 数据根目录（容器内挂载点；本地开发可指向 /data3/aln）
     DATA_ROOT: Path = Path("/data3/aln")
 
-    # 代理模型产物（数据集 npz/meta/baseline + 训练 checkpoint）；
-    # 相对路径基于 backend/ 目录解析；缺失时 /api/surrogate/* 降级 available=false
-    SURROGATE_DATA_DIR: Path = Path("surrogate_data")
-    SURROGATE_EVAL_DIR: Path = Path("eval_out")
-    SURROGATE_CKPT_DIR: Path = Path("checkpoints_surrogate")
-
     # 上传限制
     UPLOAD_MAX_GB: int = 100
     UPLOAD_DRAFT_TTL_HOURS: int = 24
