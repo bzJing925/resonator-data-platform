@@ -8,11 +8,12 @@
 
 > 上传 zip（S 参数 Touchstone 文件）→ 自动入库（参数提取）→ 跨批次交互式作图 → 导出
 
-第一阶段只覆盖**谐振器**；滤波器为二期预留。同一套代码有三种交付形态：
+第一阶段只覆盖**谐振器**；滤波器为二期预留。同一套代码有两种交付形态：
 
 1. **内网服务器版**：PostgreSQL + Redis + FastAPI + Celery + Nginx 五容器（Podman Compose）。
 2. **桌面版**：Electron + PyInstaller 打包的后端，SQLite 数据库 + 本地 worker 线程（无 Celery/Redis 依赖），数据落 `~/.aln-data/`。桌面端可与内网服务器做快照/批次双向同步（replication v3）。
-3. **静态网页版**：`build_web.py` 快照导出 + DuckDB-WASM/ONNX 前端直读，推送 gh-pages。
+
+代理模型不在平台内：独立离线 HTML 版由 `surrogate-html/` 一键生成（产物 `~/Desktop/AlN代理模型.html`）；训练链保留在 `backend/app/ml/` 与 ML worktree。
 
 技术栈（全部成熟方案）：
 
@@ -29,12 +30,12 @@
 ```
 backend/
 ├── app/
-│   ├── main.py            FastAPI 入口，21 个路由模块统一挂 /api 前缀
+│   ├── main.py            FastAPI 入口，19 个路由模块统一挂 /api 前缀
 │   ├── config.py          Settings（环境变量）+ AlgorithmConfig（算法常数/魔法数集中处）
 │   ├── db.py              引擎/Session；含 psycopg 兼容补丁
 │   ├── api/               路由层：upload, batches, devices, query, comparison, mappings,
-│   │                      export(_jobs), tasks, system, trash, files, process, surrogate,
-│   │                      sync, web_sync, desktop_sync, replication(_v3) 等
+│   │                      export(_jobs), tasks, system, trash, files, process,
+│   │                      sync, desktop_sync, replication(_v3) 等
 │   ├── core/              算法层【纯函数】：touchstone.py, deembed.py, extract.py,
 │   │                      mapping.py, filename.py, curves.py, process_params.py, sparse_sampler.py
 │   ├── models/            SQLAlchemy ORM：batch, device, mapping, task, process, replica,
@@ -55,12 +56,11 @@ backend/
 frontend/
 ├── src/
 │   ├── pages/             路由级页面（Dashboard, Explore, Batches, BatchDetail, Upload,
-│   │                      Tasks, TaskDetail, Mappings, Process, Surrogate, Settings, Trash…）
+│   │                      Tasks, TaskDetail, Mappings, Process, Settings, Trash…）
 │   ├── components/        共享组件（Sidebar, Charts, FilterPanel, ServerSyncPanel…）
-│   ├── features/analysis/ 分析工作区：worksheet / chart / comparison / report / project / result / model
-│   ├── api/               axios 客户端与端点封装（api/static/ 为静态网页版 DuckDB 数据源）
-│   ├── ml/                浏览器侧 ONNX 代理模型推理（surrogateOnnx.ts）
-│   ├── sync/ export/ tasks/ upload/ lifecycle/ project/  按领域组织的功能模块
+│   ├── features/analysis/ 分析工作区：worksheet / chart / comparison / result / model
+│   ├── api/               axios 客户端与端点封装
+│   ├── sync/ export/ tasks/ upload/ lifecycle/  按领域组织的功能模块
 │   ├── hooks/ contexts/   自定义 hook 与 React Context（无 Redux/Zustand）
 │   └── styles.css         自定义 CSS（不引入大型 UI 组件库）
 ├── electron/              Electron 主进程/preload/自动更新（tsc 编译到 electron-dist/）
@@ -73,6 +73,7 @@ deploy/
 
 docs/                      架构、API、数据库 schema、算法移植、部署、运维、PINN runbook 等
 scripts/                   仓库级脚本（dev-desktop、原生包审计等）
+surrogate-html/            代理模型独立 HTML 生成器（build.py → ~/Desktop/AlN代理模型.html）
 data/                      本地 DATA_ROOT（pgdata/redis/uploads/files/exports/logs/watch，gitignored）
 ```
 
@@ -89,7 +90,7 @@ data/                      本地 DATA_ROOT（pgdata/redis/uploads/files/exports
 
 - 上传链路：`POST /api/uploads` → 建 `batches`/`upload_tasks` 行并入队 Celery → worker 解压 zip、S2P 拆 S1P、`extract_resonator_params` 提参、批量写 `devices` → 进度经 Redis 发布，前端走 SSE `/api/tasks/{id}/stream`。
 - 含去嵌的大 zip 走 `aln.pipeline_batch` 边解压边计算流水线（`PIPELINE_*` 环境变量控制）。
-- 桌面模式（`ALN_DESKTOP_MODE=true`）：同一 FastAPI 应用内嵌本地 worker 线程（`workers/local_queue.py`），SQLite 库在 `~/.aln-data/aln-data.db`，启动时做文件生命周期清理与代理模型预热。
+- 桌面模式（`ALN_DESKTOP_MODE=true`）：同一 FastAPI 应用内嵌本地 worker 线程（`workers/local_queue.py`），SQLite 库在 `~/.aln-data/aln-data.db`，启动时做文件生命周期清理。
 - 服务器与桌面端同步：`api/replication_v3.py` + `services/replica_service.py` / `server_client.py` / `server_proxy.py`，本地缺文件时曲线/下载可透明代理到内网服务器。
 
 ## 四、常用命令
@@ -119,8 +120,8 @@ npm run build          # 产物到 frontend/dist/（同时编译 electron 主进
 # ---- 桌面安装包（前端 build + PyInstaller 后端 + electron-builder）----
 python build.py                    # 输出 frontend/release/（mac dmg-arm64 / win nsis+portable）
 
-# ---- 静态网页版 ----
-backend/.venv/bin/python build_web.py --no-deploy
+# ---- 代理模型独立 HTML（离线单文件，输出到桌面）----
+backend/.venv/bin/python surrogate-html/build.py
 ```
 
 `bootstrap.sh up` 需要已配置的 `.env`（由 `.env.example` 复制）和已构建的 `frontend/dist/`。compose 端口映射：nginx `${NGINX_PORT:-8080}:80`、api `8001:8000`、postgres `15432:5432`、redis `6379:6379`；数据全部挂在 `${DATA_ROOT}`（本地开发推荐 `./data`）。
