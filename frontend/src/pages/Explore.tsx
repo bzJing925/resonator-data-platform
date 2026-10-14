@@ -867,7 +867,7 @@ export default function Explore() {
               )}
               {!error && rows.length === 0 && !loading && (
                 <div style={{ padding: 40, color: 'var(--fg-4)', textAlign: 'center' }}>
-                  请配置参数后点击「运行查询」
+                  请配置参数后点击右上角 ▶ 运行
                 </div>
               )}
               {rows.length > 0 && (
