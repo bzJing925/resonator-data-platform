@@ -6,7 +6,6 @@ import { IS_STATIC } from '../config';
 const NAV = [
   { to: '/', icon: I.dashboard, label: '仪表盘', end: true },
   { to: '/explore', icon: I.scatter, label: '数据分析' },
-  { to: '/surrogate', icon: I.scatter, label: '代理模型' },
   { to: '/batches', icon: I.batches, label: '批次管理' },
   { to: '/mappings', icon: I.table, label: '对照表' },
   { to: '/process', icon: I.wafer, label: '工艺数据' },

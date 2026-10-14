@@ -75,20 +75,3 @@ def test_old_report_is_not_current_model_evidence(tmp_path):
     assert metadata.validation_dataset_digest is None and metadata.validation_status == "unverified"
     assert "NaN" not in metadata.model_dump_json()
 
-
-def test_status_old_fields_and_unavailable_metadata(tmp_path, monkeypatch):
-    from app.api import surrogate
-    from app.config import Settings
-
-    settings = Settings(
-        SURROGATE_DATA_DIR=tmp_path / "missing",
-        SURROGATE_CKPT_DIR=tmp_path,
-        SURROGATE_EVAL_DIR=tmp_path,
-    )
-    monkeypatch.setattr(surrogate, "get_settings", lambda: settings)
-    monkeypatch.setattr(surrogate, "_load_bundle", lambda: None)
-    body = surrogate.status()
-    assert body["available"] is False and body["metadata"]["validation_status"] == "unknown"
-    monkeypatch.setattr(surrogate, "_load_bundle", lambda: {})
-    monkeypatch.setattr(surrogate, "_options", lambda _: {"eg_min": 1, "eg_max": 2, "areas": [700]})
-    assert surrogate.status()["eg_max"] == 2

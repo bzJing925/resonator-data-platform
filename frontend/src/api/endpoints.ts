@@ -1,6 +1,6 @@
 import type { AxiosResponse } from 'axios';
 import api from './client';
-import type { Batch, Device, FieldMeta, FileEntry, Mapping, MappingEntry, PagedList, ProcessStep, ProcessStepData, ServerSyncStatus, StatsResponse, SurrogatePredictResponse, SurrogateStatus, Task } from '../types';
+import type { Batch, Device, FieldMeta, FileEntry, Mapping, MappingEntry, PagedList, ProcessStep, ProcessStepData, ServerSyncStatus, StatsResponse, Task } from '../types';
 import { IS_STATIC } from '../config';
 import * as staticApi from './static';
 
@@ -154,10 +154,6 @@ export const downloadDeviceS1p = (id: number | string) =>
   });
 
 const httpExportCsv = (body: Record<string, unknown>) => api.post('/export/csv', body, { responseType: 'blob' });
-const httpGetSurrogateStatus = () =>
-  api.get('/surrogate/status').then((r: AxiosResponse<SurrogateStatus>) => r.data);
-const httpPredictSurrogate = (params: { eg: number; fl: number; area: number; pf: number; ag: number }) =>
-  api.get('/surrogate/predict', { params }).then((r: AxiosResponse<SurrogatePredictResponse>) => r.data);
 
 /* --------------------------------------------------------------------------
  * IS_STATIC 分发：静态网页版（VITE_STATIC=1）走 DuckDB-WASM/JSON/ONNX 实现，
@@ -181,8 +177,6 @@ const getQueryDistinct = (IS_STATIC ? staticApi.getQueryDistinct : httpGetQueryD
 // Alias commonly used by UI components
 export const distinctValues = (field: string, limit = 500) => getQueryDistinct(field, limit);
 export const exportCsv = (IS_STATIC ? staticApi.exportCsv : httpExportCsv) as unknown as typeof httpExportCsv;
-export const getSurrogateStatus = (IS_STATIC ? staticApi.getSurrogateStatus : httpGetSurrogateStatus) as typeof httpGetSurrogateStatus;
-export const predictSurrogate = (IS_STATIC ? staticApi.predictSurrogate : httpPredictSurrogate) as typeof httpPredictSurrogate;
 
 // Durable full-filter export; static clients must use their local budgeted adapter.
 export function createExportJob(body: { request_key: string; format: 'csv' | 'xlsx'; query_spec: import('../types/platformContracts').QuerySpec; expected_sources: import('../types/platformContracts').SourceRef[] }) {

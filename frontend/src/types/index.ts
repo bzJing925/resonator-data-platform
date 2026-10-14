@@ -213,32 +213,6 @@ export interface ProcessStepData {
   rows: Record<string, string | number | null>[];
 }
 
-export interface SurrogateStatus {
-  metadata?: unknown;
-  available: boolean;
-  reason?: string;
-  eg_min?: number;
-  eg_max?: number;
-  fl_min?: number;
-  fl_max?: number;
-  areas?: number[];
-  /** 仅由校准仿真伪标签支撑、无实测验证的面积档（前端应显示"仿真外推"注释） */
-  sim_only_areas?: number[];
-}
-
-export interface SurrogatePredictResponse {
-  metadata?: unknown;
-  params: Record<string, number>;
-  freq: number[];
-  z: number[];
-  z_base: number[];
-  sample_freq: number[];
-  sample_z: number[];
-  in_grid: boolean;
-  true_curves?: number[][];
-  true_mean?: Record<string, number>;
-}
-
 export interface ServerSyncStatus {
   enabled: boolean;
   configured: boolean;
