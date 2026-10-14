@@ -6,7 +6,6 @@ import { makeComparison } from './comparisonSpec';
 import { loadComparisonCohorts, summarizeCohort } from './comparisonData';
 const post = vi.hoisted(() => vi.fn());
 vi.mock('../../../api/client', () => ({ default: { post } }));
-vi.mock('../../../config', () => ({ IS_STATIC: false }));
 const query = { filters: {}, fields: ['qs'], order_by: null };
 it('snapshot consumes captured edited/excluded rows and keeps their manifest, without API', async () => {
   const dataset = createAnalysisDataset({ id: 'a', name: 'partial', kind: 'query', rows: [{ qs: 10 }, { qs: null }],

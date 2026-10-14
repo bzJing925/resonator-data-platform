@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { IS_STATIC } from '../config';
 import { getServerSyncStatus, pullFromServer } from '../api/endpoints';
 import { getBatchSyncStatus } from './syncStatusAdapter';
 import { getCapabilities } from '../api/capabilities';
@@ -13,17 +12,15 @@ export class SyncCoordinator {
   private owners = 0;
   private timer: ReturnType<typeof setInterval> | null = null;
   snapshot = { status: null as ServerSyncStatus | null, busy: false, conflict: false, errors: [] as string[], result: null as SyncResult | null };
-  constructor(private dependencies: { status: typeof getServerSyncStatus; pull: typeof pullFromServer; capabilities: typeof getCapabilities; batchStatus?: typeof getBatchSyncStatus } = { status: getServerSyncStatus, pull: pullFromServer, capabilities: getCapabilities, batchStatus: getBatchSyncStatus }, private staticMode = IS_STATIC) {}
+  constructor(private dependencies: { status: typeof getServerSyncStatus; pull: typeof pullFromServer; capabilities: typeof getCapabilities; batchStatus?: typeof getBatchSyncStatus } = { status: getServerSyncStatus, pull: pullFromServer, capabilities: getCapabilities, batchStatus: getBatchSyncStatus }) {}
   subscribe(listener: () => void) { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
   private emit() { this.snapshot = { ...this.snapshot }; for (const listener of this.listeners) listener(); }
   async refresh() {
-    if (this.staticMode) return null;
     const epoch = this.epoch;
     try { const status = await this.dependencies.status(); if (epoch === this.epoch) { this.snapshot.status = status; this.emit(); } return status; }
     catch (failure) { if (epoch === this.epoch) { this.snapshot.status = null; this.emit(); } throw failure; }
   }
   run<T>(key: string, action: () => Promise<T>): Promise<T> {
-    if (this.staticMode) return Promise.reject(new Error('静态版不支持同步写操作'));
     if (this.snapshot.conflict) return Promise.reject(new Error('同步冲突；只读刷新可核对状态，不能自动覆盖或重基版本'));
     if (this.pending) return this.pending.key === key ? this.pending.promise : Promise.reject(new Error('同步操作进行中'));
     const epoch = this.epoch; this.snapshot.busy = true; this.emit();
@@ -34,7 +31,7 @@ export class SyncCoordinator {
     this.pending = { key, promise }; return promise;
   }
   synchronize(): Promise<SyncResult | null> {
-    if (this.staticMode || this.snapshot.conflict) return Promise.resolve(null);
+    if (this.snapshot.conflict) return Promise.resolve(null);
     const epoch = this.epoch;
     return this.run('synchronize', async () => {
       const status = await this.refresh();
@@ -60,7 +57,6 @@ export class SyncCoordinator {
     });
   }
   start() {
-    if (this.staticMode) return () => {};
     this.owners++;
     if (this.owners === 1) {
       const tick = () => { void this.synchronize().catch(() => {}); };

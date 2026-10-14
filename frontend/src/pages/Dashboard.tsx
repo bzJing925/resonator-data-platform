@@ -1,6 +1,5 @@
 import React, { memo, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { IS_STATIC } from '../config';
 import AttentionList from '../sync/AttentionList';
 import I from '../components/Icons';
 import { getStats, listTasks } from '../api/endpoints';
@@ -106,7 +105,7 @@ export default function Dashboard() {
   useEffect(() => {
     let alive = true; setError(null); setTaskError('');
     void getStats().then((value) => { if (alive) setStats(value); }).catch((failure) => { if (alive) { setStats(null); setError(String(failure)); } });
-    if (!IS_STATIC) void listTasks().then((value) => { if (alive) setTasks(Array.isArray(value) ? value : (value as { items?: Task[] })?.items ?? null); }).catch((failure) => { if (alive) { setTasks(null); setTaskError(String(failure)); } });
+    void listTasks().then((value) => { if (alive) setTasks(Array.isArray(value) ? value : (value as { items?: Task[] })?.items ?? null); }).catch((failure) => { if (alive) { setTasks(null); setTaskError(String(failure)); } });
     return () => { alive = false; };
   }, [refresh]);
 
@@ -158,9 +157,9 @@ export default function Dashboard() {
               所有数据本地保存，无需离开桌面。
             </p>
             <div style={{ display: 'flex', gap: 10, marginTop: 22 }}>
-              {!IS_STATIC && <Link to="/upload" className="btn primary" style={{ height: 32, padding: '0 16px', textDecoration: 'none' }}>
+              <Link to="/upload" className="btn primary" style={{ height: 32, padding: '0 16px', textDecoration: 'none' }}>
                 <I.upload size={14} /> 上传数据
-              </Link>}
+              </Link>
               <Link to="/explore" className="btn" style={{ height: 32, padding: '0 16px', textDecoration: 'none' }}>
                 探索分析
               </Link>
@@ -196,12 +195,12 @@ export default function Dashboard() {
         <div style={{ background: 'var(--bg-panel)', border: '1px solid var(--border)', borderRadius: 4 }}>
           <div className="panel-head" style={{ borderRadius: '4px 4px 0 0' }}>
             <I.cpu size={12} />
-            <span>{IS_STATIC ? '静态版不执行任务' : '最近任务'}</span>
-            {!IS_STATIC && <Link to="/tasks" className="btn ghost sm" style={{ marginLeft: 'auto', height: 22, textDecoration: 'none' }}>
+            <span>最近任务</span>
+            <Link to="/tasks" className="btn ghost sm" style={{ marginLeft: 'auto', height: 22, textDecoration: 'none' }}>
               查看全部 ›
-            </Link>}
+            </Link>
           </div>
-          {!IS_STATIC && <table className="dtable">
+          <table className="dtable">
             <thead>
               <tr>
                 <th>任务 ID</th>
@@ -260,7 +259,7 @@ export default function Dashboard() {
                 </tr>
               ))}
             </tbody>
-          </table>}
+          </table>
         </div>
       </div>
     </>

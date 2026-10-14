@@ -1,10 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import api from './client';
-import { IS_STATIC } from '../config';
 import type { Capabilities, CapabilityFeatures } from '../types/platformContracts';
-export const STATIC_CAPABILITIES: Capabilities = { schema_version: 1, mode: 'static', database: 'duckdb', protocols: [],
-  features: { upload_precheck: false, processing_reports: false, projects: true, full_export_csv: true, full_export_xlsx: false, batch_compare: true, trash: false, replication_v3: false, remote_delete: false, credential_storage: false },
-  limits: { full_export_max_rows: 200000, full_export_max_bytes: 100 * 1024 * 1024, comparison_max_rows: 200000 } };
+const KNOWN_FEATURES: (keyof CapabilityFeatures)[] = ['upload_precheck', 'processing_reports', 'projects', 'full_export_csv', 'full_export_xlsx', 'batch_compare', 'trash', 'replication_v3', 'remote_delete', 'credential_storage'];
 let current: Capabilities | null = null;
 let inflight: Promise<Capabilities> | null = null;
 const listeners = new Set<() => void>();
@@ -13,12 +10,11 @@ export function parseCapabilities(value: unknown): Capabilities {
   const v = value as Capabilities;
   if (v.schema_version !== 1 || !['server', 'desktop'].includes(v.mode) || !['sqlite', 'postgresql'].includes(v.database)
     || !Array.isArray(v.protocols) || v.protocols.some((p) => typeof p !== 'string') || !v.features || !v.limits
-    || Object.keys(STATIC_CAPABILITIES.features).some((key) => typeof v.features[key] !== 'boolean')) throw new Error('能力协议无效');
+    || KNOWN_FEATURES.some((key) => typeof v.features[key] !== 'boolean')) throw new Error('能力协议无效');
   return structuredClone(v);
 }
-export function readCapabilities() { return IS_STATIC ? STATIC_CAPABILITIES : current; }
+export function readCapabilities() { return current; }
 export async function getCapabilities(): Promise<Capabilities> {
-  if (IS_STATIC) return STATIC_CAPABILITIES;
   if (inflight) return inflight;
   inflight = api.get('/capabilities').then((response) => {
     current = parseCapabilities(response.data); return current;
@@ -33,7 +29,6 @@ export function useCapabilities() {
 }
 export function assertWriteCapability(caps: Capabilities | null, feature?: keyof CapabilityFeatures) {
   if (!caps) throw new Error('能力未知，请在设置中重试；写操作未发送');
-  if (caps.mode === 'static') throw new Error('静态快照版不支持服务器写操作');
   if (feature && !caps.features[feature]) throw new Error(`当前环境能力不可用：${feature}`);
 }
 export function writeFeature(url: string): keyof CapabilityFeatures | undefined {
@@ -44,6 +39,6 @@ export function writeFeature(url: string): keyof CapabilityFeatures | undefined 
   if (/^\/tasks/.test(url)) return 'processing_reports';
   if (/^\/export\/jobs/.test(url)) return 'full_export_csv';
   if (/^\/trash|\/restore$/.test(url)) return 'trash';
-  if (/^\/(desktop-sync|web-sync|sync)/.test(url)) return 'replication_v3';
+  if (/^\/(desktop-sync|sync)/.test(url)) return 'replication_v3';
   return undefined;
 }

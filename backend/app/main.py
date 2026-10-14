@@ -45,7 +45,6 @@ from app.api import (
     tasks,
     trash,
     upload,
-    web_sync,
 )
 from app.config import get_settings
 from app.services.artifact_readers import ArtifactReaderMiddleware
@@ -204,7 +203,6 @@ app.include_router(files.router, prefix="/api")
 app.include_router(export_jobs.router, prefix="/api")
 app.include_router(export.router, prefix="/api")
 app.include_router(process.router, prefix="/api")
-app.include_router(web_sync.router, prefix="/api")
 app.include_router(sync.router, prefix="/api")
 app.include_router(replication.router, prefix="/api")
 app.include_router(replication_v3.router, prefix="/api")

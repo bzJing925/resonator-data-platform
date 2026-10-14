@@ -156,7 +156,7 @@ def confirm_readback(engine, operation_id, packet):
 def statuses(db, batch):
     reference = batch_source_ref(db, batch)
     result = {}
-    for target in ("server", "web"):
+    for target in ("server",):
         ops = (
             []
             if reference is None
@@ -229,70 +229,6 @@ def merged_table_packet(base, table):
             }
         )
     return result
-
-
-def refresh_web(db, batch):
-    """Read published data only; this function never writes to the web repository."""
-    from app.services.web_sync_service import fetch_web_snapshot
-
-    operation = db.scalar(
-        select(SyncOperation)
-        .where(
-            SyncOperation.origin_id == batch.origin_id,
-            SyncOperation.source_batch_id == batch.source_batch_id,
-            SyncOperation.target == "web",
-            SyncOperation.state.in_(("pending", "unknown", "syncing")),
-        )
-        .order_by(SyncOperation.created_at.desc())
-        .limit(1)
-    )
-    if operation is None:
-        return
-    operation_id, engine = operation.id, db.bind
-    expected = operation.expected
-    db.rollback()
-    try:
-        batches, _, devices = fetch_web_snapshot()
-        reference = expected["source_ref"]
-        matches = [
-            b
-            for b in batches
-            if b.get("origin_id") == reference["origin_id"]
-            and b.get("source_batch_id") == reference["source_batch_id"]
-        ]
-        if not matches:
-            transition(engine, operation_id, "pending", "PUBLICATION_PENDING", retryable=True)
-            return
-        if len(matches) != 1:
-            raise ValueError("ambiguous published source")
-        found = matches[0]
-        revision = found.get("source_revision")
-        if revision is None:
-            transition(engine, operation_id, "unknown", "PUBLICATION_UNVERIFIED", retryable=True)
-            return
-        if revision < reference["source_revision"]:
-            transition(engine, operation_id, "pending", "PUBLICATION_PENDING", retryable=True)
-            return
-        rows = [
-            row
-            for row in devices
-            if (
-                row.get("batch_id") == found.get("id")
-                if found.get("id") is not None
-                else row.get("batch_no") == found["batch_no"]
-            )
-        ]
-        confirm_readback(
-            engine,
-            operation_id,
-            {
-                "batch": found,
-                "devices": rows,
-                "source_ref": {**reference, "source_revision": revision},
-            },
-        )
-    except Exception:
-        transition(engine, operation_id, "unknown", "PUBLICATION_UNAVAILABLE", retryable=True)
 
 
 def expect_content(engine, operation_id, packet):

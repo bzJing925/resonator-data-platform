@@ -3,7 +3,6 @@ import type { AnalysisDataset } from '../model/dataset';
 import { parseManifest } from '../model/specCodec';
 import { unverifiedManifest } from '../result/resultManifest';
 import { attachSourceRefs, sourceTuple } from '../model/provenance';
-import { IS_STATIC } from '../../../config';
 import api from '../../../api/client';
 import { computeMetricSummary, computeMeanDifferences, metricGroups, summarizeQuality, type Row } from './comparisonStatistics';
 export interface ComparisonCohort {
@@ -17,7 +16,7 @@ function summaries(rows: Row[], metrics: string[]) {
 export function summarizeCohort(rows: Row[], manifest: ResultManifest, comparison: AnalysisComparison, rule: QualityRuleV1 | null): ComparisonCohort {
   return { rows, manifest, statistics: summaries(rows, comparison.metrics), groups: metricGroups(rows, comparison.metrics, comparison.group_fields), ...summarizeQuality(rows, rule) };
 }
-export function comparisonResult(a: ComparisonCohort, b: ComparisonCohort, comparison: AnalysisComparison, units: Record<string, string>) {
+function comparisonResult(a: ComparisonCohort, b: ComparisonCohort, comparison: AnalysisComparison, units: Record<string, string>) {
   return { schema_version: 1 as const, cohorts: { a, b }, units,
     deltas: computeMeanDifferences(a.rows, b.rows, comparison.metrics, comparison.group_fields) };
 }
@@ -41,7 +40,6 @@ export async function loadComparisonCohorts(comparison: AnalysisComparison, rule
     });
     return comparisonResult(cohorts[0], cohorts[1], comparison, units);
   }
-  if (IS_STATIC) return (await import('../../../api/static/comparison')).loadStaticComparison(comparison, rule, units);
   const response: unknown = (await api.post('/analysis/compare', { comparison, quality_rule: rule })).data;
   const result = object(response), cohortData = object(result.cohorts), serverUnits = object(result.units);
   if (result.schema_version !== 1) throw new Error('比较协议版本不支持');

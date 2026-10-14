@@ -248,7 +248,7 @@ def create_table_batch(
 ) -> UploadTask:
     """导入已提取参数表格，不经过 snp 解压/计算流水线。
 
-    表格列契约与分享包上传器完全一致，故桌面端和网页版会看到同一套字段。
+    表格列契约与分享包格式一致（app/share_pack.py）。
     """
     mapping = db.get(Mapping, mapping_id)
     if mapping is None:

@@ -132,15 +132,15 @@ export interface CapabilityFeatures {
 
 export interface Capabilities {
   schema_version: 1;
-  mode: 'server' | 'desktop' | 'static';
-  database: 'sqlite' | 'postgresql' | 'duckdb';
+  mode: 'server' | 'desktop';
+  database: 'sqlite' | 'postgresql';
   protocols: string[];
   features: CapabilityFeatures;
   limits: Record<string, number | string | boolean | null>;
 }
 
 export interface SyncStatus {
-  target: 'server' | 'web';
+  target: 'server';
   state: 'local_only' | 'pending' | 'syncing' | 'confirmed' | 'conflict' | 'failed' | 'unknown';
   confirmed_revision: number | null;
   pending_revision: number | null;

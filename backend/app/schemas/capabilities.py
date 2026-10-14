@@ -23,16 +23,14 @@ class CapabilityFeatures(BaseModel):
 
 class Capabilities(BaseModel):
     schema_version: Literal[1]
-    mode: Literal["server", "desktop", "static"]
-    database: Literal["sqlite", "postgresql", "duckdb"]
+    mode: Literal["server", "desktop"]
+    database: Literal["sqlite", "postgresql"]
     protocols: list[str]
     features: CapabilityFeatures
     limits: dict[str, int | float | str | bool | None]
 
     @model_validator(mode="after")
     def validate_runtime_database(self) -> Capabilities:
-        if self.mode == "static" and self.database != "duckdb":
-            raise ValueError("static mode must use duckdb")
         if self.mode == "desktop" and self.database != "sqlite":
             raise ValueError("desktop mode must use sqlite")
         if self.mode == "server" and self.database not in {"sqlite", "postgresql"}:
@@ -41,7 +39,7 @@ class Capabilities(BaseModel):
 
 
 class SyncStatus(BaseModel):
-    target: Literal["server", "web"]
+    target: Literal["server"]
     state: Literal["local_only", "pending", "syncing", "confirmed", "conflict", "failed", "unknown"]
     confirmed_revision: int | None = Field(ge=0)
     pending_revision: int | None = Field(ge=0)

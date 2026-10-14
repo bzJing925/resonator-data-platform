@@ -25,9 +25,8 @@ def capabilities(db: DbSession):
 @router.get("/batches/{batch_no}/sync-status")
 def sync_status(batch_no: str, db: DbSession):
     from app.services.batch_scope import get_active_batch
-    from app.services.sync_status import refresh_web, statuses
+    from app.services.sync_status import statuses
     batch = get_active_batch(db, batch_no)
-    refresh_web(db, batch)
     return statuses(db, batch)
 
 

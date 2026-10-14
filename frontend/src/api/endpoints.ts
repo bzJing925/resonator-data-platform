@@ -1,8 +1,6 @@
 import type { AxiosResponse } from 'axios';
 import api from './client';
 import type { Batch, Device, FieldMeta, FileEntry, Mapping, MappingEntry, PagedList, ProcessStep, ProcessStepData, ServerSyncStatus, StatsResponse, Task } from '../types';
-import { IS_STATIC } from '../config';
-import * as staticApi from './static';
 
 const httpGetHealth = () => api.get('/health').then((r) => r.data);
 const httpGetStats = () => api.get('/stats').then((r: AxiosResponse<StatsResponse>) => r.data);
@@ -52,16 +50,6 @@ export const uploadBatch = (formData: FormData, onProgress?: (e: { loaded: numbe
       onUploadProgress: onProgress,
     })
     .then((r) => r.data);
-
-export const pullWebData = () => api.post('/web-sync/pull', undefined, { timeout: 0 }).then((r) => r.data as {
-  mappings_added: number; batches_added: number; devices_added: number;
-    batches_updated?: number; batches_deleted?: number; tables_pushed?: number; errors?: string[];
-});
-
-export const pushBatchToWeb = (batchNo: string, token: string) =>
-  api.post(`/web-sync/push/${encodeURIComponent(batchNo)}`, { token }, { timeout: 0 }).then((r) => r.data as {
-    batch_no: string; device_count: number; commit_url: string; message: string;
-  });
 
 export const getServerSyncStatus = () =>
   api.get('/desktop-sync/status').then((r: AxiosResponse<ServerSyncStatus>) => r.data);
@@ -155,40 +143,32 @@ export const downloadDeviceS1p = (id: number | string) =>
 
 const httpExportCsv = (body: Record<string, unknown>) => api.post('/export/csv', body, { responseType: 'blob' });
 
-/* --------------------------------------------------------------------------
- * IS_STATIC 分发：静态网页版（VITE_STATIC=1）走 DuckDB-WASM/JSON/ONNX 实现，
- * 其余保持 HTTP。写操作与文件/曲线类接口在静态模式下不可达（UI 已裁剪），故不分发。
- * ------------------------------------------------------------------------ */
-
-export const getHealth = IS_STATIC ? staticApi.getHealth : httpGetHealth;
-export const getStats = IS_STATIC ? staticApi.getStats : httpGetStats;
-export const listTasks = (IS_STATIC ? staticApi.listTasks : httpListTasks) as typeof httpListTasks;
-export const listProcessSteps = (IS_STATIC ? staticApi.listProcessSteps : httpListProcessSteps) as typeof httpListProcessSteps;
-export const getProcessStep = (IS_STATIC ? staticApi.getProcessStep : httpGetProcessStep) as typeof httpGetProcessStep;
-export const listBatches = (IS_STATIC ? staticApi.listBatches : httpListBatches) as typeof httpListBatches;
-export const getBatch = (IS_STATIC ? staticApi.getBatch : httpGetBatch) as typeof httpGetBatch;
-export const listBatchDevices = (IS_STATIC ? staticApi.listBatchDevices : httpListBatchDevices) as typeof httpListBatchDevices;
-export const listMappings = (IS_STATIC ? staticApi.listMappings : httpListMappings) as typeof httpListMappings;
-export const listMappingEntries = (IS_STATIC ? staticApi.listMappingEntries : httpListMappingEntries) as typeof httpListMappingEntries;
-export const queryDevices = (IS_STATIC ? staticApi.queryDevices : httpQueryDevices) as typeof httpQueryDevices;
-export const queryAggregate = (IS_STATIC ? staticApi.queryAggregate : httpQueryAggregate) as typeof httpQueryAggregate;
-export const getQueryFields = (IS_STATIC ? staticApi.getQueryFields : httpGetQueryFields) as typeof httpGetQueryFields;
-const getQueryDistinct = (IS_STATIC ? staticApi.getQueryDistinct : httpGetQueryDistinct) as typeof httpGetQueryDistinct;
+export const getHealth = httpGetHealth;
+export const getStats = httpGetStats;
+export const listTasks = httpListTasks;
+export const listProcessSteps = httpListProcessSteps;
+export const getProcessStep = httpGetProcessStep;
+export const listBatches = httpListBatches;
+export const getBatch = httpGetBatch;
+export const listBatchDevices = httpListBatchDevices;
+export const listMappings = httpListMappings;
+export const listMappingEntries = httpListMappingEntries;
+export const queryDevices = httpQueryDevices;
+export const queryAggregate = httpQueryAggregate;
+export const getQueryFields = httpGetQueryFields;
+const getQueryDistinct = httpGetQueryDistinct;
 // Alias commonly used by UI components
 export const distinctValues = (field: string, limit = 500) => getQueryDistinct(field, limit);
-export const exportCsv = (IS_STATIC ? staticApi.exportCsv : httpExportCsv) as unknown as typeof httpExportCsv;
+export const exportCsv = httpExportCsv;
 
-// Durable full-filter export; static clients must use their local budgeted adapter.
+// Durable full-filter export.
 export function createExportJob(body: { request_key: string; format: 'csv' | 'xlsx'; query_spec: import('../types/platformContracts').QuerySpec; expected_sources: import('../types/platformContracts').SourceRef[] }) {
-  if (IS_STATIC) return Promise.reject(new Error('静态页面不能创建服务器导出任务'));
   return api.post('/export/jobs', body).then((r) => r.data);
 }
 export function getExportJob(id: string) {
-  if (IS_STATIC) return Promise.reject(new Error('静态页面不能读取服务器导出任务'));
   return api.get(`/export/jobs/${encodeURIComponent(id)}`).then((r) => r.data);
 }
 export function inspectComparisonConditions(body: { comparison: import('../types/platformContracts').AnalysisComparison; quality_rule: import('../types/platformContracts').QualityRuleV1 | null }) {
-  if (IS_STATIC) return import('./static/comparison').then((module) => module.inspectStaticConditions(body.comparison, body.quality_rule));
   return api.post('/analysis/compare/conditions', body).then((r) => r.data);
 }
 

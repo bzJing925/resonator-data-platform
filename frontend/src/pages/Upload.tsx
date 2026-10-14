@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import UploadGroup from '../upload/UploadGroup';
 import I from '../components/Icons';
-import { listMappings, pullWebData } from '../api/endpoints';
+import { listMappings } from '../api/endpoints';
 import { usePageState } from '../contexts/PageStateContext';
 import type { Mapping } from '../types';
 
@@ -40,8 +40,6 @@ export default function Upload() {
   const [dragOver, setDragOver] = useState<boolean>(false);
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [webSyncMessage, setWebSyncMessage] = useState<string | null>(null);
-  const [pullingWeb, setPullingWeb] = useState<boolean>(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   const refreshMappings = useCallback(() => {
@@ -105,22 +103,7 @@ export default function Upload() {
     setFiles([]);
     setSubmitError(null);
     setDragOver(false);
-    setWebSyncMessage(null);
     if (inputRef.current) inputRef.current.value = '';
-  };
-
-  const pullFromWeb = async () => {
-    setPullingWeb(true);
-    setWebSyncMessage('正在下载网页版已发布的数据和对照表…');
-    try {
-      const result = await pullWebData();
-      setWebSyncMessage(`已同步：新增 ${result.batches_added} 个批次、${result.devices_added} 个数据点、${result.mappings_added} 份对照表。`);
-      refreshMappings();
-    } catch (error: any) {
-      setWebSyncMessage(`从网页版同步失败：${error?.response?.data?.detail || error.message}`);
-    } finally {
-      setPullingWeb(false);
-    }
   };
 
   const changeUploadKind = (kind: 'raw' | 'table') => {
@@ -144,9 +127,6 @@ export default function Upload() {
             <I.table size={13} /> 先去添加对照表
           </Link>
         )}
-        <button className="btn" onClick={pullFromWeb} disabled={pullingWeb || submitting}>
-          <I.download size={13} /> {pullingWeb ? '同步中…' : '从网页版同步'}
-        </button>
       </div>
 
       <div
@@ -310,7 +290,6 @@ export default function Upload() {
                 disabled={submitting} />
               <small>关联后按原始文件名、目录和端口更新指标，保留服务器原始文件与曲线。</small>
             </div>}
-            <Link to="/settings?target=web">网页发布请到设置中人工确认</Link>
             <div className="field">
               <div className="field-label">
                 <span>频率范围 (GHz)</span>

@@ -88,11 +88,6 @@ Thumbs.db
 **/.playwright-mcp/
 backend/eval_out_ft/
 
-# 静态网页版
-.web-deploy/
-frontend/public/webdata/
-.web-data/
-
 # 本地研究数据与工具（不入库：含客户数据/未发表论文/仿真中间产物）
 .claudian/
 .obsidian/

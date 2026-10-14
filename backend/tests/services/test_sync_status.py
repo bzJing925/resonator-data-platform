@@ -1,4 +1,4 @@
-"""Receipt rules on two real databases, independent sessions and published web reads."""
+"""Receipt rules on two real databases, independent sessions."""
 
 import copy
 from uuid import uuid4
@@ -69,32 +69,6 @@ def test_false_readback_never_confirmed(source, mutation):
         row = read.get(SyncOperation, job)
         assert row.state in {"unknown", "conflict"}
         assert row.receipt is None and row.last_success_at is None
-
-
-def test_web_delayed_network_and_actual_publication(source, monkeypatch):
-    db, batch, packet, ref = source
-    from app.services import web_sync_service as web
-
-    monkeypatch.setattr(web, "_request_json", lambda *a, **k: {"commit": {"html_url": "commit"}})
-    answer = web.push_batch_to_web(db, batch.batch_no, "secret-session-token")
-    assert answer["sync_state"] == "pending"
-    monkeypatch.setattr(web, "fetch_web_snapshot", lambda: ([], [], []))
-    svc.refresh_web(db, batch)
-    assert svc.statuses(db, batch)["web"]["state"] == "pending"
-
-    def disconnected():
-        raise OSError("secret-session-token")
-
-    monkeypatch.setattr(web, "fetch_web_snapshot", disconnected)
-    svc.refresh_web(db, batch)
-    assert svc.statuses(db, batch)["web"]["state"] == "unknown"
-    published = {**packet["batch"], "source_revision": ref["source_revision"]}
-    rows = [{**row, "batch_no": published["batch_no"]} for row in packet["devices"]]
-    monkeypatch.setattr(web, "fetch_web_snapshot", lambda: ([published], [], rows))
-    svc.refresh_web(db, batch)
-    assert svc.statuses(db, batch)["web"]["state"] == "confirmed"
-    operations = db.scalars(select(SyncOperation)).all()
-    assert "secret-session-token" not in str([op.__dict__ for op in operations])
 
 
 def test_conflict_no_rebase_and_old_synced_at_is_unknown(source):

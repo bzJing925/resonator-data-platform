@@ -1,4 +1,3 @@
-import { IS_STATIC } from '../config';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { prepareUploadDraft, getUploadGroup, commitUploadDraft, recheckUploadDraft, getTask, getProcessingReport } from '../api/endpoints';
 import { useUploadProgress } from '../contexts/UploadProgressContext';
@@ -16,7 +15,7 @@ export default function useUploadDrafts(files: File[], options: UploadOptions, o
     try { localStorage.setItem(preference + groupId, JSON.stringify(next.map(({ key, name, size, modified, requestKey, draftId, optionsKey }) => ({ key, name, size, modified, requestKey, draftId, optionsKey })))); localStorage.setItem('aln_upload_last_group', groupId); } catch { if (alive.current) setError('请求标识无法本地保存；当前会话可继续，刷新后请使用原会话恢复提交'); }
   }, [groupId]);
   const refresh = useCallback(async () => {
-    if (IS_STATIC || reading.current || !alive.current) return; reading.current = true;
+    if (reading.current || !alive.current) return; reading.current = true;
     try {
       const group = await getUploadGroup(groupId);
       if (!alive.current) return;

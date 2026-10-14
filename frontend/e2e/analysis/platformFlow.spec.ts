@@ -1,21 +1,16 @@
 import { expect, test, type Page } from '@playwright/test';
-import { spawn } from 'node:child_process';
 import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { launchHarness } from './electron';
-for (const target of ['browser', 'static', 'electron'] as const) test(`${target}: actual query/edit/complete comparison/export/capabilities`, async ({ page }, info) => {
+for (const target of ['browser', 'electron'] as const) test(`${target}: actual query/edit/complete comparison/export/capabilities`, async ({ page }, info) => {
   test.setTimeout(90000);
   const root = await mkdtemp(join(tmpdir(), 'aln-platform-flow-'));
-  let preview: ReturnType<typeof spawn> | undefined, app: Awaited<ReturnType<typeof launchHarness>> | undefined;
+  let app: Awaited<ReturnType<typeof launchHarness>> | undefined;
   const requests: string[] = [];
   try {
-    if (target === 'static') {
-      preview = spawn(process.execPath, ['node_modules/vite/bin/vite.js', 'preview', '--host', '127.0.0.1', '--port', '5174', '--strictPort'], { cwd: process.cwd(), stdio: 'ignore' });
-      await expect.poll(async () => { try { return (await fetch('http://127.0.0.1:5174/e2e/analysis/platform-flow.html')).status; } catch { return 0; } }).toBe(200);
-    }
     if (target === 'electron') { app = await launchHarness('platform-flow.html'); page = app.page; }
-    else await page.goto(`http://127.0.0.1:${target === 'static' ? 5174 : 5173}/e2e/analysis/platform-flow.html`);
+    else await page.goto('http://127.0.0.1:5173/e2e/analysis/platform-flow.html');
     page.on('pageerror', (error) => console.log('FLOW_PAGE_ERROR', error.message));
     page.on('request', (r) => { if (new URL(r.url()).pathname.startsWith('/api/')) requests.push(r.url()); });
     await page.waitForFunction(() => 'platformFlow' in window);
@@ -28,8 +23,8 @@ for (const target of ['browser', 'static', 'electron'] as const) test(`${target}
     expect(compared.result.cohorts.a.manifest.truncated).toBe(false); expect(compared.result.cohorts.b.manifest.truncated).toBe(false);
     expect(compared.result.cohorts.a.rows.length).toBeGreaterThan(0); expect(compared.result.cohorts.b.rows.length).toBeGreaterThan(0);
     const caps = await page.evaluate(() => (window as any).platformFlow.getCapabilities());
-    expect(caps).toMatchObject({ mode: target === 'static' ? 'static' : 'server', database: target === 'static' ? 'duckdb' : 'sqlite' });
-    if (target !== 'static') expect(await page.evaluate(() => (window as any).platformFlow.status())).toHaveProperty('server');
+    expect(caps).toMatchObject({ mode: 'server', database: 'sqlite' });
+    expect(await page.evaluate(() => (window as any).platformFlow.status())).toHaveProperty('server');
     async function download(p: Page, button: string, output: string) {
       if (app) {
         await app.electronApp.evaluate(({ BrowserWindow }, file) => BrowserWindow.getAllWindows()[0].webContents.session.once('will-download', (_event, item) => item.setSavePath(file)), output);
@@ -39,10 +34,9 @@ for (const target of ['browser', 'static', 'electron'] as const) test(`${target}
     }
     await page.getByRole('button', { name: '完整导出', exact: true }).click();
     await page.getByLabel('全部筛选结果（固定版本源数据）').check(); await page.getByRole('button', { name: '创建完整源导出' }).click();
-    await download(page, target === 'static' ? '下载完整 CSV' : '下载 data.csv', join(root, 'complete.csv'));
+    await download(page, '下载 data.csv', join(root, 'complete.csv'));
     expect(await readFile(join(root, 'complete.csv'), 'utf8')).not.toContain('999');
     await page.getByRole('button', { name: '关闭', exact: true }).click();
     await info.attach(`${target}-flow.json`, { body: JSON.stringify({ caps, query: queried.manifest, comparison: compared.comparison, apiRequests: requests.length }), contentType: 'application/json' });
-    if (target === 'static') expect(requests).toEqual([]);
-  } finally { if (app) await app.electronApp.close(); preview?.kill('SIGTERM'); }
+  } finally { if (app) await app.electronApp.close(); }
 });

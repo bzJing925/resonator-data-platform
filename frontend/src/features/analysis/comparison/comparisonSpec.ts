@@ -3,11 +3,11 @@ import { validateSourceRefs, sourceTuple } from '../model/provenance';
 import { parseQuerySpec } from '../model/specCodec';
 export const COMPARISON_METRICS = ['fs_ghz', 'fp_ghz', 'qs', 'qp', 'k2eff_pct', 'zs_ohm', 'zp_ohm'];
 export type Shape = [number | string | null, number | string | null, number | string | null, string | null];
-export interface ProcessingConditions {
+interface ProcessingConditions {
   frequency_ghz: [number, number]; deembedded: boolean; deembed_method: string; process_type: string;
   config_digest: string; algorithm_digest: string; mapping_digest: string;
 }
-export interface ConditionEndpoint {
+interface ConditionEndpoint {
   source: SourceRef; query_spec: QuerySpec; conditions: ProcessingConditions | null;
   structures: Shape[]; matched_total: number | null; issues: { code: string; message: string }[];
 }
@@ -28,7 +28,7 @@ function conditions(value: unknown): ProcessingConditions | null {
     deembed_method: text(v.deembed_method), process_type: text(v.process_type),
     config_digest: digest('config_digest'), algorithm_digest: digest('algorithm_digest'), mapping_digest: digest('mapping_digest') };
 }
-export function parseConditionEndpoint(value: unknown): ConditionEndpoint {
+function parseConditionEndpoint(value: unknown): ConditionEndpoint {
   const v = object(value);
   if (!validateSourceRefs(v.source) || v.source.source_device_key !== null || v.source.source_revision === null) throw new Error('条件来源版本未知');
   if (!Array.isArray(v.structures) || !Array.isArray(v.issues)) throw new Error('结构或问题列表无效');

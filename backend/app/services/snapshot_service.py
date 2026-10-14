@@ -1,7 +1,7 @@
 """批次快照的导出与导入（传输无关）。
 
-服务器角色用 build_snapshot 导出差集快照；桌面/网页角色用
-import_snapshot 增量导入。GitHub 网页版同步与内网服务器同步共用本模块。
+服务器角色用 build_snapshot 导出差集快照；桌面角色用
+import_snapshot 增量导入。桌面端与内网服务器同步共用本模块。
 """
 
 from __future__ import annotations
