@@ -33,14 +33,21 @@ export default function TaskActions({ task, onUpdate }: { task: Task; onUpdate?:
     {!task.run_id && <p>旧任务缺少运行证据，不提供新版安全停止或失败项重试。</p>}
     {options?.retry_of_task_id != null && <p>重试来源：<Link to={`/tasks/${options.retry_of_task_id}`}>任务 {options.retry_of_task_id}</Link></p>}
     {terminalTask(task.status) && task.run_id && <>
-      <p>失败项重试 · 原任务来源版本 {options?.expected_source_revision ?? '未知'}。旧验收报告保持可查。</p>
-      {options?.items.map((item) => <label key={item.id} style={{ display: 'block' }}><input type="checkbox" checked={selected.includes(item.id)} disabled={busy || blocked || !!accepted} onChange={(event) => { key.current = null; setSelected((old) => event.target.checked ? [...old, item.id] : old.filter((id) => id !== item.id)); }} />{item.source_member} · {item.port ?? '无端口'} · {item.status} · {item.error_code ?? ''}</label>)}
-      {options?.next_offset != null && <button disabled={busy || blocked} onClick={() => action(async () => { const next = await getRetryOptions(task.id, options.next_offset!); if (next.run_id !== options.run_id || next.expected_source_revision !== options.expected_source_revision) throw new Error('重试证据已变化，请重新核对'); if (alive.current) setOptions({ ...next, items: [...options.items, ...next.items] }); })}>加载更多失败项</button>}
-      <button disabled={busy || blocked || !!accepted || !options?.items.length || options.next_offset != null} onClick={() => { key.current = null; setSelected(options!.items.map((item) => item.id)); }}>选择全部失败项</button>
-      <button className="btn" disabled={busy || blocked || !!accepted || !selected.length || options?.expected_source_revision == null || !capabilities?.features.processing_reports} onClick={() => action(async () => {
-        key.current ??= crypto.randomUUID(); const result = await retryTask(task.id, { request_key: key.current, mode: 'failed', item_ids: selected, expected_source_revision: options!.expected_source_revision! });
+      <p>失败 {options?.total ?? options?.items.length ?? 0} 项 · 原任务来源版本 {options?.expected_source_revision ?? '未知'}。旧验收报告保持可查。</p>
+      <button className="btn" disabled={busy || blocked || !!accepted || !(options?.total ?? 0) || options?.expected_source_revision == null || !capabilities?.features.processing_reports} onClick={() => action(async () => {
+        key.current ??= crypto.randomUUID(); const result = await retryTask(task.id, { request_key: key.current, mode: 'failed', item_ids: null, expected_source_revision: options!.expected_source_revision! });
         if (alive.current) setAccepted(result.task_id);
-      })}>重试所选失败项</button>
+      })}>重试全部失败项</button>
+      {!!options?.items.length && <details>
+        <summary>按项选择重试（已加载 {options.items.length} 项）</summary>
+        {options.items.map((item) => <label key={item.id} style={{ display: 'block' }}><input type="checkbox" checked={selected.includes(item.id)} disabled={busy || blocked || !!accepted} onChange={(event) => { key.current = null; setSelected((old) => event.target.checked ? [...old, item.id] : old.filter((id) => id !== item.id)); }} />{item.source_member} · {item.port ?? '无端口'} · {item.status} · {item.error_code ?? ''}</label>)}
+        {options.next_offset != null && <button disabled={busy || blocked} onClick={() => action(async () => { const next = await getRetryOptions(task.id, options.next_offset!); if (next.run_id !== options.run_id || next.expected_source_revision !== options.expected_source_revision) throw new Error('重试证据已变化，请重新核对'); if (alive.current) setOptions({ ...next, items: [...options.items, ...next.items] }); })}>加载更多失败项</button>}
+        <button disabled={busy || blocked || !!accepted || !options?.items.length || options.next_offset != null} onClick={() => { key.current = null; setSelected(options!.items.map((item) => item.id)); }}>选择全部失败项</button>
+        <button className="btn" disabled={busy || blocked || !!accepted || !selected.length || options?.expected_source_revision == null || !capabilities?.features.processing_reports} onClick={() => action(async () => {
+          key.current ??= crypto.randomUUID(); const result = await retryTask(task.id, { request_key: key.current, mode: 'failed', item_ids: selected, expected_source_revision: options!.expected_source_revision! });
+          if (alive.current) setAccepted(result.task_id);
+        })}>重试所选失败项</button>
+      </details>}
     </>}
     {blocked && <p role="alert">输入或版本冲突；已保留选项。请重新核对或从批次入口发起整批新处理，不自动更换版本。</p>}
     {accepted && <p><Link to={`/tasks/${accepted}`}>查看新重试任务 {accepted}</Link>；原任务与报告仍保留。</p>}

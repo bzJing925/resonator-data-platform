@@ -12,7 +12,7 @@ const item = { id: 'failed-one', unit_kind: 'device', source_member: 'dut/a.s2p'
 beforeEach(() => {
   for (const fn of Object.values(api)) fn.mockReset();
   vi.spyOn(window, 'confirm').mockReturnValue(true);
-  api.options.mockResolvedValue({ task_id: 1, run_id: 'run', expected_source_revision: 7, retry_of_task_id: 9, items: [item], next_offset: null });
+  api.options.mockResolvedValue({ task_id: 1, run_id: 'run', expected_source_revision: 7, retry_of_task_id: 9, total: 1, items: [item], next_offset: null });
   api.task.mockResolvedValue({ id: 1, run_id: 'run', status: 'cancel_requested', error_msg: 'STOP_NOT_CONFIRMED' });
   api.cancel.mockResolvedValue({ id: 1, run_id: 'run', status: 'cancel_requested' });
   api.retry.mockResolvedValue({ task_id: '2', run_id: 'new', status: 'pending' });
@@ -28,15 +28,25 @@ it('stop request remains visible until GET confirms cancelled, preserving data e
 });
 it('double retry uses captured revision and one request, old report and parent remain linked', async () => {
   render(<MemoryRouter><TaskActions task={{ id: 1, run_id: 'run', status: 'failed' }} /></MemoryRouter>);
+  expect(await screen.findByText('失败 1 项 · 原任务来源版本 7。旧验收报告保持可查。')).toBeTruthy();
+  fireEvent.click(screen.getByText(/按项选择重试/));
   fireEvent.click(await screen.findByRole('checkbox'));
   const button = screen.getByRole('button', { name: '重试所选失败项' }); fireEvent.click(button); fireEvent.click(button);
   expect(await screen.findByText(/查看新重试任务 2/)).toBeTruthy(); expect(api.retry).toHaveBeenCalledTimes(1);
   expect(api.retry.mock.calls[0][1]).toMatchObject({ expected_source_revision: 7, item_ids: ['failed-one'], mode: 'failed' });
   expect(screen.getByRole('link', { name: '任务 9' }).getAttribute('href')).toBe('/tasks/9');
 });
+it('retry-all sends null item_ids so the backend retries every eligible failed item', async () => {
+  render(<MemoryRouter><TaskActions task={{ id: 1, run_id: 'run', status: 'failed' }} /></MemoryRouter>);
+  await screen.findByText('失败 1 项 · 原任务来源版本 7。旧验收报告保持可查。');
+  const button = screen.getByRole('button', { name: '重试全部失败项' }); fireEvent.click(button); fireEvent.click(button);
+  expect(await screen.findByText(/查看新重试任务 2/)).toBeTruthy(); expect(api.retry).toHaveBeenCalledTimes(1);
+  expect(api.retry.mock.calls[0][1]).toMatchObject({ expected_source_revision: 7, item_ids: null, mode: 'failed' });
+});
 it('409 preserves selection and original expected revision; does not refresh or overwrite', async () => {
   api.retry.mockRejectedValue({ response: { status: 409, data: { detail: { code: 'RETRY_INPUT_CHANGED', message: '版本变化' } } } });
   render(<MemoryRouter><TaskActions task={{ id: 1, run_id: 'run', status: 'failed' }} /></MemoryRouter>);
+  fireEvent.click(await screen.findByText(/按项选择重试/));
   const checkbox = await screen.findByRole('checkbox'); fireEvent.click(checkbox); fireEvent.click(screen.getByRole('button', { name: '重试所选失败项' }));
   await screen.findByText(/输入或版本冲突/); expect((checkbox as HTMLInputElement).checked).toBe(true);
   expect(api.options).toHaveBeenCalledTimes(1); expect(api.retry.mock.calls[0][1].expected_source_revision).toBe(7);
@@ -69,5 +79,5 @@ it('confirmed cancelled is the only stopped label; retry GET failure leaves unkn
   render(<MemoryRouter><TaskActions task={{ id: 1, run_id: 'run', status: 'cancelled' }} /></MemoryRouter>);
   expect(await screen.findByText('已停止；输入与已发布结果保留。')).toBeTruthy();
   await screen.findByText('离线');
-  expect((screen.getByRole('button', { name: '重试所选失败项' }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole('button', { name: '重试全部失败项' }) as HTMLButtonElement).disabled).toBe(true);
 });

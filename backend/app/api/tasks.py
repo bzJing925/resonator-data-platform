@@ -16,7 +16,7 @@ import redis.asyncio as aioredis
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sse_starlette.sse import EventSourceResponse
 
 from app.api.deps import DbSession
@@ -81,16 +81,19 @@ def get_retry_options(task_id: int, db: DbSession, offset: int = 0, limit: int =
     parent = db.get(ProcessingRun, run.retry_of_run_id) if run and run.retry_of_run_id else None
     offset, limit = max(0, offset), max(1, min(limit, 500))
     rows = []
+    total = 0
     if run and revision is not None and run.status in {"success", "failed", "cancelled"}:
+        base = retry_items_query(run, require_identity=True)
+        total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
         rows = db.scalars(
-            retry_items_query(run, require_identity=True)
-            .order_by(ProcessingItem.id).offset(offset).limit(limit + 1)
+            base.order_by(ProcessingItem.id).offset(offset).limit(limit + 1)
         ).all()
     return {
         "task_id": task_id,
         "run_id": run.id if run else None,
         "expected_source_revision": revision,
         "retry_of_task_id": parent.task_id if parent else None,
+        "total": total,
         "items": [{
             "id": item.id, "unit_kind": item.unit_kind,
             "source_member": item.source_member, "port": item.port,

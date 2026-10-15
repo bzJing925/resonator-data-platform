@@ -55,6 +55,7 @@ def test_retry_options_page_identity_parent_and_unknown(kind, tmp_path):
             last = client.get(url + "?limit=2&offset=2").json()
             assert first["expected_source_revision"] == 7
             assert first["retry_of_task_id"] == parent_id
+            assert first["total"] == 3 and last["total"] == 3
             assert len(first["items"]) == 2 and first["next_offset"] == 2
             assert len(last["items"]) == 1 and last["next_offset"] is None
             assert len({i["id"] for i in first["items"] + last["items"]}) == 3
