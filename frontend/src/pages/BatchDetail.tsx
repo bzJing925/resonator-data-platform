@@ -376,7 +376,6 @@ export default function BatchDetail() {
   return (
     <>
       <div className="toolbar">
-      {batchNo && <SyncStatusBadge batchNo={batchNo} />}
         <span className="crumb">
           <Link to="/batches" style={{ color: 'inherit', textDecoration: 'none' }}>
             批次管理
@@ -391,7 +390,6 @@ export default function BatchDetail() {
         )}
         <button className="btn" onClick={() => setDeleting(true)}>删除影响 / 移除副本</button>
         {deleting && detail && <DeletionImpactDialog batchNo={detail.batch_no} onClose={() => setDeleting(false)} onChanged={() => navigate('/batches')} />}
-        {currentTask && <TaskActions task={currentTask} onUpdate={(task) => { setCurrentTask(task); setTaskStatus(task.status ?? null); }} />}
 
         <button
           className="btn"
@@ -452,6 +450,12 @@ export default function BatchDetail() {
       </div>
 
       <div style={{ flex: 1, overflow: 'auto', padding: 14 }}>
+        {(batchNo || currentTask) && (
+          <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
+            {batchNo && <SyncStatusBadge batchNo={batchNo} />}
+            {currentTask && <TaskActions task={currentTask} onUpdate={(task) => { setCurrentTask(task); setTaskStatus(task.status ?? null); }} />}
+          </div>
+        )}
         {error && (
           <div style={{ padding: 12, background: 'var(--fail-soft)', color: 'var(--fail)', marginBottom: 12 }}>
             {error}
