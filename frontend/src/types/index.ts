@@ -162,14 +162,6 @@ export interface MappingEntry {
   has_pf?: boolean;
 }
 
-export interface FileEntry {
-  name: string;
-  relpath: string;
-  size: number;
-  computed?: boolean;
-}
-
-
 export interface ChartField {
   name: string;
   label?: string;

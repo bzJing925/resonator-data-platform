@@ -1,6 +1,6 @@
 import type { AxiosResponse } from 'axios';
 import api from './client';
-import type { Batch, Device, FieldMeta, FileEntry, Mapping, MappingEntry, PagedList, ProcessStep, ProcessStepData, ServerSyncStatus, StatsResponse, Task } from '../types';
+import type { Batch, Device, FieldMeta, Mapping, MappingEntry, PagedList, ProcessStep, ProcessStepData, ServerSyncStatus, StatsResponse, Task } from '../types';
 
 const httpGetHealth = () => api.get('/health').then((r) => r.data);
 const httpGetStats = () => api.get('/stats').then((r: AxiosResponse<StatsResponse>) => r.data);
@@ -24,11 +24,6 @@ const httpListBatchDevices = (batchNo: string, params?: Record<string, unknown>)
   api
     .get(`/batches/${encodeURIComponent(batchNo)}/devices`, { params })
     .then((r: AxiosResponse<PagedList<Device>>) => r.data);
-
-export const listBatchFiles = (batchNo: string, includeSnp = false) =>
-  api
-    .get(`/files?batch_no=${encodeURIComponent(batchNo)}&include_snp=${includeSnp}`)
-    .then((r: AxiosResponse<FileEntry[]>) => r.data);
 
 const httpListMappings = () => api.get('/mappings').then((r: AxiosResponse<Mapping[] | PagedList<Mapping>>) => r.data);
 export const createMapping = (formData: FormData) =>
@@ -100,41 +95,6 @@ export const getDeviceSparseSparam = (id: number | string, param = 'z_mag_db', p
   api
     .get(`/devices/${id}/sparam-sparse`, { params: { param, piezo, n_points: nPoints } })
     .then((r) => r.data);
-
-// 虚拟文件树 API
-export const listFileTree = (batchNo: string, parentId: number | string | null = null) =>
-  api
-    .get('/files/tree', { params: { batch_no: batchNo, parent_id: parentId } })
-    .then((r) => r.data);
-
-export const moveFileTreeNodes = (body: Record<string, unknown>) =>
-  api.post('/files/tree/move', body).then((r) => r.data);
-
-export const reorderFileTreeNodes = (body: Record<string, unknown>) =>
-  api.post('/files/tree/reorder', body).then((r) => r.data);
-
-export const mkdirFileTree = (body: Record<string, unknown>) =>
-  api.post('/files/tree/mkdir', body).then((r) => r.data);
-
-export const renameFileTreeNode = (body: Record<string, unknown>) =>
-  api.post('/files/tree/rename', body).then((r) => r.data);
-
-export const deleteFileTreeNodes = (body: Record<string, unknown>) =>
-  api.post('/files/tree/delete', body).then((r) => r.data);
-
-export const downloadFileTreeNodesZip = (batchNo: string, nodeIds: (number | string)[]) =>
-  api.post(
-    '/files/download-zip-nodes',
-    { batch_no: batchNo, node_ids: nodeIds },
-    { responseType: 'blob' }
-  );
-
-export const downloadFilesZip = (batchNo: string, relpaths: string[] = []) =>
-  api.post(
-    '/files/download-zip',
-    { batch_no: batchNo, relpaths },
-    { responseType: 'blob' }
-  );
 
 export const downloadDeviceS1p = (id: number | string) =>
   api.get(`/devices/${id}/download-s1p`, {

@@ -6,15 +6,12 @@ import React, { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import SyncStatusBadge from '../sync/SyncStatusBadge';
 import I from '../components/Icons';
-import FileManager from '../components/FileManager';
 import {
   getBatch,
   getTask,
   listBatchDevices,
-  listBatchFiles,
   exportCsv,
   downloadDeviceS1p,
-  downloadFilesZip,
   reextractBatch,
   redeembedBatch,
   recomputeBatch,
@@ -25,7 +22,7 @@ import ReprocessMetricsModal from '../components/ReprocessMetricsModal';
 import RenameBatchModal from '../components/RenameBatchModal';
 import useFields, { displayLabel } from '../hooks/useFields';
 import { usePageState } from '../contexts/PageStateContext';
-import type { Batch, Device, FileEntry } from '../types';
+import type { Batch, Device } from '../types';
 
 interface DeviceRowProps {
   device: Device;
@@ -181,16 +178,18 @@ const BATCH_DETAIL_INITIAL_STATE = {
   page: 1,
   waferFilter: '',
   pfFilter: '',
+  sort: '',
 };
 
 export default function BatchDetail() {
   const { batchNo } = useParams<{ batchNo: string }>();
   const navigate = useNavigate();
   const [state, setState] = usePageState('batchDetail', BATCH_DETAIL_INITIAL_STATE);
-  const { page, waferFilter, pfFilter } = state;
+  const { page, waferFilter, pfFilter, sort } = state;
   const setPage = useCallback((v: number | ((prev: number) => number)) => setState((s) => ({ ...s, page: typeof v === 'function' ? v(s.page) : v })), [setState]);
   const setWaferFilter = useCallback((v: string | ((prev: string) => string)) => setState((s) => ({ ...s, waferFilter: typeof v === 'function' ? v(s.waferFilter) : v })), [setState]);
   const setPfFilter = useCallback((v: string | ((prev: string) => string)) => setState((s) => ({ ...s, pfFilter: typeof v === 'function' ? v(s.pfFilter) : v })), [setState]);
+  const setSort = useCallback((v: string | ((prev: string) => string)) => setState((s) => ({ ...s, sort: typeof v === 'function' ? v(s.sort) : v })), [setState]);
 
   const [detail, setDetail] = useState<Batch | null>(null);
   const [devices, setDevices] = useState<{ items: Device[]; total: number }>({ items: [], total: 0 });
@@ -204,9 +203,6 @@ export default function BatchDetail() {
   const [activeTaskId, setActiveTaskId] = useState<number | string | null>(null);
   const [activeDevice, setActiveDevice] = useState<Device | null>(null);
   const [exporting, setExporting] = useState<boolean>(false);
-  const [files, setFiles] = useState<FileEntry[]>([]);
-  const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
-  const [filesLoading, setFilesLoading] = useState<boolean>(false);
   const [showRecomputeModal, setShowRecomputeModal] = useState(false);
   const [showRenameModal, setShowRenameModal] = useState(false);
   const fieldsState = useFields();
@@ -267,36 +263,22 @@ export default function BatchDetail() {
 
   useEffect(() => {
     if (!batchNo) return;
-    let cancelled = false;
-    setFilesLoading(true);
-    listBatchFiles(batchNo, true)
-      .then((d) => { if (!cancelled) { setFiles(d || []); setSelectedFiles(new Set()); } })
-      .catch((e: Error) => { if (!cancelled) setError(e.message); })
-      .finally(() => { if (!cancelled) setFilesLoading(false); });
-    return () => { cancelled = true; };
-  }, [batchNo]);
-
-  useEffect(() => {
-    if (!batchNo) return;
     // cancelled 防止快速改 filter 时慢请求后到、覆盖快请求的当前数据：
     // 否则用户连续切 wafer 或翻页时可能看到上一次过滤的结果。
     let cancelled = false;
     const params: Record<string, unknown> = { page, size };
     if (waferFilter) params.wafer = waferFilter;
     if (pfFilter) params.massloading = pfFilter;
+    if (sort) params.sort = sort;
     listBatchDevices(batchNo, params)
       .then((d) => { if (!cancelled) setDevices(d); })
       .catch((e: Error) => { if (!cancelled) setError(e.message); });
     return () => { cancelled = true; };
-  }, [batchNo, page, size, waferFilter, pfFilter]);
+  }, [batchNo, page, size, waferFilter, pfFilter, sort]);
 
   const items = devices.items || [];
 
-  const sortedItems = useMemo(() => {
-    return [...items].sort((a, b) => (a.original_filename || '').localeCompare(b.original_filename || ''));
-  }, [items]);
-
-  const originalSpans = useMemo(() => computeOriginalSpans(sortedItems), [sortedItems]);
+  const originalSpans = useMemo(() => computeOriginalSpans(items), [items]);
 
   const handleRowClick = useCallback((d: Device) => setActiveDevice(d), []);
   const handleCloseDevice = useCallback(() => setActiveDevice(null), []);
@@ -312,33 +294,27 @@ export default function BatchDetail() {
     }
   }, []);
 
-  const handleDownloadZip = useCallback(async (relpaths: string[] = []) => {
-    if (!batchNo) return;
-    try {
-      const res = await downloadFilesZip(batchNo, relpaths);
-      const suffix = relpaths.length ? 'selected' : 'all';
-      downloadBlob(res.data, `${batchNo}_${suffix}.zip`);
-    } catch (e: any) {
-      setError(e.message || '下载 ZIP 失败');
-    }
-  }, [batchNo]);
+  const toggleSort = useCallback((key: string) => {
+    setPage(1);
+    setSort((cur) => (cur === `-${key}` ? key : cur === key ? '' : `-${key}`));
+  }, [setPage, setSort]);
 
-  const toggleFile = useCallback((relpath: string) => {
-    setSelectedFiles((prev) => {
-      const next = new Set(prev);
-      if (next.has(relpath)) next.delete(relpath);
-      else next.add(relpath);
-      return next;
-    });
-  }, []);
+  const sortIndicator = useCallback((key: string) => {
+    if (sort === `-${key}`) return ' ▼';
+    if (sort === key) return ' ▲';
+    return '';
+  }, [sort]);
 
-  const selectAllFiles = useCallback(() => {
-    setSelectedFiles(new Set(files.map((f) => f.relpath)));
-  }, [files]);
-
-  const clearFileSelection = useCallback(() => {
-    setSelectedFiles(new Set());
-  }, []);
+  const sortableTh = (key: string, label: React.ReactNode, numeric = false) => (
+    <th
+      className={numeric ? 'num' : ''}
+      style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}
+      title="点击排序：从大到小 ⇄ 从小到大"
+      onClick={() => toggleSort(key)}
+    >
+      {label}{sortIndicator(key)}
+    </th>
+  );
   const onExportCsv = useCallback(async () => {
     if (!batchNo) return;
     setExporting(true);
@@ -508,15 +484,6 @@ export default function BatchDetail() {
           </div>
         )}
 
-        <div className="chart-card" style={{ margin: 0, marginBottom: 12 }}>
-          <div className="chart-head">
-            <span className="title">源文件管理</span>
-          </div>
-          <div style={{ padding: 0, overflow: 'hidden' }}>
-            <FileManager batchNo={batchNo} onError={(msg) => setError(msg)} />
-          </div>
-        </div>
-
         <div className="chart-card" style={{ margin: 0 }}>
           <div className="chart-head">
             <span className="title">器件列表</span>
@@ -550,12 +517,12 @@ export default function BatchDetail() {
             <table className="dtable dtable-wide">
               <thead>
                 <tr>
-                  <th>原始文件名</th>
+                  {sortableTh('original_filename', '原始文件名')}
                   <th>Description</th>
-                  <th>器件 ID</th>
-                  <th>端口</th>
+                  {sortableTh('id', '器件 ID')}
+                  {sortableTh('s_param_port', '端口')}
                   {columns.map((c) => (
-                    <th key={c.key} className={c.type === 'num' ? 'num' : ''}>{c.header}</th>
+                    <React.Fragment key={c.key}>{sortableTh(c.key, c.header, c.type === 'num')}</React.Fragment>
                   ))}
                   <th></th>
                 </tr>
@@ -568,7 +535,7 @@ export default function BatchDetail() {
                     </td>
                   </tr>
                 )}
-                {sortedItems.map((d) => (
+                {items.map((d) => (
                   <DeviceRow
                     key={d.id || `${d.wafer}-${d.coord}`}
                     device={d}

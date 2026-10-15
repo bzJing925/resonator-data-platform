@@ -45,6 +45,15 @@ _SORT_FIELDS = {
     "device_count": Batch.device_count,
 }
 
+_DEVICE_SORT_FIELDS = {
+    name: getattr(Device, name)
+    for name in (
+        "id", "original_filename", "s_param_port", "mark", "wafer", "coord", "x", "y", "pf",
+        "eg", "fl", "ag", "area_um2", "fs_ghz", "fp_ghz", "zs_ohm", "zp_ohm", "qs", "qp",
+        "fbode_ghz", "qs_bodeq", "qp_bodeq", "k2eff_pct", "fp2_ghz", "fs2_ghz",
+    )
+}
+
 
 @router.get("", response_model=BatchListResponse)
 def list_batches(
@@ -268,6 +277,7 @@ def list_batch_devices(
     wafer: int | None = None,
     pf: str | None = None,
     massloading: str | None = None,
+    sort: str | None = None,
     page: Annotated[int, Query(ge=1)] = 1,
     size: Annotated[int, Query(ge=1, le=1000)] = 100,
 ) -> dict[str, Any]:
@@ -299,8 +309,19 @@ def list_batch_devices(
             else:
                 conditions.append(false())
     total = db.scalar(select(func.count()).select_from(Device).where(*conditions)) or 0
+    if sort:
+        desc = sort.startswith("-")
+        key = sort.lstrip("-+")
+        col = _DEVICE_SORT_FIELDS.get(key)
+        if col is None:
+            raise HTTPException(status_code=400, detail=f"不支持的排序字段: {key}")
+        order_cols = [col.desc() if desc else col.asc(), Device.id]
+    else:
+        # 默认按源文件分组排序，前端按原始文件名合并相邻行
+        order_cols = [Device.original_filename, Device.id]
     stmt = (
-        select(Device).where(*conditions).order_by(Device.id).offset((page - 1) * size).limit(size)
+        select(Device).where(*conditions).order_by(*order_cols)
+        .offset((page - 1) * size).limit(size)
     )
     devices = db.scalars(stmt).all()
     rows = [{col: getattr(d, col) for col in DEVICE_COLUMNS if col != "batch_id"} for d in devices]
