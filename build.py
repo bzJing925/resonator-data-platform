@@ -84,7 +84,9 @@ def main():
     print("=" * 60)
     print("Step 3: Electron-builder 打包")
     print("=" * 60)
-    cmd = [NPX, "electron-builder"]
+    # --publish never：CI 上 electron-builder 检测到 publish 配置会尝试发 GitHub draft，
+    # 需要 GH_TOKEN 而失败；产物走 actions/upload-artifact 分发，不走 electron-builder publish
+    cmd = [NPX, "electron-builder", "--publish", "never"]
     if args.target:
         cmd.extend([f"--{args.target}"])
     run(cmd, cwd=FRONTEND)
