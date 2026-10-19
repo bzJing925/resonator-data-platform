@@ -29,6 +29,10 @@ ROOT = Path(__file__).resolve().parent
 FRONTEND = ROOT / "frontend"
 BACKEND = ROOT / "backend"
 
+# Windows 上 npm/npx 是 .cmd 批处理，subprocess 不带 shell 找不到（CI WinError 2）
+NPM = "npm.cmd" if sys.platform == "win32" else "npm"
+NPX = "npx.cmd" if sys.platform == "win32" else "npx"
+
 # 优先使用 backend/.venv 的 Python 跑 PyInstaller，避免使用系统 Python 导致依赖缺失。
 if sys.platform == "win32":
     VENV_PYTHON = BACKEND / ".venv" / "Scripts" / "python.exe"
@@ -65,7 +69,7 @@ def main():
     print("=" * 60)
     print("Step 1: 构建前端")
     print("=" * 60)
-    run(["npm", "run", "build"], cwd=FRONTEND)
+    run([NPM, "run", "build"], cwd=FRONTEND)
 
     # 2. 打包后端
     if not args.skip_backend:
@@ -80,7 +84,7 @@ def main():
     print("=" * 60)
     print("Step 3: Electron-builder 打包")
     print("=" * 60)
-    cmd = ["npx", "electron-builder"]
+    cmd = [NPX, "electron-builder"]
     if args.target:
         cmd.extend([f"--{args.target}"])
     run(cmd, cwd=FRONTEND)

@@ -41,9 +41,10 @@ jobs:
         working-directory: backend
         run: uv sync
         env:
-          # macos-latest（Xcode 26，clang 默认 C23）编译 zipfile-deflate64 的老旧
-          # 内置 zlib（K&R 风格）会报 expected identifier；强制 gnu89 兼容
-          CFLAGS: -std=gnu89
+          # macos-latest（Xcode 26）编译 zipfile-deflate64 的老旧内置 zlib 两处兼容：
+          # -std=gnu89 兼容 K&R C；-Dfdopen=fdopen 使 zutil.h 跳过 fdopen→NULL 宏
+          # （该宏会破坏 SDK _stdio.h 的 fdopen 声明）
+          CFLAGS: -std=gnu89 -Dfdopen=fdopen
 
       - name: Install frontend dependencies
         working-directory: frontend
