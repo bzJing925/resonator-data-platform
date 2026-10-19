@@ -40,6 +40,10 @@ jobs:
       - name: Install backend dependencies
         working-directory: backend
         run: uv sync
+        env:
+          # macos-latest（Xcode 26，clang 默认 C23）编译 zipfile-deflate64 的老旧
+          # 内置 zlib（K&R 风格）会报 expected identifier；强制 gnu89 兼容
+          CFLAGS: -std=gnu89
 
       - name: Install frontend dependencies
         working-directory: frontend
@@ -47,6 +51,8 @@ jobs:
 
       - name: Build desktop installer
         run: python build.py --target ${{ matrix.target }}
+        env:
+          PYTHONIOENCODING: utf-8
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
