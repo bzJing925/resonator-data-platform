@@ -291,6 +291,12 @@ export default function Explore() {
   const setFilters = useCallback((v) => setRawState((s) => ({ ...s, filters: typeof v === 'function' ? v(s.filters) : v })), [setRawState]);
   const setLimit = useCallback((v) => setRawState((s) => ({ ...s, limit: typeof v === 'function' ? v(s.limit) : v })), [setRawState]);
 
+  // 空筛选统一成 AND 组形式：与后端 manifest 回显一致，结果校验才能对齐
+  const wireFilters = useMemo(
+    () => (filters && Object.keys(filters).length > 0 ? filters : { op: 'and', children: [] }),
+    [filters],
+  );
+
   // Transient UI state that does not need to survive route switches.
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -396,7 +402,7 @@ export default function Explore() {
     const current = () => requestSequence.current.current(request);
     const installAggregate = (res, groupBy, metrics, flat) => {
       if (!current()) return;
-      const querySpec = { filters, fields: [...new Set([...groupBy, ...metrics.map((m) => m.field)])], order_by: null };
+      const querySpec = { filters: wireFilters, fields: [...new Set([...groupBy, ...metrics.map((m) => m.field)])], order_by: null };
       const checked = validateQueryResult(res, querySpec, true);
       updateSpec((value) => ({ ...value, query_spec: querySpec }));
       loadQueryRows(flat, { total: checked.manifest.matched_total, returned: flat.length,
@@ -412,7 +418,7 @@ export default function Explore() {
         const groupBy = ['x', 'y'];
         if (waferFacet && waferFacet !== NO_FACET) groupBy.push(waferFacet);
         const metrics = [{ field: waferZ.name, agg: [wireOp] }];
-        const res = await queryAggregate({ filters, group_by: groupBy, metrics });
+        const res = await queryAggregate({ filters: wireFilters, group_by: groupBy, metrics });
         const flat = (res.groups || []).map((g) => {
           const row = { ...g };
           const v = g[waferZ.name];
@@ -457,7 +463,7 @@ export default function Explore() {
         }
         const metrics = [...opsByField].map(([field, ops]) => ({ field, agg: [...ops] }));
 
-        const res = await queryAggregate({ filters, group_by: groupBy, metrics });
+        const res = await queryAggregate({ filters: wireFilters, group_by: groupBy, metrics });
         // Flatten {x_field: v, qs: {avg: 1234, p75: 5678}} → row[qs] = Y's op,
         // and (when Z is numeric and not also a Y) row[zMeta.name] = Z's op.
         const flat = (res.groups || []).map((g) => {
@@ -501,14 +507,14 @@ export default function Explore() {
         ['batch_no', 'wafer', 'folder_name', 'coord', 'pf'].forEach((k) => fieldSet.add(k));
       }
       const res = await queryDevices({
-        filters,
+        filters: wireFilters,
         fields: Array.from(fieldSet),
         limit,
         skip_count: true,
         sampling: 'none',
       });
       if (!current()) return;
-      const querySpec = { filters, fields: Array.from(fieldSet), order_by: null };
+      const querySpec = { filters: wireFilters, fields: Array.from(fieldSet), order_by: null };
       const checked = validateQueryResult(res, querySpec);
       updateSpec((value) => ({ ...value, query_spec: querySpec }));
       loadQueryRows(checked.rows, {

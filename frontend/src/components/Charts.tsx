@@ -80,6 +80,53 @@ function clearPlotSelectionOutline(graphDiv: any) {
     .catch((error) => reportPlotlyError('clear selection outline', error));
 }
 
+// 滚轮平移：仅上下/左右平移视图，不做缩放；Y 轴范围只由手动设置或自动适配控制。
+const WHEEL_PAN_STEP = 0.18;
+function attachWheelPan(graphDiv: any) {
+  if (!graphDiv || graphDiv.__alnWheelPan) return;
+  graphDiv.__alnWheelPan = true;
+  let raf = 0;
+  let accX = 0;
+  let accY = 0;
+  const flush = () => {
+    raf = 0;
+    const full = graphDiv._fullLayout;
+    const dx = accX;
+    const dy = accY;
+    accX = 0;
+    accY = 0;
+    if (!full?.xaxis) return;
+    const update: Record<string, unknown> = {};
+    if (dx) {
+      const r = full.xaxis.range;
+      if (typeof r?.[0] === 'number' && typeof r?.[1] === 'number') {
+        const shift = (r[1] - r[0]) * WHEEL_PAN_STEP * dx;
+        update['xaxis.range'] = [r[0] + shift, r[1] + shift];
+      }
+    }
+    if (dy) {
+      for (const key of Object.keys(full)) {
+        if (!/^yaxis\d*$/.test(key)) continue;
+        const r = full[key].range;
+        if (typeof r?.[0] !== 'number' || typeof r?.[1] !== 'number') continue;
+        const shift = -(r[1] - r[0]) * WHEEL_PAN_STEP * dy;
+        update[`${key}.range`] = [r[0] + shift, r[1] + shift];
+      }
+    }
+    if (Object.keys(update).length === 0) return;
+    getPlotly().then((Plotly) => {
+      Promise.resolve(Plotly.relayout(graphDiv, update))
+        .catch((error) => reportPlotlyError('relayout wheel pan', error));
+    }).catch((error) => reportPlotlyError('load for wheel pan', error));
+  };
+  graphDiv.addEventListener('wheel', (event: WheelEvent) => {
+    event.preventDefault();
+    accY += Math.sign(event.deltaY);
+    accX += event.deltaX ? Math.sign(event.deltaX) : (event.shiftKey ? Math.sign(event.deltaY) : 0);
+    if (!raf) raf = requestAnimationFrame(flush);
+  }, { passive: false });
+}
+
 function nearestRawDatum(graph: any, clientX: number, clientY: number) {
   const rect = graph.getBoundingClientRect();
   const localX = (clientX - rect.left) * graph._fullLayout.width / rect.width;
@@ -483,7 +530,7 @@ export function WaferMap({
   const plotConfig = useMemo(() => ({
     ...baseConfig,
     displayModeBar: false,
-    scrollZoom: true,
+    scrollZoom: false,
     doubleClick: 'reset+autosize',
   }), []);
 
@@ -528,6 +575,7 @@ export function WaferMap({
       useResizeHandler
       onInitialized={(_figure, graphDiv) => {
         graphDivRef.current = graphDiv;
+        attachWheelPan(graphDiv);
         applyPlotSelection(graphDiv, selectedRowIds);
       }}
       onUpdate={(_figure, graphDiv) => { graphDivRef.current = graphDiv; }}
@@ -1747,7 +1795,7 @@ export function UnifiedChartGrid({
   const plotConfig = useMemo(() => analysisLayout ? {
     ...baseConfig,
     displayModeBar: false,
-    scrollZoom: true,
+    scrollZoom: false,
     doubleClick: false,
   } : { ...baseConfig, displayModeBar: false, doubleClick: false }, [analysisLayout]);
   const hasAppliedPointStylesRef = useRef(false);
@@ -1907,6 +1955,7 @@ export function UnifiedChartGrid({
         useResizeHandler
         onInitialized={(_figure, graphDiv) => {
           graphDivRef.current = graphDiv;
+          attachWheelPan(graphDiv);
           syncPointStyles(graphDiv);
           applyPlotSelection(graphDiv, selectedRowIds);
         }}
