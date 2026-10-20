@@ -1,4 +1,4 @@
-# 启动数据平台（原生模式，单进程：API + 内嵌任务 worker + 前端静态托管）
+﻿# 启动数据平台（原生模式，单进程：API + 内嵌任务 worker + 前端静态托管）
 $Root = $PSScriptRoot
 $env:ALN_DESKTOP_MODE = "true"
 $env:ALN_DESKTOP_DIR = "$Root\data"

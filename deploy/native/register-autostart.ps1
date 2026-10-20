@@ -1,4 +1,4 @@
-# 可选：注册登录后自动启动（任务计划程序，当前用户级，免管理员）
+﻿# 可选：注册登录后自动启动（任务计划程序，当前用户级，免管理员）
 $Root = $PSScriptRoot
 $action = New-ScheduledTaskAction -Execute "powershell.exe" `
     -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -File `"$Root\start.ps1`""

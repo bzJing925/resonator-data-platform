@@ -50,6 +50,11 @@ mkdir -p "$STAGE/pack" "$STAGE/assets"
 cp -R "$LITE/." "$STAGE/pack/"
 cp "$ASSETS/$PYEXE" "$STAGE/assets/$PYEXE"
 cp "$ROOT/frontend/build-resources/icon.ico" "$STAGE/pack/icon.ico"
+# ps1 统一加 UTF-8 BOM（Windows PowerShell 5.1 无 BOM 会把中文按 GBK 误读导致解析失败）
+for f in "$STAGE"/pack/*.ps1; do
+  [ -f "$f" ] || continue
+  [ "$(head -c 3 "$f" | xxd -p)" = "efbbbf" ] || { printf '\xef\xbb\xbf' | cat - "$f" > /tmp/ps1bom && mv /tmp/ps1bom "$f"; }
+done
 sed "s/!define APP_VERSION   \".*\"/!define APP_VERSION   \"$VERSION\"/" \
   "$ROOT/deploy/installer/server-installer.nsi" > "$STAGE/server-installer.nsi"
 

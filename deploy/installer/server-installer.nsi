@@ -30,6 +30,7 @@ BrandingText "${APP_NAME} v${APP_VERSION}"
 !insertmacro MUI_LANGUAGE "SimpChinese"
 
 Section "安装平台（后端 + 前端 + 离线依赖）"
+  SetShellVarContext all
   SetOutPath "$INSTDIR"
   File /r "pack\*"
 

@@ -1,4 +1,4 @@
-# 停止数据平台（原生模式）
+﻿# 停止数据平台（原生模式）
 $procs = Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
     Where-Object { $_.CommandLine -like "*uvicorn*app.main*" }
 if ($procs) {
