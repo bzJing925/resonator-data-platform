@@ -47,14 +47,14 @@ Section "安装平台（后端 + 前端 + 离线依赖）"
 
   CreateDirectory "$SMPROGRAMS\ALN 内网服务器"
   CreateShortcut "$SMPROGRAMS\ALN 内网服务器\启动服务器.lnk" \
-    "powershell.exe" "-NoProfile -ExecutionPolicy Bypass -File \"$INSTDIR\start.ps1\""
+    "wscript.exe" "$INSTDIR\start.vbs"
   CreateShortcut "$SMPROGRAMS\ALN 内网服务器\停止服务器.lnk" \
-    "powershell.exe" "-NoProfile -ExecutionPolicy Bypass -File \"$INSTDIR\stop.ps1\""
+    "powershell.exe" "-WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -File \"$INSTDIR\stop.ps1\""
   CreateShortcut "$SMPROGRAMS\ALN 内网服务器\注册开机自启.lnk" \
-    "powershell.exe" "-NoProfile -ExecutionPolicy Bypass -File \"$INSTDIR\register-autostart.ps1\""
+    "powershell.exe" "-WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -File \"$INSTDIR\register-autostart.ps1\""
   CreateShortcut "$SMPROGRAMS\ALN 内网服务器\卸载.lnk" "$INSTDIR\uninstall.exe"
   CreateShortcut "$DESKTOP\ALN 内网服务器.lnk" \
-    "powershell.exe" "-NoProfile -ExecutionPolicy Bypass -File \"$INSTDIR\start.ps1\""
+    "wscript.exe" "$INSTDIR\start.vbs"
 
   WriteUninstaller "$INSTDIR\uninstall.exe"
   WriteRegStr HKLM "${UNINSTALL_KEY}" "DisplayName" "${APP_NAME} v${APP_VERSION}"

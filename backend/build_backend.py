@@ -13,12 +13,12 @@ import os
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 # Windows 控制台默认 cp1252/GBK，打印中文会 UnicodeEncodeError（CI 挂点）
 for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
         _stream.reconfigure(encoding="utf-8", errors="replace")
-from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 FRONTEND_BUILD = ROOT.parent / "frontend" / "build" / "backend"

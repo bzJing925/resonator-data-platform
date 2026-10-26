@@ -46,7 +46,9 @@ def packet_digest(packet):
 
     def clean(value):
         if isinstance(value, float):
-            return value if math.isfinite(value) else None
+            # 不同环境的数值库/序列化路径会产生 ULP 级差异；
+            # 统一取 6 位有效数字，避免把传输噪声误判为内容不一致
+            return float(f"{value:.6g}") if math.isfinite(value) else None
         return value
 
     canonical = {
