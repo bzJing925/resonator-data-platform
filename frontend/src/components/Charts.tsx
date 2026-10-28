@@ -1792,12 +1792,12 @@ export function UnifiedChartGrid({
       uirevision: revision || 'analysis',
     };
   }, [layout, revision, interactionMode, chartType, automaticYRanges, yAxisRanges, yFields]);
-  const plotConfig = useMemo(() => analysisLayout ? {
+  const plotConfig = useMemo(() => ({
     ...baseConfig,
     displayModeBar: false,
     scrollZoom: false,
     doubleClick: false,
-  } : { ...baseConfig, displayModeBar: false, doubleClick: false }, [analysisLayout]);
+  }), []);
   const hasAppliedPointStylesRef = useRef(false);
   const syncPointStyles = useCallback((graphDiv: any) => {
     const hasStyles = Object.keys(pointStyles || {}).length > 0;
