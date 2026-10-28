@@ -60,3 +60,12 @@ jobs:
         with:
           name: aln-desktop-${{ matrix.target }}
           path: frontend/release/*
+
+      - name: Publish installers to GitHub Release
+        if: success()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.3
+          name: ALN Desktop 1.0.3
+          files: frontend/release/*
+          fail_on_unmatched_files: true
