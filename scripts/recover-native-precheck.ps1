@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 #Requires -RunAsAdministrator
 param(
-    [string]$InstallRoot = 'E:\JBZ\aln-platform-win64-20261008',
+    [string]$InstallRoot = 'E:\JBZ\aln-server',
     [string]$GroupId = '3fa60c64-38a4-45a0-8123-1852c06dc184'
 )
 $ErrorActionPreference = 'Stop'
