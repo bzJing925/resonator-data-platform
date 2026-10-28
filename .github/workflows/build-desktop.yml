@@ -1,5 +1,8 @@
 name: Build Desktop Installers
 
+permissions:
+  contents: write
+
 on:
   push:
     branches: [feat/deploy]
