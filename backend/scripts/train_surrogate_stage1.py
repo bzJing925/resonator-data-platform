@@ -132,9 +132,10 @@ def train(
     opt = torch.optim.AdamW(model.parameters(), lr=lr)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)
 
-    def run_epoch(dl, train_mode: bool) -> float:
+    def run_epoch(dl, train_mode: bool) -> tuple[float, float, float]:
+        """返回 (总损失, params MSE, sparse MSE) 三个逐样本均值。"""
         model.train(train_mode)
-        total, n = 0.0, 0
+        total, tot_p, tot_s, n = 0.0, 0.0, 0.0, 0
         with torch.set_grad_enabled(train_mode):
             for batch in dl:
                 x = batch["x"].to(dev)
@@ -165,16 +166,28 @@ def train(
                     loss.backward()
                     opt.step()
                 total += loss.item() * len(x)
+                tot_p += loss_params.item() * len(x)
+                tot_s += loss_sparse.item() * len(x)
                 n += len(x)
-        return total / max(n, 1)
+        return total / max(n, 1), tot_p / max(n, 1), tot_s / max(n, 1)
 
     best_val, best_state, bad = float("inf"), None, 0
     history = []
     for epoch in range(1, epochs + 1):
-        tr = run_epoch(train_dl, True)
-        va = run_epoch(val_dl, False)
+        tr, tr_p, tr_s = run_epoch(train_dl, True)
+        va, va_p, va_s = run_epoch(val_dl, False)
         sched.step()
-        history.append({"epoch": epoch, "train": tr, "val": va})
+        history.append(
+            {
+                "epoch": epoch,
+                "train": tr,
+                "val": va,
+                "train_params": tr_p,
+                "train_sparse": tr_s,
+                "val_params": va_p,
+                "val_sparse": va_s,
+            }
+        )
         if va < best_val - 1e-6:
             best_val, bad = va, 0
             best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
