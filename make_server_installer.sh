@@ -48,6 +48,7 @@ step "组装 installer-stage"
 rm -rf "$STAGE"
 mkdir -p "$STAGE/pack" "$STAGE/assets"
 cp -R "$LITE/." "$STAGE/pack/"
+python3 "$ROOT/scripts/bundle_zip_decoder.py" "$STAGE/pack"
 cp "$ASSETS/$PYEXE" "$STAGE/assets/$PYEXE"
 cp "$ROOT/frontend/build-resources/icon.ico" "$STAGE/pack/icon.ico"
 # ps1 统一加 UTF-8 BOM（Windows PowerShell 5.1 无 BOM 会把中文按 GBK 误读导致解析失败）

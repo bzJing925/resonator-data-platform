@@ -39,6 +39,7 @@ Section "安装平台（后端 + 前端 + 离线依赖）"
   Rename "$INSTDIR\python\python-3.12.10-amd64.exe" "$INSTDIR\python\python-3.12-amd64.exe"
 
   DetailPrint "运行安装脚本：检查/安装 Python、创建虚拟环境、离线安装依赖（约 3-5 分钟）..."
+  nsExec::ExecToLog 'netsh advfirewall firewall add rule name="ALN 内网平台 8000" dir=in action=allow protocol=TCP localport=8000'
   nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\install.ps1"'
   Pop $0
   ${If} $0 != 0

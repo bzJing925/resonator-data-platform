@@ -150,6 +150,8 @@ def main():
                     if line.split()[-1].lstrip('*') == electron_zip.name)
     assert hashlib.sha256(electron_zip.read_bytes()).hexdigest() == expected
     copytree(ROOT / 'deploy/native-v2', package)
+    from bundle_zip_decoder import bundle_zip_tools
+    bundle_zip_tools(package)
     for relative in ('README.txt', 'DEPLOYMENT.md'):
         document = package / relative
         if document.exists():

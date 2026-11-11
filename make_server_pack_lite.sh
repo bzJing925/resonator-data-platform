@@ -48,6 +48,7 @@ cp "$ROOT/backend/alembic.ini" "$PKG/backend/"
 find "$PKG/backend" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 find "$PKG/backend" -name "*.pyc" -delete
 cp -r "$ROOT/frontend/dist" "$PKG/frontend/dist"
+"$PIP" "$ROOT/scripts/bundle_zip_decoder.py" "$PKG"
 cp "$REQS" "$PKG/requirements-server.txt"
 cp "$ROOT/deploy/native/"* "$PKG/"
 # Python 安装包需手动补（办公网过滤 exe）：保留占位说明
