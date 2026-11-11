@@ -1,0 +1,68 @@
+{
+  "schema": "fl0_owner_declaration_v1",
+  "date": "2026-11-02",
+  "declarant": "本聊天中实际创建这些文件的 Codex 主代理",
+  "authorization_quote": "需要你对这些FL=0的谐振器数据进行清洗，观察真实阻抗曲线，并用物理规律进行推算，判断Q值是否可信",
+  "evidence_basis": "本聊天上一轮创建、执行、归档和验证工具记录；本轮重新读取当前文件并与归档逐字节核对。不是由文件名或日期推断归属。",
+  "files": [
+    {
+      "path": "/Users/jingbozuo/Projects/aln-data-backend-ml/backend/scripts/audit_fl0_qp_20261102.py",
+      "sha256": "4a969781bbda8c5ba2f19f0904b92309d34b19abb606408bd5aa59e1409fac8e",
+      "archived_copy": "/Users/jingbozuo/Projects/aln-data-backend-ml/backend/surrogate_data/optimization_fl0_audit_20261102/audit_fl0_qp_20261102.py",
+      "archived_sha256": "4a969781bbda8c5ba2f19f0904b92309d34b19abb606408bd5aa59e1409fac8e",
+      "bytes_identical": true,
+      "owner_task": "本聊天上一轮用户授权的 FL=0 Qp 曲线审计与非破坏性清洗",
+      "disposition": "保留；不属于 P13 失败交付写入范围"
+    },
+    {
+      "path": "/Users/jingbozuo/Projects/aln-data-backend-ml/backend/scripts/finalize_fl0_qp_20261102.py",
+      "sha256": "1ab1d6c5490437838051ef64e783a0c2e7490958e0cccc2607e3882406773160",
+      "archived_copy": "/Users/jingbozuo/Projects/aln-data-backend-ml/backend/surrogate_data/optimization_fl0_audit_20261102/finalize_fl0_qp_20261102.py",
+      "archived_sha256": "1ab1d6c5490437838051ef64e783a0c2e7490958e0cccc2607e3882406773160",
+      "bytes_identical": true,
+      "owner_task": "本聊天上一轮用户授权的 FL=0 Qp 曲线审计与非破坏性清洗",
+      "disposition": "保留；不属于 P13 失败交付写入范围"
+    },
+    {
+      "path": "/Users/jingbozuo/Projects/aln-data-backend-ml/backend/scripts/report_fl0_qp_20261102.py",
+      "sha256": "1ef4560e7c194bdb478a08b83c004e09f6a39513d791954c8952e628c9f70f8a",
+      "archived_copy": "/Users/jingbozuo/Projects/aln-data-backend-ml/backend/surrogate_data/optimization_fl0_audit_20261102/report_fl0_qp_20261102.py",
+      "archived_sha256": "1ef4560e7c194bdb478a08b83c004e09f6a39513d791954c8952e628c9f70f8a",
+      "bytes_identical": true,
+      "owner_task": "本聊天上一轮用户授权的 FL=0 Qp 曲线审计与非破坏性清洗",
+      "disposition": "保留；不属于 P13 失败交付写入范围"
+    },
+    {
+      "path": "/Users/jingbozuo/Projects/aln-data-backend-ml/backend/scripts/verify_fl0_qp_20261102.py",
+      "sha256": "4583a3333f97e131b032e5cb40809a5f29a0e1851a094ab2727bd6766cdab640",
+      "archived_copy": "/Users/jingbozuo/Projects/aln-data-backend-ml/backend/surrogate_data/optimization_fl0_audit_20261102/verify_fl0_qp_20261102.py",
+      "archived_sha256": "4583a3333f97e131b032e5cb40809a5f29a0e1851a094ab2727bd6766cdab640",
+      "bytes_identical": true,
+      "owner_task": "本聊天上一轮用户授权的 FL=0 Qp 曲线审计与非破坏性清洗",
+      "disposition": "保留；不属于 P13 失败交付写入范围"
+    }
+  ],
+  "evidence": [
+    {
+      "path": "/Users/jingbozuo/Projects/aln-data-backend-ml/backend/surrogate_data/optimization_fl0_audit_20261102/receipt.json",
+      "sha256": "fc4bd9640f6b6676c00f9e1b6a8eb3c51a6a2bed38a1801982a498477986d2c6"
+    },
+    {
+      "path": "/Users/jingbozuo/Projects/aln-data-backend-ml/backend/surrogate_data/optimization_fl0_audit_20261102/validation.json",
+      "sha256": "dce386d9a5a0968926ca00b5a3c1689831c5bf1f6ac75243f18c1aefac651115"
+    },
+    {
+      "path": "/Users/jingbozuo/Projects/aln-data-backend-ml/backend/surrogate_data/optimization_fl0_audit_20261102/sha256_manifest.json",
+      "sha256": "5adb1e913af88179d98e630456a086ddefc20246b1d5460c3acfb8ada1d564ae"
+    },
+    {
+      "path": "/Users/jingbozuo/Projects/aln-data-backend-ml/backend/surrogate_data/optimization_fl0_audit_20261102/README.md",
+      "sha256": "b9a07ccbcbec5e395c6392438005249668a53384cad7f56362d46d1f591829c4"
+    }
+  ],
+  "output_root": "/Users/jingbozuo/Projects/aln-data-backend-ml/backend/surrogate_data/optimization_fl0_audit_20261102",
+  "desktop_report": "/Users/jingbozuo/Desktop/FL0-Qp审计报告-20261102.html",
+  "scope_statement": "上一轮新增四个脚本、独立审计输出目录和桌面报告；未修改 P13 O00-O16、冻结模型或源 Excel。此声明只覆盖列出的 FL0 工作，不解释其他历史差异。",
+  "independent_acceptance": "PENDING",
+  "gate_effect": "无自动放行效力；由 P13 A0 追加归属记录、A4 独立验证后决定限定范围恢复。不得重写 O00 或改写历史 G7 FAILED。"
+}
