@@ -76,6 +76,7 @@ skills-lock.json
 .idea/
 .vscode/
 *.swp
+*.bak
 
 # OS
 .DS_Store
@@ -99,6 +100,7 @@ batch2_vs_reference/
 /副本SICM_AlN_DT.xlsx
 /#16_results_de.xlsx
 /beeswarm_qp_demo.png
+/代理模型进度总结.html
 tmp/
 
 # 服务器部署包产物
