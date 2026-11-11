@@ -19,11 +19,11 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-_EG_RE = re.compile(r"\bEG([\d.]+)")
-_FL_RE = re.compile(r"\bFL([\d.]+)")
-_AG_RE = re.compile(r"\bAG([\d.]+)")
-_PF_RE = re.compile(r"(?:\+PF|\bPF\b)")
-_AREA_PAIR_RE = re.compile(r"\b(\d+)&(\d+)\b")
+_EG_RE = re.compile(r"\bEG\s*(\d+(?:\.\d+)?)(?![\d.])", re.IGNORECASE)
+_FL_RE = re.compile(r"\bFL\s*(\d+(?:\.\d+)?)(?![\d.])", re.IGNORECASE)
+_AG_RE = re.compile(r"\b(?:AG|Airgap)\s*(\d+(?:\.\d+)?)(?![\d.])", re.IGNORECASE)
+_PF_RE = re.compile(r"(?:\+PF\b|\bPF\b)", re.IGNORECASE)
+_AREA_PAIR_RE = re.compile(r"\b(\d+)\s*&\s*(\d+)\b")
 
 
 @dataclass(frozen=True)
@@ -61,6 +61,10 @@ def load_mapping(path: str | Path) -> dict[str, MappingEntry]:
         desc = str(row.iloc[1]).strip()
         if not mark or not desc:
             continue
+        if mark.casefold() == "mark" and desc.casefold() == "description":
+            continue
+        if mark in out:
+            raise ValueError(f"对照表存在重复 Mark: {mark}")
         out[mark] = parse_description(mark, desc)
     return out
 

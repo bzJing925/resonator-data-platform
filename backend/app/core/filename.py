@@ -17,7 +17,7 @@ from typing import Literal
 
 PortType = Literal["S11", "S22"]
 
-_MARK_RE = re.compile(r"([A-Za-z]+\d+-\d+)")
+_MARK_RE = re.compile(r"(?<![A-Za-z0-9])([A-Za-z]+\d*-\d+)(?![A-Za-z0-9])")
 _COORD_RE = re.compile(r"X([+-]?\d+)Y([+-]?\d+)", re.IGNORECASE)
 _PORT_SUFFIX_RE = re.compile(r"_(S\d{2})(?:\.s1p)?$", re.IGNORECASE)
 _PORT_PREFIX_RE = re.compile(r"^(S\d{2})(?:_\d+)?_", re.IGNORECASE)
@@ -66,7 +66,7 @@ def parse_filename(name: str) -> ParsedFilename:
 
 
 def extract_mark(name: str) -> str | None:
-    """提取 mark，如 'A1-1' / 'AA12-3'。返回原大小写。"""
+    """提取 mark，如 'A1-1' / 'AA12-3' / ELB002 的 'K-10'。返回原大小写。"""
     m = _MARK_RE.search(name)
     return m.group(1) if m else None
 
