@@ -1,0 +1,12 @@
+{
+  "name": "p13-failure-viewer-o15",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:check": "node scripts/build.mjs --check",
+    "compile": "../../node_modules/.bin/tsc -p tsconfig.json",
+    "test": "node --test .build/tests/*.test.js",
+    "test:browser": "../../node_modules/.bin/playwright test -c playwright.config.ts"
+  }
+}

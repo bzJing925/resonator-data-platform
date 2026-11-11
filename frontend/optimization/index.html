@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; font-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>ALN · 结构寻优</title>
+  <style>%%STYLE%%</style>
+</head>
+<body>
+  <header class="topbar"><div class="brand">ALN <span>RESONATOR LAB</span></div><span class="offline"><i></i> 离线结果工作台</span></header>
+  <main>
+    <div class="page-heading"><div><p class="eyebrow">DESIGN EXPLORER / P5</p><h1>结构寻优</h1><p class="subtitle">从完整性能向量中，寻找适合当前约束的结构。</p></div><div class="top-actions"><label class="button secondary" for="import-file">导入浏览数据包</label><input id="import-file" type="file" accept=".json,application/json" hidden><button id="help-button" class="secondary">使用与适用范围</button></div></div>
+    <div class="modebar"><div class="tabs" role="group" aria-label="结果来源"><button id="mode-measured" aria-pressed="true">实测结构</button><button id="mode-exploratory" aria-pressed="false">代理探索</button></div><span id="source-line"></span></div>
+    <div id="scope-banner" class="scope" role="status"></div>
+    <div id="message" class="message" role="alert" hidden></div>
+    <div class="workspace">
+      <aside class="panel filters"><div class="section-title"><h2>筛选条件</h2><button id="reset" class="text-button">重置</button></div><p class="muted">仅筛选已计算目录；不生成新尺寸预测。</p>
+        <form id="filters" novalidate>
+          <fieldset><legend>性能下限</legend><div id="metric-filters" class="input-grid"></div></fieldset>
+          <fieldset><legend>结构范围</legend><div id="geometry-filters"></div><label>几何 PF<select id="pf"><option value="">全部</option><option value="0">无 PF（0）</option><option value="1">有 PF（1）</option></select></label></fieldset>
+          <fieldset id="frequency-filters"><legend>实测典型频率 · GHz</legend><div id="frequency-ranges"></div><p id="frequency-note" class="muted">约束典型值，不代表所有器件均落在频带内。</p></fieldset>
+          <button type="submit" class="primary apply">应用筛选</button><p id="pending" class="muted" aria-live="polite">显示已应用的筛选结果。</p>
+        </form>
+        <div class="scope-details"><h3>当前目录</h3><p id="catalog-count"></p><p class="muted">AG 未记录；特殊拓扑和面积冲突已隔离。Bode Q 口径固定为 BodeQ_fitted。</p><button id="export-rejected" class="text-button">导出原目录排除记录</button></div>
+      </aside>
+      <section class="results">
+        <div class="summary-grid"><div class="stat"><span>满足当前条件</span><strong id="feasible-count">—</strong><small>结构 / 计算候选</small></div><div class="stat"><span>四目标 Pareto</span><strong id="pareto-count">—</strong><small>当前可行集合的非支配点</small></div><div class="stat highlight"><span id="leader-label">当前目标第一名</span><strong id="leader-value">—</strong><small id="leader-structure">—</small></div></div>
+        <div class="analysis-grid"><section class="panel plot-panel"><div class="section-title"><div><h2>性能取舍</h2><p class="muted">每个点是一种结构；点击查看完整向量。</p></div><span class="legend"><i></i> 四目标 Pareto</span><span class="legend" id="cand-legend" hidden><i class="cand-i"></i> 外推候选（无实测器件）</span></div><div class="plot-controls"><label>X 轴<select id="x-axis"></select></label><label>Y 轴<select id="y-axis"></select></label><label class="check-label" id="show-cand-label" hidden><input id="show-cand" type="checkbox" checked>外推点</label></div><div id="plot" aria-label="性能取舍散点图"></div><p class="muted plot-note" id="plot-note">二维投影不代表二维 Pareto；高亮依据四项目标共同计算。</p></section>
+          <section class="panel detail-panel"><div class="section-title"><h2>候选详情</h2><span id="detail-badge" class="pill"></span></div><div id="detail"></div></section></div>
+        <section class="panel table-panel"><div class="section-title"><div><h2>候选排名</h2><p id="table-caption" class="muted"></p></div><div class="table-tools"><label>目标<select id="target"></select></label><label>显示<select id="top-n"><option value="10">Top 10</option><option value="25">Top 25</option><option value="50">Top 50</option><option value="all">全部</option></select></label><label class="check-label"><input id="pareto-only" type="checkbox">仅 Pareto</label></div></div><div class="table-scroll"><table id="ranking"><thead><tr><th>比较</th><th>排名</th><th>结构 / 来源</th><th>EG μm</th><th>FL μm</th><th>面积 μm²</th><th>PF</th><th>k² %</th><th>Qs</th><th>Qp</th><th>Bode Q</th><th>Pareto</th></tr></thead><tbody></tbody></table></div><div id="empty" class="empty" hidden><strong>没有满足条件的结构</strong><p>约束未被自动放宽。请调整筛选范围，或重置条件。</p></div><div class="exports"><span id="export-note" class="muted"></span><button id="export-csv" class="secondary">筛选集 CSV</button><button id="export-json" class="secondary">筛选集 JSON</button><button id="export-pareto" class="secondary">Pareto CSV</button></div></section>
+        <section class="panel comparison"><div class="section-title"><div><h2>结构比较 <span id="compare-count" class="muted">0 / 4</span></h2><p class="muted">各列保持同一结构的完整向量；不合成跨结构的峰值。</p></div><button id="clear-comparison" class="text-button">清空比较</button></div><div id="comparison"></div></section>
+      </section>
+    </div>
+    <footer><span id="version"></span><span>单批次 #2 · 去嵌 · 结构典型值 · 不代表新尺寸实测验证</span></footer>
+  </main>
+  <dialog id="help"><div class="section-title"><h2>使用与适用范围</h2><button id="close-help" class="secondary">关闭</button></div><div id="help-body"></div></dialog>
+  <noscript>此离线页面需要启用 JavaScript。</noscript>
+  <script type="application/json" id="data">%%DATA%%</script>
+  <script>%%APP%%</script>
+</body>
+</html>
