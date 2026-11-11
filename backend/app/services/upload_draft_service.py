@@ -280,7 +280,45 @@ def draft_public(draft, db=None):
     }
 
 
+def _input_signature(path):
+    stat = path.stat()
+    return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+
+
+def _commit_evidence(engine, draft_id, request_key):
+    # Hash large input files without holding SQLite's single writer lock.
+    with Session(engine) as observer:
+        draft = _draft(observer, draft_id)
+        if draft.request_key != request_key:
+            raise DraftError("REQUEST_KEY_CONFLICT", "请求标识不匹配")
+        if draft.status == "consumed":
+            return None
+        if _expired(draft):
+            raise DraftError("DRAFT_EXPIRED", "草稿已过期", 410)
+        if draft.status != "ready" or draft.report.get("fatal_count"):
+            raise DraftError("DRAFT_NOT_READY", "草稿尚未通过预检查", 422)
+        options = dict(draft.upload_options)
+        mapping = observer.get(Mapping, options["mapping_id"])
+        if mapping is None:
+            raise DraftError("PRECHECK_STALE", "对照表已变化")
+        paths = (Path(draft.storage_path), Path(mapping.file_path))
+        revision = draft.report.get("target_revision")
+        digest = draft.report.get("check_digest")
+    try:
+        before = tuple(_input_signature(path) for path in paths)
+        current = calculate_check_digest(
+            file_digest(paths[0]), options, file_digest(paths[1]), revision
+        )
+        after = tuple(_input_signature(path) for path in paths)
+    except OSError as exc:
+        raise DraftError("PRECHECK_STALE", "输入或对照表文件已变化") from exc
+    if before != after:
+        raise DraftError("PRECHECK_STALE", "校验期间文件已变化")
+    return paths, options, revision, digest, current, after
+
+
 def commit_draft(engine, draft_id, request_key, check_digest, warning_codes):
+    evidence = _commit_evidence(engine, draft_id, request_key)
     with _locked_session(engine) as db:
         draft = _draft(db, draft_id)
         if draft.request_key != request_key:
@@ -318,9 +356,16 @@ def commit_draft(engine, draft_id, request_key, check_digest, warning_codes):
                 or _target_revision(db, target) != revision
             ):
                 raise DraftError("PRECHECK_STALE", "关联目标版本已变化")
-        current = calculate_check_digest(
-            file_digest(storage), options, file_digest(mapping_path), revision
-        )
+        if evidence is None:
+            raise DraftError("PRECHECK_STALE", "草稿状态已变化")
+        paths, reviewed_options, reviewed_revision, digest, current, signatures = evidence
+        try:
+            unchanged = signatures == tuple(_input_signature(path) for path in paths)
+        except OSError:
+            unchanged = False
+        if (not unchanged or paths != (storage, mapping_path) or reviewed_options != options
+                or reviewed_revision != revision or digest != draft.report.get("check_digest")):
+            raise DraftError("PRECHECK_STALE", "校验后输入、选项或对照表已变化")
         if check_digest != draft.report.get("check_digest") or current != check_digest:
             raise DraftError("PRECHECK_STALE", "输入、选项或对照表已变化")
         if not set(draft.report.get("warning_codes", [])) <= set(warning_codes):
@@ -454,6 +499,7 @@ def record_precheck_dispatch_failure(engine, draft_id: str, *, confirmed: bool):
 
 def delete_draft(engine, draft_id: str):
     storage = directory = None
+    deleted = False
     with _locked_session(engine) as db:
         draft = _draft(db, draft_id)
         if draft.status == "consumed":
@@ -463,9 +509,19 @@ def delete_draft(engine, draft_id: str):
             return {"draft_id": draft.id, "status": "preparing", "stop_confirmed": False}
         storage = Path(draft.storage_path)
         directory = draft.report.get("prepared_dir")
-        draft.status = "expired"
-        draft.report = {**draft.report, "precheck_state": "stopped"}
+        if _expired(draft):
+            # Terminal expired drafts have no ingestion lineage to preserve. A true
+            # delete also releases request_key so the same selection can be uploaded again.
+            db.delete(draft)
+            deleted = True
+        else:
+            draft.status = "expired"
+            draft.report = {**draft.report, "precheck_state": "stopped"}
     if directory:
         shutil.rmtree(directory, ignore_errors=True)
     storage.unlink(missing_ok=True)
-    return {"draft_id": draft_id, "status": "expired", "stop_confirmed": True}
+    return {
+        "draft_id": draft_id,
+        "status": "deleted" if deleted else "expired",
+        "stop_confirmed": True,
+    }

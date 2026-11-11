@@ -2,7 +2,7 @@ import React, { memo, useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import I from '../components/Icons';
 import { listTasks } from '../api/endpoints';
-import { taskLabel } from '../tasks/taskStatus';
+import { isHiddenUploadTask, taskLabel } from '../tasks/taskStatus';
 import type { Task } from '../types';
 
 interface BadgeProps {
@@ -94,7 +94,7 @@ export default function Tasks() {
   const refresh = useCallback(() => {
     listTasks()
       .then((d) => {
-        setTasks(Array.isArray(d) ? d : (d as { items?: Task[] })?.items || []);
+        setTasks((Array.isArray(d) ? d : (d as { items?: Task[] })?.items || []).filter((task: Task) => !isHiddenUploadTask(task.status)));
       })
       .catch((e: Error) => setError(e.message));
   }, []);
@@ -108,7 +108,7 @@ export default function Tasks() {
       listTasks()
         .then((d) => {
           if (cancelled) return;
-          setTasks(Array.isArray(d) ? d : (d as { items?: Task[] })?.items || []);
+          setTasks((Array.isArray(d) ? d : (d as { items?: Task[] })?.items || []).filter((task: Task) => !isHiddenUploadTask(task.status)));
         })
         .catch((e: Error) => { if (!cancelled) setError(e.message); });
     tick();

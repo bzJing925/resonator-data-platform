@@ -145,6 +145,40 @@ def test_warning_ack_fatal_and_expiry(draft_api, tmp_path):
     assert commit(client, expiry_id, expiry_key, expiry_report).status_code == 410
 
 
+def test_expired_delete_releases_request_key_for_reupload(draft_api):
+    from pathlib import Path
+
+    client, db, _mapping_id, _archive, _mapping, _delivered = draft_api
+    draft_id, key, group, _report = prepare(draft_api)
+    db.expire_all()
+    draft = db.get(UploadDraft, draft_id)
+    draft.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    storage, prepared = Path(draft.storage_path), draft.report.get("prepared_dir")
+    db.commit()
+
+    response = client.delete(f"/api/uploads/drafts/{draft_id}")
+    assert response.status_code == 200 and response.json()["status"] == "deleted"
+    assert not storage.exists() and prepared and not Path(prepared).exists()
+    db.expire_all()
+    assert db.get(UploadDraft, draft_id) is None
+    assert client.get(f"/api/uploads/groups/{group}").json()["drafts"] == []
+
+    new_id, _, _, report = prepare(draft_api, key=key, group=group)
+    assert new_id != draft_id and report["status"] == "ready"
+
+
+def test_unmatched_mapping_does_not_require_acknowledgement(draft_api, tmp_path):
+    client, _db, _mapping_id, _archive, _mapping, _delivered = draft_api
+    samples = _algorithm_samples(tmp_path)
+    unmatched = _write_archive(
+        tmp_path / "unmatched.zip", [("17_E9-9_X0Y0.s1p", samples["dut_s1p"])]
+    )
+    draft_id, key, _, report = prepare(draft_api, payload=unmatched.read_bytes())
+    assert report["report"]["warning_codes"] == []
+    assert report["report"]["issues"][0]["severity"] == "info"
+    assert commit(client, draft_id, key, report).status_code == 200
+
+
 def test_dispatch_failure_consumes_one_attempt_and_preserves_input(draft_api, monkeypatch):
     client, db, _mapping_id, _archive, _mapping, _delivered = draft_api
     draft_id, key, _, report = prepare(draft_api)
@@ -486,3 +520,55 @@ def test_progress_is_throttled_but_phase_changes_are_immediate(draft_api, monkey
     monkeypatch.setattr("app.services.upload_draft_service.build_precheck_report", many_updates)
     _id, _key, _group, report = prepare(draft_api)
     assert report["status"] == "ready" and report["prepare_progress"] == 100
+
+
+def test_commit_hash_does_not_hold_sqlite_writer(draft_api, monkeypatch):
+    client, db, *_ = draft_api
+    if db.bind.dialect.name != "sqlite":
+        pytest.skip("SQLite writer regression")
+    draft_id, key, _, report = prepare(draft_api)
+    from sqlalchemy import text
+
+    from app.services import upload_draft_service as service
+
+    original = service.file_digest
+    observed = []
+
+    def digest(path):
+        with db.bind.connect() as connection:
+            connection.exec_driver_sql("PRAGMA busy_timeout=10")
+            connection.execute(text("BEGIN IMMEDIATE"))
+            connection.rollback()
+        observed.append(path)
+        return original(path)
+
+    monkeypatch.setattr(service, "file_digest", digest)
+    response = commit(client, draft_id, key, report)
+    assert response.status_code == 200, response.text
+    assert len(observed) == 2
+
+
+def test_commit_sqlite_writer_contention_returns_actionable_conflict(draft_api):
+    client, db, *_ = draft_api
+    if db.bind.dialect.name != "sqlite":
+        pytest.skip("SQLite writer regression")
+    from sqlalchemy import event
+
+    draft_id, key, _, report = prepare(draft_api)
+    engine = db.bind
+    db.rollback()
+
+    def short_timeout(connection, *_):
+        connection.execute("PRAGMA busy_timeout=10")
+
+    event.listen(engine, "checkout", short_timeout)
+    try:
+        with engine.connect() as holder:
+            holder.exec_driver_sql("BEGIN IMMEDIATE")
+            response = commit(client, draft_id, key, report)
+            assert response.status_code == 409, response.text
+            assert response.json()["detail"]["code"] == "DATABASE_BUSY"
+            holder.rollback()
+        assert commit(client, draft_id, key, report).status_code == 200
+    finally:
+        event.remove(engine, "checkout", short_timeout)

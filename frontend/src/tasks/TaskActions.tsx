@@ -5,6 +5,7 @@ import { useCapabilities } from '../api/capabilities';
 import type { Task } from '../types';
 import { uploadError } from '../upload/types';
 import { activeTask, stopExplanation, terminalTask } from './taskStatus';
+import { createUuid } from '../utils/uuid';
 export default function TaskActions({ task, onUpdate }: { task: Task; onUpdate?: (task: Task) => void }) {
   const { capabilities } = useCapabilities();
   const [options, setOptions] = useState<RetryOptions | null>(null), [selected, setSelected] = useState<string[]>([]), [error, setError] = useState(''), [busy, setBusy] = useState(false), [blocked, setBlocked] = useState(false), [accepted, setAccepted] = useState<string | null>(null);
@@ -35,7 +36,7 @@ export default function TaskActions({ task, onUpdate }: { task: Task; onUpdate?:
     {terminalTask(task.status) && task.run_id && <>
       <p>失败 {options?.total ?? options?.items.length ?? 0} 项 · 原任务来源版本 {options?.expected_source_revision ?? '未知'}。旧验收报告保持可查。</p>
       <button className="btn" disabled={busy || blocked || !!accepted || !(options?.total ?? 0) || options?.expected_source_revision == null || !capabilities?.features.processing_reports} onClick={() => action(async () => {
-        key.current ??= crypto.randomUUID(); const result = await retryTask(task.id, { request_key: key.current, mode: 'failed', item_ids: null, expected_source_revision: options!.expected_source_revision! });
+        key.current ??= createUuid(); const result = await retryTask(task.id, { request_key: key.current, mode: 'failed', item_ids: null, expected_source_revision: options!.expected_source_revision! });
         if (alive.current) setAccepted(result.task_id);
       })}>重试全部失败项</button>
       {!!options?.items.length && <details>
@@ -44,7 +45,7 @@ export default function TaskActions({ task, onUpdate }: { task: Task; onUpdate?:
         {options.next_offset != null && <button disabled={busy || blocked} onClick={() => action(async () => { const next = await getRetryOptions(task.id, options.next_offset!); if (next.run_id !== options.run_id || next.expected_source_revision !== options.expected_source_revision) throw new Error('重试证据已变化，请重新核对'); if (alive.current) setOptions({ ...next, items: [...options.items, ...next.items] }); })}>加载更多失败项</button>}
         <button disabled={busy || blocked || !!accepted || !options?.items.length || options.next_offset != null} onClick={() => { key.current = null; setSelected(options!.items.map((item) => item.id)); }}>选择全部失败项</button>
         <button className="btn" disabled={busy || blocked || !!accepted || !selected.length || options?.expected_source_revision == null || !capabilities?.features.processing_reports} onClick={() => action(async () => {
-          key.current ??= crypto.randomUUID(); const result = await retryTask(task.id, { request_key: key.current, mode: 'failed', item_ids: selected, expected_source_revision: options!.expected_source_revision! });
+          key.current ??= createUuid(); const result = await retryTask(task.id, { request_key: key.current, mode: 'failed', item_ids: selected, expected_source_revision: options!.expected_source_revision! });
           if (alive.current) setAccepted(result.task_id);
         })}>重试所选失败项</button>
       </details>}

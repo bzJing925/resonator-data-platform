@@ -169,20 +169,62 @@ def update_source_input_path(db: Session, source_device_key: str, relpath: str) 
 
 def register_prechecked_sources(db: Session, batch: Batch, report: dict) -> None:
     """Persist original member/port identities before the run captures its base."""
+    registrations = []
     for item in report.get("items", []):
         if item.get("classification") != "dut" or item.get("status") != "success":
             continue
         member = item["relpath"]
         for port in item.get("ports", []):
-            register_source_input(
-                db,
-                batch.id,
+            registrations.append((
                 member,
                 port,
                 item.get("input_digest") or report["input_digest"],
                 None if member.startswith("row/") else member,
                 item.get("original_filename") or PurePosixPath(member).name,
-            )
+            ))
+    if not registrations:
+        db.flush()
+        return
+    assign_batch_identity(db, batch)
+    existing = {
+        (row.member_key, row.port_key): row
+        for row in db.scalars(select(SourceInput).where(SourceInput.batch_id == batch.id))
+    }
+    pending = []
+    for member, port, digest, current_relpath, original_filename in registrations:
+        member = validate_relpath(member)
+        if current_relpath is not None:
+            validate_relpath(current_relpath)
+        if port not in {None, "S11", "S22"} or not digest or not original_filename:
+            raise SourceIdentityError("SOURCE_INPUT_INVALID", "输入端口、摘要或文件名无效")
+        key = (member, port or "")
+        current = existing.get(key)
+        if current is not None:
+            if current.input_digest != digest:
+                raise SourceIdentityError("SOURCE_INPUT_CHANGED", "原始成员内容或来源UUID发生变化")
+            if (
+                current_relpath is not None
+                and current.current_relpath not in {None, current_relpath}
+            ):
+                raise SourceIdentityError("SOURCE_PATH_CHANGED", "活动路径只能在结果发布时切换")
+            if current.current_relpath is None:
+                current.current_relpath = current_relpath
+            continue
+        row = {
+            "id": str(uuid4()),
+            "batch_id": batch.id,
+            "member_key": member,
+            "port": port,
+            "port_key": port or "",
+            "source_device_key": str(uuid4()),
+            "input_digest": digest,
+            "current_relpath": current_relpath,
+            "original_filename": original_filename,
+        }
+        existing[key] = row
+        pending.append(row)
+    for start in range(0, len(pending), 1000):
+        db.execute(SourceInput.__table__.insert(), pending[start:start + 1000])
     db.flush()
 
 

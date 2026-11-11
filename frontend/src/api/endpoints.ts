@@ -135,8 +135,10 @@ export function inspectComparisonConditions(body: { comparison: import('../types
 export const prepareUploadDraft = (body: FormData, onProgress?: (value: { loaded: number; total?: number }) => void) =>
   api.post('/uploads/prepare', body, { timeout: 0, onUploadProgress: onProgress }).then((response) => response.data as { draft_id: string });
 export const getUploadGroup = (groupId: string) => api.get(`/uploads/groups/${groupId}`).then((response) => response.data as { group_id: string; drafts: import('../upload/types').UploadDraft[] });
+export const getUploadDraft = (id: string) => api.get(`/uploads/drafts/${id}`).then((response) => response.data as import('../upload/types').UploadDraft);
 export const commitUploadDraft = (id: string, body: { request_key: string; check_digest: string; acknowledged_warning_codes: string[] }) => api.post(`/uploads/drafts/${id}/commit`, body).then((response) => response.data as { task_id: string; run_id: string; batch_no: string; status: string });
 export const recheckUploadDraft = (id: string, body: import('../upload/types').UploadOptions) => api.post(`/uploads/drafts/${id}/recheck`, body).then((response) => response.data);
+export const deleteUploadDraft = (id: string) => api.delete(`/uploads/drafts/${id}`).then((response) => response.data as { draft_id: string; status: string; stop_confirmed: boolean });
 export const getProcessingReport = (id: string | number, offset = 0) => api.get(`/tasks/${id}/report`, { params: { offset, limit: 100 } }).then((response) => response.data as import('../upload/types').ProcessingReport);
 export const downloadProcessingIssues = (id: string | number) => api.get(`/tasks/${id}/issues.csv`, { responseType: 'blob' });
 

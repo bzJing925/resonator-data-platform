@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { prepareUploadDraft, getUploadGroup, commitUploadDraft, recheckUploadDraft, getTask, getProcessingReport } from '../api/endpoints';
+import { prepareUploadDraft, getUploadDraft, getUploadGroup, commitUploadDraft, recheckUploadDraft, deleteUploadDraft, getTask, getProcessingReport } from '../api/endpoints';
 import { useUploadProgress } from '../contexts/UploadProgressContext';
+import { activeTask, isHiddenUploadTask, terminalTask } from '../tasks/taskStatus';
 import { fileKey, uploadError, validateSelection, type UploadOptions, type UploadEntry } from './types';
+import { createUuid } from '../utils/uuid';
 const preference = 'aln_upload_group:';
-function initialGroup() { try { return new URLSearchParams(window.location.search).get('groupId') || localStorage.getItem('aln_upload_last_group') || crypto.randomUUID(); } catch { return crypto.randomUUID(); } }
+function initialGroup() { try { return new URLSearchParams(window.location.search).get('groupId') || localStorage.getItem('aln_upload_last_group') || createUuid(); } catch { return createUuid(); } }
 function metadata(group: string): UploadEntry[] { try { const values = JSON.parse(localStorage.getItem(preference + group) ?? '[]'); return Array.isArray(values) ? values.filter((value) => value && typeof value.key === 'string' && typeof value.name === 'string' && (typeof value.requestKey === 'string' || value.requestKey === null) && (typeof value.draftId === 'string' || value.draftId === null)) : []; } catch { return []; } }
 export default function useUploadDrafts(files: File[], options: UploadOptions, onBusy?: (busy: boolean) => void) {
   const [groupId] = useState(initialGroup), [entries, setEntries] = useState<UploadEntry[]>(() => metadata(groupId)), [error, setError] = useState(''), [busy, setBusy] = useState(false);
@@ -20,25 +22,42 @@ export default function useUploadDrafts(files: File[], options: UploadOptions, o
       const group = await getUploadGroup(groupId);
       if (!alive.current) return;
       if (group.group_id !== groupId || !Array.isArray(group.drafts)) throw new Error('上传组响应无效');
-      const incoming = await Promise.all(group.drafts.map(async (draft) => {
+      const hidden = new Set<string>(group.drafts.filter((draft) => isHiddenUploadTask(draft.consumed_task?.status)).map((draft) => draft.draft_id));
+      const incoming = await Promise.all(group.drafts.filter((draft) => !hidden.has(draft.draft_id)).map(async (draft) => {
         const old = rows.current.find((entry) => entry.draftId === draft.draft_id);
         const entry: UploadEntry = { ...(old ?? { key: draft.draft_id, name: draft.suggested_batch_no, size: 0, modified: 0, requestKey: null, draftId: draft.draft_id, optionsKey: null }), draft };
         if (draft.consumed_task_id) {
-          try { entry.task = await getTask(draft.consumed_task_id); if (alive.current) entry.report = await getProcessingReport(draft.consumed_task_id); }
+          try {
+            if (!old?.task || activeTask(old.task.status) || activeTask(draft.consumed_task?.status)) {
+              entry.task = await getTask(draft.consumed_task_id);
+            }
+            const status = entry.task?.status ?? draft.consumed_task?.status;
+            if (alive.current && terminalTask(status) && !old?.report) entry.report = await getProcessingReport(draft.consumed_task_id);
+          }
           catch (failure) { entry.error = `状态未确认：${uploadError(failure)}`; }
         }
         return entry;
       }));
-      update((current) => [...current.filter((entry) => !incoming.some((item) => item.draftId === entry.draftId)), ...incoming]);
-      if (alive.current) for (const entry of incoming) if (entry.draft?.consumed_task) {
-        const task = entry.draft.consumed_task; addTask({ ...task, group_id: groupId, run_id: (entry.task as any)?.run_id });
-        updateTask(task.task_id, { status: entry.task?.status ?? task.status, quality_status: entry.report?.quality_status, summary: entry.report?.summary, done: ['success', 'failed', 'cancelled'].includes(entry.task?.status ?? task.status) });
+      const visible = incoming.filter((entry) => {
+        const hide = isHiddenUploadTask(entry.task?.status ?? entry.draft?.consumed_task?.status);
+        if (hide && entry.draftId) hidden.add(entry.draftId);
+        return !hide;
+      });
+      update((current) => [...current.filter((entry) => !hidden.has(entry.draftId ?? '') && !visible.some((item) => item.draftId === entry.draftId)), ...visible]);
+      if (alive.current) for (const entry of visible) if (entry.draft?.consumed_task) {
+        const task = entry.draft.consumed_task, status = entry.task?.status ?? task.status;
+        const updates = { status, quality_status: entry.report?.quality_status, summary: entry.report?.summary, done: terminalTask(status) };
+        if (!updates.done) addTask({ ...task, group_id: groupId, run_id: (entry.task as any)?.run_id });
+        updateTask(task.task_id, updates);
       }
     } catch (failure) { if (alive.current) setError(uploadError(failure)); }
     finally { reading.current = false; }
   }, [groupId, update, addTask, updateTask]);
   useEffect(() => {
-    alive.current = true; void refresh(); const timer = setInterval(() => { void refresh(); }, 1000);
+    alive.current = true; void refresh(); const timer = setInterval(() => {
+      const active = rows.current.some((entry) => entry.draft?.status === 'preparing' || activeTask(entry.task?.status ?? entry.draft?.consumed_task?.status));
+      if (active) void refresh();
+    }, 1000);
     const url = new URL(window.location.href); url.searchParams.set('groupId', groupId); window.history.replaceState(window.history.state, '', url);
     return () => { alive.current = false; clearInterval(timer); };
   }, [refresh, groupId]);
@@ -53,8 +72,22 @@ export default function useUploadDrafts(files: File[], options: UploadOptions, o
     for (const file of files) {
       if (!alive.current) return;
       const key = fileKey(file); let entry = rows.current.find((row) => row.key === key);
-      if (entry?.draftId) continue;
-      if (!entry) { entry = { key, name: file.name, size: file.size, modified: file.lastModified, requestKey: crypto.randomUUID(), draftId: null, optionsKey }; update((current) => [...current, entry!]); }
+      if (entry?.draftId) {
+        try {
+          const draft = await getUploadDraft(entry.draftId);
+          if (draft.draft_id !== entry.draftId || draft.group_id !== groupId) throw new Error('草稿响应无效，请刷新后重试');
+          update((current) => current.map((row) => row.key === key ? { ...row, draft, error: draft.status === 'consumed' ? '此文件已提交，请查看入库任务。' : draft.status === 'preparing' ? '此文件正在检查，请等待检查完成。' : '此文件已有检查记录；请查看报告，或点击“复查此文件”。' } : row));
+          continue;
+        } catch (failure) {
+          // Only an explicit 404 proves the cached draft is gone. Network errors
+          // must not discard request identity or cause a duplicate upload.
+          if ((failure as any)?.response?.status !== 404) throw failure;
+          entry = { ...entry, draftId: null, draft: undefined, task: undefined, report: undefined, error: '' };
+          const recovered = entry;
+          update((current) => current.map((row) => row.key === key ? recovered : row));
+        }
+      }
+      if (!entry) { entry = { key, name: file.name, size: file.size, modified: file.lastModified, requestKey: createUuid(), draftId: null, optionsKey }; update((current) => [...current, entry!]); }
       update((current) => current.map((row) => row.key === key ? { ...row, phase: 'uploading', progress: 0, error: '' } : row));
       const body = new FormData(); body.append('file', file); body.append('group_id', groupId); body.append('request_key', entry.requestKey!);
       for (const [field, value] of Object.entries(options)) if (value !== null) body.append(field, String(value));
@@ -64,6 +97,11 @@ export default function useUploadDrafts(files: File[], options: UploadOptions, o
       } catch (failure) { update((current) => current.map((row) => row.key === key ? { ...row, phase: 'failed', error: uploadError(failure) } : row)); }
     }
   });
+  const discard = (entry: UploadEntry) => action(async () => {
+    if (!entry.draftId) return;
+    await deleteUploadDraft(entry.draftId);
+    update((current) => current.filter((row) => row.key !== entry.key));
+  });
   const recheck = (entry: UploadEntry) => action(async () => { validateSelection([], options); if (!entry.draftId) return; await recheckUploadDraft(entry.draftId, options); update((current) => current.map((row) => row.key === entry.key ? { ...row, optionsKey: JSON.stringify(options), error: '' } : row)); });
   const commit = (entry: UploadEntry, warnings: string[]) => action(async () => {
     if (!entry.draftId || !entry.requestKey || !entry.draft?.check_digest) throw new Error('缺少原始请求标识或检查摘要，不能提交');
@@ -71,5 +109,5 @@ export default function useUploadDrafts(files: File[], options: UploadOptions, o
     try { const accepted = await commitUploadDraft(entry.draftId, { request_key: entry.requestKey, check_digest: entry.draft.check_digest, acknowledged_warning_codes: warnings }); addTask({ ...accepted, group_id: groupId }); }
     catch (failure) { if ((failure as any)?.response?.data?.detail?.code === 'PRECHECK_STALE') { await recheckUploadDraft(entry.draftId, options); throw new Error('检查证据已变化，已重新检查；请审查新报告再提交'); } throw failure; }
   });
-  return { groupId, entries, error, busy, prepare, commit, recheck, refresh };
+  return { groupId, entries, error, busy, prepare, commit, recheck, discard, refresh };
 }

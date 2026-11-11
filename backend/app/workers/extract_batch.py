@@ -129,6 +129,7 @@ def _extract_with_7z(
         encoding="utf-8",
         errors="replace",
         bufsize=1,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
 
     def _read_stderr() -> None:
@@ -204,6 +205,7 @@ def _extract_with_unzip(
         stderr=subprocess.PIPE,
         text=True,
         bufsize=1,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     stderr_lines: list[str] = []
 

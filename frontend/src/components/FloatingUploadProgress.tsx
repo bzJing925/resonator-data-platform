@@ -23,6 +23,7 @@ function TaskItem({ task }: TaskItemProps) {
   const sse = useSSE(task.task_id, { enabled: !task.done });
 
   useEffect(() => {
+    if (task.done) return;
     if (sse.done || sse.status === 'success' || sse.status === 'error') {
       updateTask(task.task_id, {
         status: sse.status,
@@ -41,7 +42,7 @@ function TaskItem({ task }: TaskItemProps) {
         message: sse.message,
       });
     }
-  }, [sse.event, sse.done, sse.status, sse.progress, sse.stage, sse.stageProgress, sse.message, sse.error]);
+  }, [task.done, sse.event, sse.done, sse.status, sse.progress, sse.stage, sse.stageProgress, sse.message, sse.error]);
 
   const isError = ['error', 'failed'].includes(task.status ?? '') || sse.status === 'failed';
   const isSuccess = task.status === 'success' || sse.status === 'success';
@@ -138,25 +139,28 @@ interface UploadTask {
   task_id: string | number;
   done?: boolean;
   addedAt?: number;
+  completedAt?: number;
   group_id?: string;
 }
 
 export default function FloatingUploadProgress() {
   const { tasks, removeTask } = useUploadProgress();
 
-  if (tasks.length === 0) return null;
+  // 自动移除已完成的任务（完成后保留 30 秒，方便用户看到成功/失败）
+  useEffect(() => {
+    const timers = tasks.filter((t: UploadTask) => t.done).map((t: UploadTask) => {
+      const elapsed = Date.now() - (t.completedAt ?? t.addedAt ?? Date.now());
+      return setTimeout(() => removeTask(t.task_id), Math.max(0, 30000 - elapsed));
+    });
+    return () => timers.forEach(clearTimeout);
+  }, [tasks, removeTask]);
 
-  // 自动移除已完成的任务（保留 30 秒，方便用户看到成功/失败）
   const visibleTasks = tasks.filter((t: UploadTask) => {
     if (!t.done) return true;
-    return Date.now() - (t.addedAt || 0) < 30000;
+    return Date.now() - (t.completedAt ?? t.addedAt ?? 0) < 30000;
   });
 
-  if (visibleTasks.length === 0) {
-    // 全部过期，批量清理
-    tasks.filter((t: UploadTask) => t.done).forEach((t: UploadTask) => removeTask(t.task_id));
-    return null;
-  }
+  if (visibleTasks.length === 0) return null;
 
   return (
     <div
@@ -186,17 +190,17 @@ export default function FloatingUploadProgress() {
           justifyContent: 'space-between',
         }}
       >
-        <span style={{ fontSize: 12, fontWeight: 600 }}>上传任务 ({tasks.length})</span>
-        <button className="btn ghost sm" style={{ padding: '2px 6px' }} onClick={() => tasks.forEach((t: UploadTask) => removeTask(t.task_id))}>
+        <span style={{ fontSize: 12, fontWeight: 600 }}>上传任务 ({visibleTasks.length})</span>
+        <button className="btn ghost sm" style={{ padding: '2px 6px' }} onClick={() => visibleTasks.forEach((t: UploadTask) => removeTask(t.task_id))}>
           全部关闭
         </button>
       </div>
       <div style={{ overflow: 'auto' }}>
-        {[...new Set(tasks.map((task: UploadTask) => task.group_id).filter(Boolean))].map((groupId: string) => {
-          const group = tasks.filter((task: UploadTask) => task.group_id === groupId);
+        {[...new Set(visibleTasks.map((task: UploadTask) => task.group_id).filter(Boolean))].map((groupId: string) => {
+          const group = visibleTasks.filter((task: UploadTask) => task.group_id === groupId);
           return <p key={groupId} style={{ padding: '0 10px', fontSize: 12 }}><Link to={`/upload?groupId=${encodeURIComponent(groupId)}`}>上传组详情</Link> · {group.filter((task: UploadTask) => task.done).length}/{group.length} 已结束</p>;
         })}
-        {tasks.map((t: UploadTask) => (
+        {visibleTasks.map((t: UploadTask) => (
           <TaskItem key={t.task_id} task={t as TaskItemProps['task']} />
         ))}
       </div>

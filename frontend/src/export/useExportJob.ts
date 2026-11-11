@@ -3,6 +3,7 @@ import { createExportJob, getExportJob, cancelExportJob } from '../api/endpoints
 import { uploadError } from '../upload/types';
 import type { ResultManifest } from '../types/platformContracts';
 import { terminalTask } from '../tasks/taskStatus';
+import { createUuid } from '../utils/uuid';
 export interface ExportState { id?: string; status: string; progress_pct?: number; rows?: number; manifest?: ResultManifest; artifacts?: { name: string; download_url: string }[]; expires_at?: string; error?: unknown; csv?: Blob }
 export default function useExportJob() {
   const [state, setState] = useState<ExportState | null>(null), [error, setError] = useState('');
@@ -16,7 +17,7 @@ export default function useExportJob() {
     void poll(); return () => { stopped = true; if (timer) clearTimeout(timer); };
   }, [state?.id, terminalTask(state?.status)]);
   const start = async (manifest: ResultManifest, format: 'csv' | 'xlsx') => {
-    if (lock.current || state) return; lock.current = true; setError(''); key.current ??= crypto.randomUUID();
+    if (lock.current || state) return; lock.current = true; setError(''); key.current ??= createUuid();
     const captured = structuredClone(manifest);
     try {
       if (captured.consistency !== 'verified' || captured.source_refs.some((source) => source.source_revision == null)) throw new Error('来源未验证，不能完整源导出');

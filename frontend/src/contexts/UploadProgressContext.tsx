@@ -8,7 +8,7 @@ export function UploadProgressProvider({ children }) {
   const addTask = useCallback((task) => {
     setTasks((prev) => {
       if (prev.some((t) => t.task_id === task.task_id)) return prev;
-      return [...prev, { ...task, addedAt: Date.now() }];
+      return [...prev, { ...task, addedAt: Date.now(), ...(task.done ? { completedAt: Date.now() } : {}) }];
     });
   }, []);
 
@@ -18,7 +18,7 @@ export function UploadProgressProvider({ children }) {
 
   const updateTask = useCallback((taskId, updates) => {
     setTasks((prev) =>
-      prev.map((t) => (t.task_id === taskId ? { ...t, ...updates } : t))
+      prev.map((t) => (t.task_id === taskId ? { ...t, ...updates, ...(updates.done && !t.done ? { completedAt: Date.now() } : {}) } : t))
     );
   }, []);
 

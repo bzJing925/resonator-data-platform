@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from app.api.deps import DbSession
 from app.config import get_settings
@@ -183,6 +183,17 @@ def commit_upload_draft(db: DbSession, draft_id: str, body: DraftCommitRequest):
         )
     except DraftError as exc:
         raise _draft_error(exc) from exc
+    except OperationalError as exc:
+        import sqlite3
+
+        code = getattr(exc.orig, "sqlite_errorcode", None)
+        if isinstance(code, int) and code & 0xFF in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}:
+            raise HTTPException(409, detail={
+                "code": "DATABASE_BUSY",
+                "message": "数据库正在处理其他写入，请稍后再点击入库；无需重新上传",
+                "retryable": True, "context": {},
+            }) from exc
+        raise
 
 
 @router.post("/drafts/{draft_id}/recheck", status_code=202)

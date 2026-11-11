@@ -1,5 +1,6 @@
 export const terminalTask = (status?: string) => ['success', 'failed', 'cancelled'].includes(status ?? '');
 export const activeTask = (status?: string | null) => ['pending', 'running', 'cancel_requested'].includes(status ?? '');
+export const isHiddenUploadTask = (status?: string | null) => ['failed', 'error', 'cancelled'].includes(status ?? '');
 export const taskLabel = (status?: string) => ({ pending: '排队中', running: '运行中', success: '成功', failed: '失败', cancel_requested: '正在停止', cancelled: '已停止' }[status ?? ''] ?? '状态未知');
 export const stopExplanation = '停止处理会保留输入及已发布结果；只有执行器确认停止后才显示已停止。';
 export interface TaskSnapshot { run_id?: string | null; event_seq?: number; status?: string; schema_version?: number; progress_pct?: number; stage_progress_pct?: number; stage?: string; progress_msg?: string; error_msg?: string; progress?: { pct?: number; stage_pct?: number; message?: string } }

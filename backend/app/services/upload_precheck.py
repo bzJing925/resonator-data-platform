@@ -183,7 +183,7 @@ def inspect_archive(
             continue
         if parsed.mark not in mapping:
             problems.append(issue(
-                "MAPPING_NOT_FOUND", "warning", "器件未命中对照表：入库但不参与分析", relpath
+                "MAPPING_NOT_FOUND", "info", "器件未命中对照表：入库但不参与分析", relpath
             ))
         start, end = options["f_start_ghz"], options["f_end_ghz"]
         if (
@@ -265,7 +265,7 @@ def inspect_table(path: Path, options: dict, mapping: dict, checkpoint=None,
         if row.get("mark") not in mapping:
             problems.append(
                 issue(
-                    "MAPPING_NOT_FOUND", "warning",
+                    "MAPPING_NOT_FOUND", "info",
                     "器件未命中对照表：入库但不参与分析", item["relpath"],
                 )
             )

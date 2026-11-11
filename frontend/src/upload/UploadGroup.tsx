@@ -18,13 +18,15 @@ export default function UploadGroup({ files, options, onBusy }: { files: File[];
     {group.entries.map((entry) => {
       const expired = entry.draft && (entry.draft.status === 'expired' || Date.parse(entry.draft.expires_at) <= Date.now()) && entry.draft.status !== 'consumed';
       return <article className="workflow-entry" key={entry.key} data-testid={`upload-entry-${entry.name}`}><h4>{entry.name}</h4>
-        {entry.draft?.status === 'preparing' && !entry.task && !expired ? <PrecheckProgress draft={entry.draft} /> : <p>{entry.task ? `${taskLabel(entry.task.status)} · ${entry.task.stage ?? ''} · ${entry.task.progress_pct ?? 0}%` : expired ? '草稿已过期，需复查或重新选择文件' : entry.draft ? `${{ preparing: '检查中', ready: '检查完成', failed: '检查失败', consumed: '已提交', expired: '已过期' }[entry.draft.status]} · ${entry.draft.prepare_progress}%` : entry.phase === 'uploading' ? `上传 ${entry.progress ?? 0}%` : entry.phase === 'failed' ? '上传失败' : '未上传，刷新后需重新选择原文件'}</p>}
+        {entry.draft?.status === 'preparing' && !entry.task && !expired ? <PrecheckProgress draft={entry.draft} /> : <p>{entry.task ? `${taskLabel(entry.task.status)} · ${entry.task.stage ?? ''} · ${entry.task.progress_pct ?? 0}%` : expired ? '草稿已过期，请删除后重新上传' : entry.draft ? `${{ preparing: '检查中', ready: '检查完成', failed: '检查失败', consumed: '已提交', expired: '已过期' }[entry.draft.status]} · ${entry.draft.prepare_progress}%` : entry.phase === 'uploading' ? `上传 ${entry.progress ?? 0}%` : entry.phase === 'failed' ? '上传失败' : '未上传，刷新后需重新选择原文件'}</p>}
         {entry.error && <p role="alert">{entry.error}</p>}
-        {entry.draft && entry.draft.status !== 'consumed' && <>
+        {entry.draft && entry.draft.status !== 'consumed' && (expired ?
+          <button className="btn" disabled={group.busy} onClick={() => group.discard(entry)}>删除过期草稿</button>
+        : <>
           {!entry.requestKey && <p role="alert">原始请求标识未保存在当前浏览器，不能提交该草稿；请使用原浏览器恢复。</p>}
-          {entry.draft.status !== 'preparing' && <PrecheckReport draft={entry.draft} disabled={group.busy || !!expired || !entry.requestKey || !capabilities?.features.upload_precheck} onCommit={(codes) => group.commit(entry, codes)} />}
+          {entry.draft.status !== 'preparing' && <PrecheckReport draft={entry.draft} disabled={group.busy || !entry.requestKey || !capabilities?.features.upload_precheck} onCommit={(codes) => group.commit(entry, codes)} />}
           <button className="btn" disabled={group.busy || entry.draft.status === 'preparing' || !capabilities?.features.upload_precheck} onClick={() => group.recheck(entry)}>复查此文件</button>
-        </>}
+        </>)}
         {entry.draft?.consumed_task && <><Link to={`/batches/${encodeURIComponent(entry.draft.consumed_task.batch_no)}`}>查看批次 {entry.draft.consumed_task.batch_no}</Link><IngestionReport taskId={entry.draft.consumed_task.task_id} report={entry.report} status={entry.task?.status} /></>}
       </article>;
     })}

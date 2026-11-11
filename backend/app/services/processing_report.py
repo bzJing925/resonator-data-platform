@@ -3,7 +3,7 @@
 import hashlib
 import json
 import math
-from uuid import NAMESPACE_URL, uuid5
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from sqlalchemy import or_, select
 
@@ -103,8 +103,42 @@ def record_issue(db, run_id, code, message, *, severity="error", item_id=None, d
 def seed_precheck_report(db, run):
     report = run.config_json.get("precheck_report") or {}
     table = "table_stats" in report
+    items, issues = {}, {}
+
+    def add_item(unit_kind, source_member, status, *, port=None, error_code=None):
+        key = (unit_kind, source_member, port or "")
+        item_id = items.get(key, {}).get("id") or str(uuid4())
+        items[key] = {
+            "id": item_id,
+            "run_id": run.id,
+            "source_device_key": None,
+            "source_member": source_member,
+            "port": port,
+            "port_key": port or "",
+            "unit_kind": unit_kind,
+            "status": status,
+            "error_code": error_code,
+            "result_digest": None,
+            "attempt": run.attempt,
+        }
+        return item_id
+
+    def add_issue(code, message, *, severity="error", item_id=None, details=None):
+        details = details or {}
+        identity = json.dumps([run.id, item_id, severity, code, message, details], sort_keys=True)
+        issue_id = str(uuid5(NAMESPACE_URL, identity))
+        issues[issue_id] = {
+            "id": issue_id,
+            "run_id": run.id,
+            "item_id": item_id,
+            "severity": severity,
+            "code": code,
+            "message": message,
+            "details_json": details,
+        }
+
     if table:
-        record_item_result(db, run.id, "file", report.get("input_name", "table"), "pending")
+        add_item("file", report.get("input_name", "table"), "pending")
     for entry in report.get("items", []):
         member = entry.get("relpath") or entry.get("source_member")
         if not member:
@@ -113,28 +147,29 @@ def seed_precheck_report(db, run):
         if status == "success" and entry.get("classification") == "dut":
             status = "pending"
         if not table:
-            record_item_result(db, run.id, "file", member, status)
+            add_item("file", member, status)
         if entry.get("classification") == "dut":
             for port in entry.get("ports", []):
-                record_item_result(
-                    db, run.id, "table_row" if table else "device", member, status, port=port
-                )
+                add_item("table_row" if table else "device", member, status, port=port)
     for index, message in enumerate(report.get("row_failures", []), 1):
-        item = record_item_result(
-            db, run.id, "table_row", f"rejected/{index}", "failed", error_code="TABLE_ROW_REJECTED"
+        item_id = add_item(
+            "table_row", f"rejected/{index}", "failed", error_code="TABLE_ROW_REJECTED"
         )
-        record_issue(db, run.id, "TABLE_ROW_REJECTED", message, severity="warning", item_id=item.id)
+        add_issue("TABLE_ROW_REJECTED", message, severity="warning", item_id=item_id)
     for entry in report.get("issues", []):
         if entry["code"] == "TABLE_ROW_REJECTED" and report.get("row_failures"):
             continue
-        record_issue(
-            db,
-            run.id,
+        add_issue(
             entry["code"],
             entry["message"],
             severity="error" if entry["severity"] == "fatal" else entry["severity"],
             details={"source_member": entry.get("relpath")},
         )
+    for model, rows in ((ProcessingItem, items), (QualityIssue, issues)):
+        values = list(rows.values())
+        for start in range(0, len(values), 1000):
+            db.execute(model.__table__.insert(), values[start:start + 1000])
+    db.flush()
 
 
 def record_device_result(
@@ -193,18 +228,16 @@ def summarize_run(db, run_id):
     items = db.scalars(select(ProcessingItem).where(ProcessingItem.run_id == run_id)).all()
     devices = [item for item in items if item.unit_kind in {"device", "table_row"}]
     files = [item for item in items if item.unit_kind == "file"]
+    by_member = {}
+    table_states = set()
+    table = "table_stats" in (run.config_json.get("precheck_report") or {})
+    for item in devices:
+        by_member.setdefault(item.source_member, set()).add(item.status)
+        if table and item.unit_kind == "table_row":
+            table_states.add(item.status)
     for file in files:
-        children = [
-            item
-            for item in devices
-            if item.source_member == file.source_member
-            or (
-                "table_stats" in (run.config_json.get("precheck_report") or {})
-                and item.unit_kind == "table_row"
-            )
-        ]
-        if children:
-            states = {item.status for item in children}
+        states = by_member.get(file.source_member, set()) | table_states
+        if states:
             file.status = next(
                 (
                     s

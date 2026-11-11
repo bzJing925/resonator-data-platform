@@ -290,22 +290,24 @@ def test_cancel_during_archive_validation_does_not_extract(tmp_path, mapping_fil
     assert not (tmp_path / "inspection").exists()
 
 
-def test_unmatched_mapping_is_warning_not_fatal(tmp_path, mapping_file):
+def test_unmatched_mapping_is_informational_not_fatal(tmp_path, mapping_file):
     samples = _algorithm_samples(tmp_path)
     source = tmp_path / "17_E9-9_X0Y0.s1p"
     source.write_bytes(samples["dut_s1p"])
     report = check(source, tmp_path, mapping_file)
     unmatched = [i for i in report["issues"] if i["code"] == "MAPPING_NOT_FOUND"]
-    assert unmatched and all(i["severity"] == "warning" for i in unmatched)
-    assert report["fatal_count"] == 0 and report["quality_status"] == "partial"
+    assert unmatched and all(i["severity"] == "info" for i in unmatched)
+    assert report["fatal_count"] == 0 and report["quality_status"] == "complete"
+    assert "MAPPING_NOT_FOUND" not in report["warning_codes"]
 
 
-def test_table_unmatched_mapping_is_warning_not_fatal(tmp_path, mapping_file):
+def test_table_unmatched_mapping_is_informational_not_fatal(tmp_path, mapping_file):
     table = tmp_path / "table.xlsx"
     frame = table_frame()
     frame.loc[0, "original_filename"] = "17_E9-9_X0Y0.s1p"
     frame.to_excel(table, index=False)
     report = check(table, tmp_path, mapping_file)
     unmatched = [i for i in report["issues"] if i["code"] == "MAPPING_NOT_FOUND"]
-    assert unmatched and all(i["severity"] == "warning" for i in unmatched)
+    assert unmatched and all(i["severity"] == "info" for i in unmatched)
     assert report["fatal_count"] == 0
+    assert "MAPPING_NOT_FOUND" not in report["warning_codes"]

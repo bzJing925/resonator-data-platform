@@ -1,5 +1,6 @@
 import { migrateLegacyExplore, parseAnalysisSpec } from './model/specCodec';
 import type { AnalysisSpec, ResultManifest } from '../../types/platformContracts';
+import { createUuid } from '../../utils/uuid';
 import React, { createContext, useCallback, useContext, useMemo, useReducer } from 'react';
 import {
   commandLabel,
@@ -146,7 +147,7 @@ const WorkspaceContext = createContext<WorkspaceApi | null>(null);
 function nextDatasetIdentity() {
   const number = datasetSequence;
   datasetSequence += 1;
-  return { id: crypto.randomUUID(), name: `数据表${number}` };
+  return { id: createUuid(), name: `数据表${number}` };
 }
 
 export function AnalysisWorkspaceProvider({ children }: { children: React.ReactNode }) {

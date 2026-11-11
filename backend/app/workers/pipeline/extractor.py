@@ -118,7 +118,10 @@ class StreamingExtractor:
         else:
             raise RuntimeError("未安装 7z / unzip，无法流式解压")
 
-        self._proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        self._proc = subprocess.Popen(
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
         try:
             while self._proc.poll() is None:
                 for p in _scan():

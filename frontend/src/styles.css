@@ -2046,6 +2046,9 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--primary); }
 .workflow-panel > .btn { align-self: flex-start; }
 
 /* Upload precheck follows the existing dark workflow panel. */
+.precheck-issues { margin: 8px 0; }
+.precheck-issues summary { cursor: pointer; }
+.precheck-issues p { margin: 8px 0 0; overflow-wrap: anywhere; }
 .precheck-progress { margin: 10px 0 14px; }
 .precheck-progress p { margin: 0 0 8px; overflow-wrap: anywhere; }
 .precheck-progress-track { height: 6px; overflow: hidden; border-radius: 3px; background: var(--border); }
