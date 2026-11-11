@@ -43,6 +43,12 @@ backend/sparse_*/
 backend/app/ml/checkpoints/
 backend/surrogate_data/
 backend/checkpoints_surrogate/
+backend/checkpoints_surrogate_prev/
+backend/ckpt_sim*/
+backend/eval_out_*/
+backend/surrogate_data_prev/
+backend/surrogate_data_sim/
+frontend/optimization/**/.build/
 # WP4a Mason 统一代理：大文件不入 git（沿用 surrogate_data 惯例）
 backend/checkpoints_mason/
 backend/surrogate_data_mason/unified_dataset.npz
