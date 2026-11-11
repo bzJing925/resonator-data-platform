@@ -1,18 +1,24 @@
 import React from 'react';
 import { render, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { UnifiedChartGrid, WaferMap } from './Charts';
 
 // jsdom has no complete SVG/canvas layout engine. Keep the narrow effect tests
 // mocked; real rendering and selection are covered by e2e/analysis/plotly.spec.ts.
 const plotState = vi.hoisted(() => ({ props: null as any }));
+const plotly = vi.hoisted(() => ({ relayout: vi.fn((..._args: any[]) => Promise.resolve()) }));
 vi.mock('react-plotly.js/factory', () => ({
   default: () => (props: any) => {
     plotState.props = props;
     return null;
   },
 }));
-vi.mock('plotly.js/dist/plotly', () => ({ default: {} }));
+vi.mock('plotly.js/dist/plotly', () => ({ default: plotly }));
+
+afterEach(() => {
+  plotly.relayout.mockClear();
+  vi.unstubAllGlobals();
+});
 
 const X_NUM = { name: 'area_um2', label: '面积', isCategorical: false };
 const Y_QS = { name: 'qs', label: 'Qs', isCategorical: false };
@@ -55,6 +61,64 @@ describe('UnifiedChartGrid 警告 emit（mock 仅限 effect 边界）', () => {
 
     expect(plotState.props.layout.dragmode).toBe('pan');
     expect(plotState.props.config.displayModeBar).toBe(false);
+  });
+
+  it('locks the configured Y range while leaving X interaction available', () => {
+    render(
+      <UnifiedChartGrid
+        chartType="scatter"
+        rows={[{ rowId: 'r1', area_um2: 1, qs: 120 }]}
+        xFields={XS}
+        yFields={YS}
+        yAxisRanges={{ qs: [100, 200] }}
+      />,
+    );
+
+    expect(plotState.props.layout.yaxis).toMatchObject({
+      autorange: false,
+      fixedrange: true,
+      range: [100, 200],
+    });
+    expect(plotState.props.layout.xaxis.fixedrange).not.toBe(true);
+  });
+
+  it('does not wheel-pan a fixed Y axis but still pans X horizontally', async () => {
+    render(
+      <UnifiedChartGrid
+        chartType="scatter"
+        rows={[{ rowId: 'r1', area_um2: 1, qs: 120 }]}
+        xFields={XS}
+        yFields={YS}
+        yAxisRanges={{ qs: [100, 200] }}
+      />,
+    );
+
+    let onWheel: (event: any) => void = () => {};
+    let flush: () => void = () => {};
+    vi.stubGlobal('requestAnimationFrame', (callback: () => void) => {
+      flush = callback;
+      return 1;
+    });
+    const graph = {
+      _fullLayout: {
+        xaxis: { range: [0, 10] },
+        yaxis: { ...plotState.props.layout.yaxis },
+      },
+      addEventListener: (type: string, handler: (event: any) => void) => {
+        if (type === 'wheel') onWheel = handler;
+      },
+    };
+    plotState.props.onInitialized(null, graph);
+    const preventDefault = vi.fn();
+    onWheel({ deltaX: 1, deltaY: 1, shiftKey: false, preventDefault });
+    flush();
+
+    await waitFor(() => expect(plotly.relayout).toHaveBeenCalled());
+    expect(preventDefault).toHaveBeenCalled();
+    const update = plotly.relayout.mock.calls[0][1];
+    expect(update['xaxis.range'][0]).toBeCloseTo(1.8);
+    expect(update['xaxis.range'][1]).toBeCloseTo(11.8);
+    expect(update).not.toHaveProperty('yaxis.range');
   });
 
   it('applies the same fixed-header controls to the wafer chart', () => {

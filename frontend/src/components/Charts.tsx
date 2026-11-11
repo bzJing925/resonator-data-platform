@@ -107,6 +107,7 @@ function attachWheelPan(graphDiv: any) {
     if (dy) {
       for (const key of Object.keys(full)) {
         if (!/^yaxis\d*$/.test(key)) continue;
+        if (full[key].fixedrange) continue;
         const r = full[key].range;
         if (typeof r?.[0] !== 'number' || typeof r?.[1] !== 'number') continue;
         const shift = -(r[1] - r[0]) * WHEEL_PAN_STEP * dy;
@@ -1783,7 +1784,7 @@ export function UnifiedChartGrid({
     return {
       ...layout,
       ...Object.fromEntries(Object.entries(axes).map(([key, range]) =>
-        [key, { ...layout[key], autorange: false, range }])),
+        [key, { ...layout[key], autorange: false, fixedrange: true, range }])),
       meta: { ...layout.meta, analysisYRanges: automaticAxes, analysisActiveYRanges: axes },
       ...(chartType === 'swarm' && layout.width ? { autosize: false } : {}),
       dragmode: interactionMode,
